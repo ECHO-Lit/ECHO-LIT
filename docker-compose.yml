@@ -1,111 +1,155 @@
 name: echo
 
-# Shared backend config — used by both CPU and GPU services via YAML anchors.
-x-backend-common: &backend-common
+x-runtime-environment: &runtime-environment
+  ENVIRONMENT: development
+  REDIS_URL: redis://redis:6379/0
+  JOB_REDIS_URL: redis://redis:6379/1
+  CELERY_BROKER_URL: redis://redis:6379/2
+  CELERY_RESULT_BACKEND: redis://redis:6379/3
+  STORAGE_BACKEND: local
+  STORAGE_LOCAL_ROOT: /app/shared-storage
+  SESSION_TTL_SECONDS: "86400"
+  JOB_TTL_SECONDS: "86400"
+  MAX_UPLOAD_BYTES: "104857600"
+  MAX_AUDIO_DURATION_SECONDS: "600"
+  TASK_SOFT_TIME_LIMIT_SECONDS: "3300"
+  TASK_TIME_LIMIT_SECONDS: "3600"
+  ENABLE_LEGACY_SYNC_INFERENCE: "false"
+  HF_HOME: /home/appuser/.cache/huggingface
+  PYTHONUNBUFFERED: "1"
+
+x-worker-common: &worker-common
   working_dir: /app
   environment:
-    REDIS_URL: redis://redis:6379/0
-    SESSION_COOKIE_NAME: sid
-    SESSION_TTL_SECONDS: "86400"
-    COOKIE_SECURE: "false"
-    COOKIE_SAMESITE: lax
-    ALLOWED_ORIGINS: http://localhost:8080,http://127.0.0.1:8080
-    HF_HOME: /home/appuser/.cache/huggingface
-    TRANSFORMERS_CACHE: /home/appuser/.cache/huggingface
-    PYTHONUNBUFFERED: "1"
+    <<: *runtime-environment
     ML_DEVICE: auto
   volumes:
-    - ./Backend/app:/app/app          # hot-reload: only source, not full Backend dir
-    - ./Backend/data:/app/data
-    - ./Backend/uploads:/app/uploads
+    - ./Backend/app:/app/app
+    - ./Backend/shared-storage:/app/shared-storage
     - hf-cache:/home/appuser/.cache/huggingface
-  ports:
-    - "8000:8000"
   depends_on:
     redis:
       condition: service_healthy
-  healthcheck:
-    test: ["CMD", "python3", "-c",
-      "import urllib.request,sys; r=urllib.request.urlopen('http://localhost:8000/health',timeout=3); sys.exit(0 if r.status==200 else 1)"]
-    interval: 30s
-    timeout: 10s
-    retries: 5
-    start_period: 120s   # allow time for first-run model downloads
-  command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/app"]
   restart: unless-stopped
 
 services:
-  # ── Redis ──────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     container_name: echo-redis
-    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
     ports:
       - "6379:6379"
     volumes:
       - redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
     restart: unless-stopped
 
-  # ── Backend (CPU — default) ────────────────────────────────────
-  # Runs on every `docker compose up`. GPU users: see backend-gpu below.
-  backend:
-    <<: *backend-common
-    container_name: echo-backend
+  api:
     build:
       context: ./Backend
       dockerfile: Dockerfile
       args:
+        ROLE: api
         VARIANT: cpu
+    container_name: echo-api
+    working_dir: /app
+    environment:
+      <<: *runtime-environment
+      ALLOWED_ORIGINS: http://localhost:8080,http://127.0.0.1:8080
+      COOKIE_SECURE: "false"
+      COOKIE_SAMESITE: lax
+    volumes:
+      - ./Backend/app:/app/app
+      - ./Backend/data:/app/data:ro
+      - ./Backend/uploads:/app/uploads
+      - ./Backend/shared-storage:/app/shared-storage
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/app"]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
 
-  # ── Backend (GPU — opt-in) ─────────────────────────────────────
-  # Requires NVIDIA driver 555+ and NVIDIA Container Toolkit in WSL2.
-  # WARNING: all backend variants bind port 8000. Do NOT start more than one.
-  # NVIDIA GPU users run:
-  #   docker compose --profile gpu up redis frontend backend-gpu
-  backend-gpu:
-    <<: *backend-common
-    container_name: echo-backend-gpu
+  worker-cpu:
+    <<: *worker-common
+    container_name: echo-worker-cpu
     build:
       context: ./Backend
       dockerfile: Dockerfile
       args:
+        ROLE: worker
+        VARIANT: cpu
+    command: ["celery", "-A", "app.core.celery_app:celery_app", "worker", "--loglevel=INFO", "--queues=cpu", "--concurrency=2", "--prefetch-multiplier=1"]
+
+  worker-model-local:
+    <<: *worker-common
+    container_name: echo-worker-model-local
+    build:
+      context: ./Backend
+      dockerfile: Dockerfile
+      args:
+        ROLE: worker
+        VARIANT: cpu
+    command: ["celery", "-A", "app.core.celery_app:celery_app", "worker", "--loglevel=INFO", "--queues=gpu-fast,gpu-large", "--concurrency=1", "--prefetch-multiplier=1"]
+
+  scheduler:
+    <<: *worker-common
+    container_name: echo-scheduler
+    build:
+      context: ./Backend
+      dockerfile: Dockerfile
+      args:
+        ROLE: api
+        VARIANT: cpu
+    command: ["celery", "-A", "app.core.celery_app:celery_app", "beat", "--loglevel=INFO"]
+
+  worker-gpu:
+    <<: *worker-common
+    container_name: echo-worker-gpu
+    build:
+      context: ./Backend
+      dockerfile: Dockerfile
+      args:
+        ROLE: worker
         VARIANT: gpu
     profiles: [gpu]
+    command: ["celery", "-A", "app.core.celery_app:celery_app", "worker", "--loglevel=INFO", "--queues=gpu-fast,gpu-large", "--concurrency=1", "--prefetch-multiplier=1"]
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: all
+              count: 1
               capabilities: [gpu]
 
-  # ── Backend (AMD GPU / ROCm — opt-in, Linux only) ───────────────
-  # Requires a ROCm-supported GPU and host driver. Uses PyTorch's CUDA-shaped
-  # API internally; /health reports the backend as "rocm".
-  backend-amd:
-    <<: *backend-common
-    container_name: echo-backend-amd
+  worker-amd:
+    <<: *worker-common
+    container_name: echo-worker-amd
     build:
       context: ./Backend
       dockerfile: Dockerfile
       args:
+        ROLE: worker
         VARIANT: rocm
     profiles: [amd]
+    command: ["celery", "-A", "app.core.celery_app:celery_app", "worker", "--loglevel=INFO", "--queues=gpu-fast,gpu-large", "--concurrency=1", "--prefetch-multiplier=1"]
     devices:
       - /dev/kfd:/dev/kfd
       - /dev/dri:/dev/dri
-    group_add:
-      - video
+    group_add: [video]
     ipc: host
-    security_opt:
-      - seccomp=unconfined
+    security_opt: [seccomp=unconfined]
 
-  # ── Frontend (Vite dev server) ─────────────────────────────────
   frontend:
     build:
       context: ./Frontend
@@ -113,20 +157,16 @@ services:
       target: dev
     container_name: echo-frontend
     environment:
-      # Browser-side URL — resolves from the user's host, not inside the container.
       VITE_API_BASE_URL: http://localhost:8000
-      # Polling required for Vite HMR on Windows bind-mounts.
       CHOKIDAR_USEPOLLING: "true"
-      WATCHPACK_POLLING: "true"
     volumes:
       - ./Frontend:/app
-      # Named volume keeps the container's node_modules intact, preventing
-      # the host's Windows node_modules from shadowing the Linux install.
       - frontend-node-modules:/app/node_modules
     ports:
       - "8080:8080"
     depends_on:
-      - redis
+      api:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:

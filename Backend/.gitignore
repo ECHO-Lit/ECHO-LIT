@@ -207,6 +207,7 @@ Thumbs.db
 
 # Upload files (if applicable)
 uploads/
+shared-storage/
 media/
 static/user_uploads/
 cache/

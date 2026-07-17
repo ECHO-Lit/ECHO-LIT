@@ -14,9 +14,10 @@ import { Play, ChevronLeft, ChevronRight } from "lucide-react";
 import { useMemo, useCallback, useEffect } from "react";
 
 interface UploadedFile {
+  audio_id?: string;
   file_id: string;
   filename: string;
-  file_path: string;
+  playback_url?: string;
   message: string;
   size?: number;
   duration?: number;
@@ -31,7 +32,6 @@ interface AudioData {
   groundTruthLabel: string;
   confidence: number;
   duration: number;
-  file_path?: string;
   size?: number;
 }
 
@@ -76,7 +76,6 @@ export const AudioDataTable = ({ selectedRow, onRowSelect, searchQuery, apiData,
       groundTruthLabel: "",
       confidence: 0,
       duration: typeof file.duration === 'number' ? file.duration : 0,
-      file_path: file.file_path,
       size: file.size
     })) || []
   ), [uploadedFiles]);
@@ -87,7 +86,7 @@ export const AudioDataTable = ({ selectedRow, onRowSelect, searchQuery, apiData,
       header: "Filename",
       cell: ({ row }) => {
         // Handle both AudioData (uploaded files) and DatasetRow (dataset files)
-        if ('file_id' in (row.original as any)) {
+        if ('groundTruthLabel' in (row.original as any)) {
           // This is an uploaded file (AudioData)
         const data = row.original as AudioData;
         const file = uploadedFiles?.find(f => f.file_id === data.id);
@@ -129,7 +128,7 @@ export const AudioDataTable = ({ selectedRow, onRowSelect, searchQuery, apiData,
         }
         
         // Handle both AudioData and DatasetRow
-        if ('file_id' in (row.original as any)) {
+        if ('groundTruthLabel' in (row.original as any)) {
           // This is an uploaded file (AudioData) - use predictionMap like dataset files
           const data = row.original as AudioData;
           const pred = predictionMap?.[rowId] || data.prediction || "";
@@ -161,7 +160,7 @@ export const AudioDataTable = ({ selectedRow, onRowSelect, searchQuery, apiData,
       header: "Ground Truth",
       cell: ({ row }) => {
         // Handle both AudioData and DatasetRow
-        if ('file_id' in (row.original as any)) {
+        if ('groundTruthLabel' in (row.original as any)) {
           // This is an uploaded file (AudioData)
         const data = row.original as AudioData;
         return <span className="text-xs">{data.groundTruthLabel}</span>;
@@ -177,7 +176,7 @@ export const AudioDataTable = ({ selectedRow, onRowSelect, searchQuery, apiData,
       header: "Confidence",
       cell: ({ row }) => {
         // Only show confidence for uploaded files (AudioData)
-        if ('file_id' in (row.original as any)) {
+        if ('groundTruthLabel' in (row.original as any)) {
         const data = row.original as AudioData;
         // Don't display confidence if it's 0
         if (data.confidence === 0) return null;
@@ -193,7 +192,7 @@ export const AudioDataTable = ({ selectedRow, onRowSelect, searchQuery, apiData,
       header: "Duration",
       cell: ({ row }) => {
         // Handle both AudioData and DatasetRow
-        if ('file_id' in (row.original as any)) {
+        if ('groundTruthLabel' in (row.original as any)) {
           // This is an uploaded file (AudioData)
         const data = row.original as AudioData;
           const duration = typeof data.duration === 'number' ? data.duration : 0;

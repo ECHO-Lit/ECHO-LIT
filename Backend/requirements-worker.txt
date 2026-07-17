@@ -1,0 +1,14 @@
+-r requirements-api.txt
+transformers>=4.30.0
+torch
+librosa>=0.10.0
+soundfile>=0.12.0
+scikit-learn>=1.3.0
+umap-learn>=0.5.3
+numpy>=1.24,<2.0
+pandas
+captum>=0.6.0
+lime>=0.2.0
+shap>=0.42.0
+accelerate
+torchaudio

@@ -9,11 +9,13 @@ import { AudioUploader } from "../audio/AudioUploader";
 import { AudioDataTable } from "../audio/AudioDataTable";
 import { toast } from "sonner";
 import { API_BASE } from '@/lib/api';
+import { firstJobResult, materializeAudio, runJob } from '@/lib/jobs';
 
 interface UploadedFile {
+  audio_id?: string;
   file_id: string;
   filename: string;
-  file_path: string;
+  playback_url?: string;
   message: string;
   size?: number;
   duration?: number;
@@ -95,7 +97,7 @@ export const AudioDatasetPanel = ({
   }, [selectedFile, uploadedFiles, datasetMetadata]);
 
   // Stable handlers to prevent downstream re-renders
-  const handleRowSelect = useCallback((id: string) => {
+  const handleRowSelect = useCallback(async (id: string) => {
     setSelectedRow(id);
     
     // When a row is selected, just propagate the file selection for UI/audio playback
@@ -130,16 +132,22 @@ export const AudioDatasetPanel = ({
     const pathVal = (match["path"] || match["filepath"] || match["file"] || match["filename"]) as string | undefined;
     const filename = pathVal ? (pathVal.split("/").pop() || pathVal.split("\\").pop() || String(id)) : String(id);
 
-    const fileLike: UploadedFile = {
-      file_id: String(id),
-      filename,
-      file_path: pathVal || filename,
-      message: dataset.startsWith('custom:') ? "Selected from custom dataset" : "Selected from dataset", // This indicates it's a dataset file
-    };
-
-    // Just select the file for UI purposes, no inference
-    onFileSelect(fileLike);
-  }, [dataset, datasetMetadata, onFileSelect]);
+    try {
+      const audio = await materializeAudio(originalDataset || dataset, filename);
+      onFileSelect({
+        audio_id: audio.audio_id,
+        file_id: audio.file_id,
+        filename: audio.filename,
+        playback_url: audio.playback_url,
+        message: audio.message || "Selected from dataset",
+        size: audio.size_bytes,
+        duration: audio.duration_seconds,
+        sample_rate: audio.sample_rate,
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Unable to prepare audio');
+    }
+  }, [dataset, originalDataset, datasetMetadata, onFileSelect, uploadedFiles]);
 
   const handleFilePlay = useCallback((file: UploadedFile) => {
     if (onFileSelect) {
@@ -199,25 +207,11 @@ export const AudioDatasetPanel = ({
           return pathVal ? (pathVal.split("/").pop() || pathVal.split("\\").pop() || pathVal) : String(row["id"] || "unknown");
         });
 
-        const response = await fetch(`${API_BASE}/inferences/batch-check`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          credentials: 'include',
-          body: JSON.stringify({
-            model,
-            dataset,
-            files: filenames
-          }),
-          signal: abortControllerRef.current?.signal,
-        });
-
-        if (!response.ok) {
-          throw new Error(`Batch check failed: ${response.status}`);
-        }
-
-        const { cached_results, missing_files, cache_hit_rate } = await response.json();
+        // The job worker performs content-addressed cache lookup. Queue all files;
+        // cached jobs complete without model execution.
+        const cached_results: Record<string, string> = {};
+        const missing_files = filenames;
+        const cache_hit_rate = 0;
         
         console.log(`Cache hit rate: ${(cache_hit_rate * 100).toFixed(1)}% (${Object.keys(cached_results).length}/${filenames.length})`);
         
@@ -327,28 +321,13 @@ export const AudioDatasetPanel = ({
         const pathVal = (currentRow["path"] || currentRow["filepath"] || currentRow["file"] || currentRow["filename"]) as string;
         const filename = pathVal ? (pathVal.split("/").pop() || pathVal.split("\\").pop() || currentFileId) : currentFileId;
 
-        const requestBody = {
-          model,
-          dataset,
-          dataset_file: filename
-        };
-
-        const response = await fetch(`${API_BASE}/inferences/run`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          credentials: 'include',
-          body: JSON.stringify(requestBody),
-          signal: abortControllerRef.current?.signal,
-        });
-
-        if (!response.ok) {
-          throw new Error(`API error: ${response.status}`);
-        }
-
-        const prediction = await response.json();
-        const predictionText = typeof prediction === 'string' ? prediction : prediction?.text || JSON.stringify(prediction);
+        const asset = await materializeAudio(dataset, filename, abortControllerRef.current?.signal);
+        const prediction = firstJobResult<any>(await runJob({
+          operation: 'prediction', model: model || 'whisper-base', audio_ids: [asset.audio_id],
+        }, { signal: abortControllerRef.current?.signal }));
+        const predictionText = typeof prediction === 'string'
+          ? prediction
+          : prediction?.text || prediction?.predicted_emotion || JSON.stringify(prediction);
 
         // Update external predictionMap via callback
         if (onPredictionUpdate) {

@@ -4,7 +4,6 @@ import pytest
 import tempfile
 import shutil
 import numpy as np
-import torch
 from pathlib import Path
 from typing import Generator, Dict, Any
 from unittest.mock import Mock, patch
@@ -22,6 +21,8 @@ async def fake_redis(monkeypatch):
     """
     client = FakeRedis(decode_responses=True)
     monkeypatch.setattr(redis_module, "redis", client)
+    monkeypatch.setattr(redis_module, "job_redis", client)
+    monkeypatch.setattr(redis_module, "broker_redis", client)
     yield
     await client.flushall()
     await client.aclose()

@@ -5,6 +5,8 @@ import { Badge } from "@/components/ui/badge";
 import { Eye, Download, Loader2 } from "lucide-react";
 import { useState, useEffect, useRef, useMemo } from "react";
 import { API_BASE } from '@/lib/api';
+import { firstJobResult, resolveAudioId } from '@/lib/jobs';
+import { useJob } from '@/hooks/use-job';
 
 interface SaliencySegment {
   start_time: number;
@@ -172,43 +174,20 @@ export const SaliencyVisualization = ({ selectedFile, model, dataset, originalDa
   const [smoothStrength, setSmoothStrength] = useState(0.5); // 0..1
   const [clipPercent, setClipPercent] = useState(95); // 80..99
   const [hover, setHover] = useState<{ x: number; t: number; v: number } | null>(null);
+  const saliencyJob = useJob<any>();
   
   // Generate audio URL for waveform display
   const audioUrl = useMemo(() => {
     if (!selectedFile) return '';
-    
-    // Check if this is an uploaded file
-    const isUploadedFile = typeof selectedFile === 'object' && selectedFile.file_path && (
-      selectedFile.file_path.includes('uploads/') || 
-      selectedFile.file_path.startsWith('uploads/') ||
-      selectedFile.message === "Perturbed file" ||
-      selectedFile.message === "File uploaded successfully" ||
-      selectedFile.message === "File uploaded and processed successfully"
-    ) && selectedFile.message !== "Selected from embeddings" && selectedFile.message !== "Selected from dataset";
-    
-    if (isUploadedFile) {
-      // This is an uploaded file, use the upload endpoint
-      return `${API_BASE}/upload/file/${selectedFile.file_id}`;
+    if (typeof selectedFile === 'object' && selectedFile.playback_url) {
+      return `${API_BASE}${selectedFile.playback_url}`;
     }
-    
-    // Use original dataset if available and it's a real dataset
-    const datasetToUse = originalDataset && originalDataset !== "custom" ? originalDataset : dataset;
-    
-    if (datasetToUse && datasetToUse !== 'custom') {
-      const filename = typeof selectedFile === 'string' 
-        ? selectedFile 
-        : selectedFile?.filename;
-      if (filename) {
-        // Both built-in and custom datasets use the same route pattern
-        return `${API_BASE}/${encodeURIComponent(datasetToUse)}/file/${encodeURIComponent(filename)}`;
-      }
-    } else if (typeof selectedFile === 'object' && selectedFile.file_path) {
-      // Fallback for uploaded files
-      return `${API_BASE}/upload/file/${selectedFile.file_path.split('/').pop()}`;
+    if (typeof selectedFile === 'object' && selectedFile.audio_id) {
+      return `${API_BASE}/audio/${selectedFile.audio_id}`;
     }
     
     return '';
-  }, [selectedFile, dataset, originalDataset]);
+  }, [selectedFile]);
 
   const fetchSaliencyData = async () => {
     if (!selectedFile || !model) return;
@@ -218,75 +197,17 @@ export const SaliencyVisualization = ({ selectedFile, model, dataset, originalDa
     
     try {
       // Send through the selected model so backend can infer base vs large
-      const backendModel = model;
-
       // Determine which dataset to use for request
       // Use original dataset if available and it's a real dataset
       const datasetToUse = originalDataset && originalDataset !== "custom" ? originalDataset : dataset;
 
-      // Generate unique request identifier to prevent stale results
-      const fileIdentifier = datasetToUse && datasetToUse !== 'custom' 
-        ? `${datasetToUse}_${selectedFile?.filename || selectedFile}` 
-        : `custom_${selectedFile?.file_path || selectedFile?.file_id}`;
-      
-      const requestBody: any = {
-        model: backendModel,
-        method: selectedMethod,
-        no_cache: true, // Always regenerate to ensure fresh results per file
-        _file_id: fileIdentifier, // Add for debugging
-      };
-
-      // Check if this is an uploaded file
-      const isUploadedFile = typeof selectedFile === 'object' && selectedFile.file_path && (
-        selectedFile.file_path.includes('uploads/') || 
-        selectedFile.file_path.startsWith('uploads/') ||
-        selectedFile.message === "Perturbed file" ||
-        selectedFile.message === "File uploaded successfully" ||
-        selectedFile.message === "File uploaded and processed successfully"
-      ) && selectedFile.message !== "Selected from embeddings" && selectedFile.message !== "Selected from dataset";
-
-      if (isUploadedFile) {
-        // This is an uploaded file, use file_path
-        requestBody.file_path = selectedFile.file_path;
-      } else if (datasetToUse && datasetToUse !== 'custom') {
-        // This is a dataset file (built-in or custom dataset)
-        const dsFilename = typeof selectedFile === 'string' 
-          ? selectedFile 
-          : (selectedFile?.filename as string | undefined);
-        if (!dsFilename) {
-          throw new Error('No dataset file selected.');
-        }
-        requestBody.dataset = datasetToUse;
-        requestBody.dataset_file = dsFilename;
-      } else {
-        // Fallback for generic "custom" case (uploaded files)
-        if (typeof selectedFile === 'object' && (selectedFile.file_path || selectedFile.file_id)) {
-          if (!selectedFile.file_path) {
-            throw new Error('Selected upload has no file_path.');
-          }
-          requestBody.file_path = selectedFile.file_path;
-        } else {
-          throw new Error('Invalid file selection or missing file information.');
-        }
-      }
-
-      const response = await fetch(`${API_BASE}/saliency/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify(requestBody),
-      });
-
-      if (!response.ok) {
-        let detail = '';
-        try {
-          const err = await response.json();
-          detail = err?.detail || '';
-        } catch {}
-        throw new Error(detail || `HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
+      const audioId = await resolveAudioId(selectedFile, datasetToUse);
+      const data = firstJobResult<SaliencyData>(await saliencyJob.start({
+        operation: 'saliency',
+        model,
+        audio_ids: [audioId],
+        parameters: { method: selectedMethod },
+      }));
       setSaliencyData(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch saliency data');
@@ -454,8 +375,14 @@ export const SaliencyVisualization = ({ selectedFile, model, dataset, originalDa
                   <SelectItem value="shap">SHAP</SelectItem>
                 </SelectContent>
               </Select>
-              <Button size="sm" variant="outline" className="h-6" onClick={fetchSaliencyData} disabled={loading}>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-6"
+                onClick={loading ? () => void saliencyJob.cancel() : fetchSaliencyData}
+              >
                 {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+                <span className="ml-1">{loading ? 'Cancel' : 'Refresh'}</span>
               </Button>
             </div>
           </div>
@@ -470,7 +397,9 @@ export const SaliencyVisualization = ({ selectedFile, model, dataset, originalDa
           {loading && (
             <div className="h-16 bg-muted/30 rounded mb-2 flex items-center justify-center">
               <Loader2 className="h-4 w-4 animate-spin mr-2" />
-              <span className="text-xs text-muted-foreground">Generating saliency...</span>
+              <span className="text-xs text-muted-foreground">
+                {saliencyJob.status?.progress.message || 'Generating saliency...'}
+              </span>
             </div>
           )}
           

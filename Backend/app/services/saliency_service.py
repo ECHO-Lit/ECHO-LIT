@@ -14,10 +14,8 @@ from app.services.model_loader_service import (
     transcribe_whisper_large,
     transcribe_whisper_with_timestamps,
     predict_emotion_wave2vec,
-    get_whisper_base_models,
-    get_whisper_large_models,
-    feature_extractor,
-    emo_model,
+    get_whisper_saliency_models,
+    get_emotion_models,
 )
 
 logger = logging.getLogger(__name__)
@@ -67,9 +65,9 @@ def generate_whisper_saliency(audio_file_path: str, model_size: str = "base", me
             chunks = [c for c in chunks if c.get("timestamp", [0, 0])[0] < max_seconds]
     
     if model_size == "base":
-        processor, model = get_whisper_base_models()
+        processor, model = get_whisper_saliency_models("openai/whisper-base")
     else:
-        processor, model = get_whisper_large_models()
+        processor, model = get_whisper_saliency_models("openai/whisper-large-v3")
 
     # Defensive reset: previous saliency runs enable gradient checkpointing.
     # A finally block restores it, but if the process was interrupted or hit an
@@ -330,6 +328,7 @@ def generate_whisper_saliency(audio_file_path: str, model_size: str = "base", me
 ################################################################################################################
 
 def generate_wav2vec2_saliency(audio_file_path: str, method: str = "gradcam", existing_prediction: Dict = None) -> Dict:
+    feature_extractor, emo_model = get_emotion_models()
     # Derive the device from the model because an OOM fallback may relocate it.
     runtime_device = next(emo_model.parameters()).device
     # Defensive reset: prior attention-extraction paths may have flipped

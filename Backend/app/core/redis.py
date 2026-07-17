@@ -14,6 +14,23 @@ redis = from_url(
     socket_timeout=5
 )
 
+job_redis = from_url(
+    settings.JOB_REDIS_URL,
+    decode_responses=True,
+    max_connections=20,
+    retry_on_timeout=True,
+    socket_connect_timeout=5,
+    socket_timeout=5,
+)
+
+broker_redis = from_url(
+    settings.CELERY_BROKER_URL,
+    decode_responses=True,
+    max_connections=10,
+    socket_connect_timeout=5,
+    socket_timeout=5,
+)
+
 def k_sess(sid: str) -> str:  return f"sess:{sid}"
 def k_queue(sid: str) -> str: return f"{k_sess(sid)}:queue"
 def k_meta(sid: str) -> str:  return f"{k_sess(sid)}:meta"

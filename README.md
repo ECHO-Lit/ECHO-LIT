@@ -48,7 +48,11 @@ ECHO extends the interpretability paradigm to audio models, providing researcher
 * **Audio Processing**: Web Audio API
 * **Backend**: FastAPI + Python 3.11
 * **Models**: Transformer-based audio models (Whisper, Wav2Vec2)
-* **Storage**: Redis for caching predictions and results
+* **Execution**: Celery workers with Redis as the durable, non-evicting broker
+* **Storage**: Shared filesystem locally and S3-compatible object storage in production
+
+For S3 deployments, apply the included 24-hour lifecycle policy:
+`aws s3api put-bucket-lifecycle-configuration --bucket <bucket> --lifecycle-configuration file://Backend/s3-lifecycle.json`.
 
 ## Prerequisites
 
@@ -73,33 +77,36 @@ cp Frontend/.env.example Frontend/.env
 docker compose up --build
 ```
 
-First boot downloads Whisper + Wav2Vec2 models (~3.4 GB) into the `hf-cache`
-volume. Subsequent boots reuse it — no re-download.
+First boot starts a CPU API control plane and a separate local worker. Model
+weights are downloaded only by the worker into `hf-cache`; the API image does
+not contain or import the ML runtime.
 
 - **Frontend**: http://localhost:8080
-- **Backend**: http://localhost:8000/health
+- **API**: http://localhost:8000/health
 - **Redis**: localhost:6379
 
 ### GPU modes
 
 ```bash
-# NVIDIA (Linux or WSL 2 with NVIDIA Container Toolkit)
-docker compose --profile gpu up redis frontend backend-gpu --build
+# NVIDIA (Linux or WSL 2 with NVIDIA Container Toolkit). Disable the local
+# all-queue worker so only the GPU worker consumes GPU queues.
+docker compose --profile gpu up --build --scale worker-model-local=0 redis api scheduler frontend worker-cpu worker-gpu
 
 # AMD ROCm (Linux with a supported ROCm host driver)
-docker compose --profile amd up redis frontend backend-amd --build
+docker compose --profile amd up --build --scale worker-model-local=0 redis api scheduler frontend worker-cpu worker-amd
 ```
 
-Only run one backend profile because all backend services expose port 8000.
-Docker Desktop on macOS cannot pass the Metal GPU into a Linux container; run
-the backend natively on macOS to use MPS:
+Docker Desktop on macOS cannot pass the Metal GPU into a Linux container. Keep
+the API in Compose and run the worker natively to use MPS:
 
 ```bash
 cd Backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+STORAGE_LOCAL_ROOT=shared-storage ML_DEVICE=mps \
+  celery -A app.core.celery_app:celery_app worker \
+  --queues=gpu-fast,gpu-large --concurrency=1 --prefetch-multiplier=1
 ```
 
 `ML_DEVICE=auto` selects NVIDIA CUDA or AMD ROCm first, Apple MPS second, and
@@ -108,8 +115,8 @@ override selection. For a native AMD install, install the ROCm build of
 `torch` and `torchaudio` from the version-matched PyTorch ROCm wheel index
 before installing `requirements.txt`.
 
-The `/health` response reports the selected device, backend, GPU name, PyTorch
-version, and CUDA/ROCm runtime version.
+The API `/health` response reports Redis, storage, and worker-heartbeat state.
+Accelerator selection and model loading happen only in worker processes.
 
 ### Common operations
 
@@ -120,15 +127,17 @@ docker compose down
 # Reset all volumes (clears Redis, HF model cache, uploads)
 docker compose down -v
 
-# Rebuild after changing requirements.txt
-docker compose build --no-cache backend
+# Rebuild after changing requirements
+docker compose build --no-cache api worker-cpu worker-model-local
 
 # Pre-warm the HF model cache without starting the full stack
-docker compose run --rm backend python3 -c \
+docker compose run --rm worker-model-local python3 -c \
   "from transformers import pipeline; pipeline('automatic-speech-recognition', model='openai/whisper-base')"
 
-# Run backend tests
-docker compose run --rm backend pytest
+# Run backend tests in a local virtual environment
+cd Backend
+python3 -m pip install -r requirements-dev.txt
+pytest
 ```
 
 ### Windows tips

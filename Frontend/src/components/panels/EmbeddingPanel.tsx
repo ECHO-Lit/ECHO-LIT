@@ -14,6 +14,7 @@ import { useEmbedding } from "../../contexts/EmbeddingContext";
 import { RefreshCw, Eye, Box, Square, BarChart3, HelpCircle } from "lucide-react";
 import { getFeatureExplanation } from "@/lib/audioFeatures";
 import { API_BASE } from "@/lib/api";
+import { materializeAudio, runJob } from '@/lib/jobs';
 
 interface EmbeddingPanelProps {
   model?: string;
@@ -281,20 +282,10 @@ export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice
         requestBody.dataset = dataset;
       }
 
-      const response = await fetch(`${API_BASE}/inferences/audio-frequency-batch`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(requestBody),
+      const assets = await Promise.all(filenames.map((filename) => materializeAudio(dataset, filename)));
+      const analysis = await runJob<AudioFrequencyAnalysis>({
+        operation: 'audio_features', audio_ids: assets.map((asset) => asset.audio_id),
       });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Failed to fetch audio frequency analysis: ${response.status} - ${errorText}`);
-      }
-
-      const analysis = await response.json();
       setAudioFrequencyAnalysis(analysis);
       setBatchPrediction(null);
       setWhisperAnalysis(null);
@@ -323,21 +314,10 @@ export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice
         requestBody.dataset = dataset;
       }
 
-      const response = await fetch(`${API_BASE}/inferences/wav2vec2-batch`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        credentials: 'include',
-        body: JSON.stringify(requestBody),
+      const assets = await Promise.all(filenames.map((filename) => materializeAudio(dataset, filename)));
+      const prediction = await runJob<BatchPredictionAnalysis>({
+        operation: 'prediction', model: 'wav2vec2', audio_ids: assets.map((asset) => asset.audio_id),
       });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Failed to fetch batch predictions: ${response.status} - ${errorText}`);
-      }
-
-      const prediction = await response.json();
       setBatchPrediction(prediction);
       setAudioFrequencyAnalysis(null);
       setWhisperAnalysis(null);
@@ -367,21 +347,10 @@ export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice
         requestBody.dataset = dataset;
       }
 
-      const response = await fetch(`${API_BASE}/inferences/whisper-batch`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        credentials: 'include',
-        body: JSON.stringify(requestBody),
+      const assets = await Promise.all(filenames.map((filename) => materializeAudio(dataset, filename)));
+      const analysis = await runJob<WhisperAnalysis>({
+        operation: 'prediction', model, audio_ids: assets.map((asset) => asset.audio_id),
       });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Failed to fetch whisper analysis: ${response.status} - ${errorText}`);
-      }
-
-      const analysis = await response.json();
       setWhisperAnalysis(analysis);
       setAudioFrequencyAnalysis(null);
       setBatchPrediction(null);

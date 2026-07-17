@@ -1,14 +1,8 @@
 # syntax=docker/dockerfile:1.7
 ARG VARIANT=cpu
 
-# ── CPU base ──────────────────────────────────────────────────
 FROM python:3.11-slim AS base-cpu
-
-# AMD ROCm wheels bundle user-space runtime libraries. The host supplies the
-# kernel driver through /dev/kfd and /dev/dri (configured in Compose).
 FROM python:3.11-slim AS base-rocm
-
-# ── GPU base ──────────────────────────────────────────────────
 FROM nvidia/cuda:12.6.0-runtime-ubuntu22.04 AS base-gpu
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.11 python3.11-dev python3-pip && \
@@ -17,18 +11,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.11 -m pip install --upgrade pip && \
     rm -rf /var/lib/apt/lists/*
 
-# ── Final (branches on VARIANT arg) ───────────────────────────
 FROM base-${VARIANT} AS final
 ARG VARIANT=cpu
+ARG ROLE=worker
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# ffmpeg: audio decode. libsndfile1: librosa/soundfile.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg libsndfile1 && \
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libsndfile1 && \
     rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -u 1000 appuser && \
@@ -36,25 +28,20 @@ RUN useradd -m -u 1000 appuser && \
     chown -R appuser:appuser /home/appuser
 
 WORKDIR /app
+COPY requirements-api.txt requirements-worker.txt ./
 
-# Copy requirements first so pip layer is cached across code-only changes.
-COPY requirements.txt ./
-
-# Install the platform-specific torch wheel first. The shared requirements file
-# stays portable for native macOS installs and will reuse this installed wheel.
-RUN if [ "${VARIANT}" = "gpu" ]; then \
-      TORCH_INDEX=https://download.pytorch.org/whl/cu126; \
-    elif [ "${VARIANT}" = "rocm" ]; then \
-      TORCH_INDEX=https://download.pytorch.org/whl/rocm6.4; \
+RUN if [ "${ROLE}" = "api" ]; then \
+      python3 -m pip install -r requirements-api.txt; \
     else \
-      TORCH_INDEX=https://download.pytorch.org/whl/cpu; \
-    fi && \
-    python3 -m pip install torch torchaudio --index-url "${TORCH_INDEX}" && \
-    python3 -m pip install -r requirements.txt
+      if [ "${VARIANT}" = "gpu" ]; then TORCH_INDEX=https://download.pytorch.org/whl/cu126; \
+      elif [ "${VARIANT}" = "rocm" ]; then TORCH_INDEX=https://download.pytorch.org/whl/rocm6.4; \
+      else TORCH_INDEX=https://download.pytorch.org/whl/cpu; fi && \
+      python3 -m pip install torch torchaudio --index-url "${TORCH_INDEX}" && \
+      python3 -m pip install -r requirements-worker.txt; \
+    fi
 
 COPY app ./app
-
-RUN mkdir -p /app/uploads /app/data && chown -R appuser:appuser /app
+RUN mkdir -p /app/shared-storage /app/data && chown -R appuser:appuser /app
 USER appuser
 
 EXPOSE 8000

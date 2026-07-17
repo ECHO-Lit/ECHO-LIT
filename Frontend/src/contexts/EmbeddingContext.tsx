@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
-import { API_BASE } from '@/lib/api';
+import { materializeAudio, runJob } from '@/lib/jobs';
 
 export interface EmbeddingPoint {
   filename: string;
@@ -68,26 +68,28 @@ export const EmbeddingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setError(null);
 
     try {
-      const response = await fetch(`${API_BASE}/inferences/embeddings`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify({
-          model,
-          dataset,
-          files,
-          reduction_method: reductionMethod,
-          n_components: nComponents,
-        }),
+      const assets = await Promise.all(files.map((filename) => materializeAudio(dataset, filename)));
+      const result: any = await runJob({
+        operation: 'embedding',
+        model,
+        audio_ids: assets.map((asset) => asset.audio_id),
+        parameters: { reduction: reductionMethod, n_components: nComponents },
       });
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch embeddings: ${response.status}`);
-      }
-
-      const data = await response.json();
+      const embeddings = result.items.map((item, index) => ({
+        filename: files[index], embedding: item.result, embedding_dim: item.result.length,
+      }));
+      const data: EmbeddingData = {
+        model,
+        dataset,
+        reduction_method: reductionMethod,
+        n_components: nComponents,
+        embeddings,
+        reduced_embeddings: result.projection?.map((coordinates, index) => ({
+          filename: files[index], coordinates,
+        })),
+        total_files: files.length,
+        original_dimension: embeddings[0]?.embedding_dim || 0,
+      };
       setEmbeddingData(data);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to fetch embeddings';

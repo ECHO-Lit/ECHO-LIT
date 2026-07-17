@@ -3,10 +3,10 @@ import { useDropzone } from "react-dropzone";
 import { Card, CardContent } from "@/components/ui/card";
 import { Upload, FileAudio } from "lucide-react";
 import { toast } from "sonner";
-import { API_BASE } from '@/lib/api';
+import { API_BASE, AudioReference } from '@/lib/api';
 
 interface AudioUploaderProps {
-  onUploadSuccess?: (uploadResponse) => void;
+  onUploadSuccess?: (uploadResponse: AudioReference) => void;
   model?: string;
 }
 
@@ -15,7 +15,8 @@ export const AudioUploader = ({ onUploadSuccess, model }: AudioUploaderProps) =>
     
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('model', model || 'whisper-base'); // Default to whisper-base if no model specified
+    // Kept during the API compatibility window; upload no longer runs inference.
+    formData.append('model', model || 'whisper-base');
 
     try {
       const response = await fetch(`${API_BASE}/upload`, {
@@ -40,13 +41,13 @@ export const AudioUploader = ({ onUploadSuccess, model }: AudioUploaderProps) =>
       return data;
     } catch (error) {
       console.error('Upload error:', error);
-      toast.error(`Failed to upload ${file.name}: ${error.message || 'Unknown error'}`);
+      toast.error(`Failed to upload ${file.name}: ${error instanceof Error ? error.message : 'Unknown error'}`);
       throw error;
     }
   };
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
-    acceptedFiles.forEach(async (file, index) => {
+    acceptedFiles.forEach(async (file) => {
       
       // Check both MIME type and file extension for better .flac support
       const allowedExtensions = ['.wav', '.mp3', '.m4a', '.flac'];
@@ -56,7 +57,7 @@ export const AudioUploader = ({ onUploadSuccess, model }: AudioUploaderProps) =>
       if (isValidFile) {
         try {
           await uploadFile(file);
-        } catch (error) {
+        } catch {
           // Error already handled in uploadFile
         }
       } else {
@@ -64,7 +65,7 @@ export const AudioUploader = ({ onUploadSuccess, model }: AudioUploaderProps) =>
         toast.error(`Invalid file type: ${file.name}. Supported formats: WAV, MP3, M4A, FLAC`);
       }
     });
-  }, [onUploadSuccess]);
+  }, [onUploadSuccess, model]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,

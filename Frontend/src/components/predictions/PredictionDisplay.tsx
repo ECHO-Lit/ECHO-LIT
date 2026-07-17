@@ -3,9 +3,10 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 
 interface UploadedFile {
+  audio_id?: string;
   file_id: string;
   filename: string;
-  file_path: string;
+  playback_url?: string;
   message: string;
   size?: number;
   duration?: number;

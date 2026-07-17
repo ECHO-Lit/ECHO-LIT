@@ -6,12 +6,13 @@ import { SaliencyVisualization } from "../visualization/SaliencyVisualization";
 import { AttentionVisualization } from "../visualization/AttentionVisualization";
 import { PerturbationTools } from "../analysis/PerturbationTools";
 import { useState, useEffect } from "react";
-import { API_BASE } from '@/lib/api';
+import { firstJobResult, resolveAudioId, runJob } from '@/lib/jobs';
 
 interface UploadedFile {
+  audio_id?: string;
   file_id: string;
   filename: string;
-  file_path: string;
+  playback_url?: string;
   message: string;
   size?: number;
   duration?: number;
@@ -38,7 +39,8 @@ interface WhisperPrediction {
 }
 
 interface PerturbationResult {
-  perturbed_file: string;
+  audio_id: string;
+  playback_url: string;
   filename: string;
   duration_ms: number;
   sample_rate: number;
@@ -83,9 +85,10 @@ export const PredictionPanel = ({ selectedFile, selectedEmbeddingFile, model, da
 
     // Create a file-like object for the perturbed audio
     const perturbedFileObj: UploadedFile = {
-      file_id: result.filename,
+      audio_id: result.audio_id,
+      file_id: result.audio_id,
       filename: result.filename,
-      file_path: result.perturbed_file,
+      playback_url: result.playback_url,
       message: "Perturbed audio",
       duration: result.duration_ms / 1000,
       sample_rate: result.sample_rate
@@ -111,47 +114,10 @@ export const PredictionPanel = ({ selectedFile, selectedEmbeddingFile, model, da
 
     try {
       
-      let response;
-      let prediction;
-      
-      if (model === "wav2vec2") {
-        const requestBody = {
-          file_path: perturbedFile.file_path
-        };
-
-        response = await fetch(`${API_BASE}/inferences/wav2vec2-detailed`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(requestBody),
-        });
-
-        if (!response.ok) {
-          throw new Error(`Failed to fetch perturbed wav2vec2 prediction: ${response.status}`);
-        }
-
-        prediction = await response.json();
-      } else if (model?.includes("whisper")) {
-        const requestBody = {
-          model: model,
-          file_path: perturbedFile.file_path
-        };
-
-        response = await fetch(`${API_BASE}/inferences/whisper-accuracy`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(requestBody),
-        });
-
-        if (!response.ok) {
-          throw new Error(`Failed to fetch perturbed whisper prediction: ${response.status}`);
-        }
-
-        prediction = await response.json();
-      }
+      if (!perturbedFile.audio_id) throw new Error('Perturbed audio has no audio ID');
+      const prediction = firstJobResult<any>(await runJob({
+        operation: 'prediction', model, audio_ids: [perturbedFile.audio_id],
+      }));
 
       setPerturbedPredictions(prediction);
       
@@ -196,60 +162,19 @@ export const PredictionPanel = ({ selectedFile, selectedEmbeddingFile, model, da
       setError(null);
 
       try {
-        let requestBody: any = {};
-        
-        if (selectedFile) {
-          // Check if this is an uploaded file - more precise detection
-          const isUploadedFile = selectedFile.file_path && (
-            selectedFile.file_path.includes('uploads/') || 
-            selectedFile.file_path.startsWith('uploads/') ||
-            selectedFile.message === "Perturbed file" ||
-            selectedFile.message === "File uploaded successfully" ||
-            selectedFile.message === "File uploaded and processed successfully"
-          ) && selectedFile.message !== "Selected from dataset";
-          
-          if (isUploadedFile) {
-            // This is an uploaded file, use file_path
-            requestBody.file_path = selectedFile.file_path;
-          } else {
-            // This is a dataset file, use originalDataset and dataset_file
-            requestBody.dataset = originalDataset || dataset;
-            requestBody.dataset_file = selectedFile.filename;
-          }
-        } else if (selectedEmbeddingFile && dataset) {
-          // Use embedding file selection
-          requestBody.dataset = originalDataset || dataset;
-          requestBody.dataset_file = selectedEmbeddingFile;
-        }
-
-        const response = await fetch(`${API_BASE}/inferences/wav2vec2-detailed`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          credentials: 'include',
-          body: JSON.stringify(requestBody),
-          signal: abortController.signal
-        });
-
-        if (!response.ok) {
-          throw new Error(`Failed to fetch prediction: ${response.status}`);
-        }
-
-        const prediction = await response.json();
+        const audioId = await resolveAudioId(
+          selectedFile || selectedEmbeddingFile || '', originalDataset || dataset, abortController.signal,
+        );
+        const prediction = firstJobResult<Wav2Vec2Prediction>(await runJob({
+          operation: 'prediction', model: 'wav2vec2', audio_ids: [audioId],
+        }, { signal: abortController.signal }));
         if (isMounted) {
           setWav2vecPrediction(prediction);
         }
         
         // Update predictionMap for uploaded files (same as dataset files)
         if (selectedFile && onPredictionUpdate) {
-          const isUploadedFile = selectedFile.file_path && (
-            selectedFile.file_path.includes('uploads/') || 
-            selectedFile.file_path.startsWith('uploads/') ||
-            selectedFile.message === "Perturbed file" ||
-            selectedFile.message === "File uploaded successfully" ||
-            selectedFile.message === "File uploaded and processed successfully"
-          ) && selectedFile.message !== "Selected from embeddings" && selectedFile.message !== "Selected from dataset";
+          const isUploadedFile = Boolean(selectedFile.audio_id);
           
           if (isUploadedFile) {
             const predictionText = typeof prediction === 'string' ? prediction : 
@@ -259,7 +184,7 @@ export const PredictionPanel = ({ selectedFile, selectedEmbeddingFile, model, da
         }
       } catch (err) {
         // Ignore abort errors
-        if (err.name === 'AbortError') return;
+        if (err instanceof DOMException && err.name === 'AbortError') return;
         
         const errorMessage = err instanceof Error ? err.message : "Unknown error";
         if (isMounted) {
@@ -299,61 +224,14 @@ export const PredictionPanel = ({ selectedFile, selectedEmbeddingFile, model, da
       setError(null);
 
       try {
-        let requestBody: any = {
-          model: model
-        };
-        
-        let isUploadedFile = false;
-        
-        if (selectedFile) {
-          // Check if this is an uploaded file - more precise detection
-          isUploadedFile = selectedFile.file_path && (
-            selectedFile.file_path.includes('uploads/') || 
-            selectedFile.file_path.startsWith('uploads/') ||
-            selectedFile.message === "Perturbed file" ||
-            selectedFile.message === "File uploaded successfully" ||
-            selectedFile.message === "File uploaded and processed successfully"
-          ) && selectedFile.message !== "Selected from dataset";
-          
-          if (isUploadedFile) {
-            // This is an uploaded file, use file_path
-            requestBody.file_path = selectedFile.file_path;
-          } else {
-            // This is a dataset file, use originalDataset and dataset_file
-            requestBody.dataset = originalDataset || dataset;
-            requestBody.dataset_file = selectedFile.filename;
-          }
-        } else if (selectedEmbeddingFile && dataset) {
-          // Use embedding file selection - this is a dataset file
-          requestBody.dataset = originalDataset || dataset;
-          requestBody.dataset_file = selectedEmbeddingFile;
-          isUploadedFile = false;
-        }
+        const isUploadedFile = Boolean(selectedFile?.audio_id);
 
-        // Choose the correct endpoint based on file type
-        let endpoint: string;
-        if (isUploadedFile) {
-          // For uploaded files, use basic inference endpoint (no ground truth available)
-          endpoint = `${API_BASE}/inferences/run`;
-        } else {
-          // For dataset files, use accuracy endpoint to get ground truth and metrics
-          endpoint = `${API_BASE}/inferences/whisper-accuracy`;
-        }
-
-        const response = await fetch(`${API_BASE}/inferences/whisper-accuracy`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          credentials: 'include',
-          body: JSON.stringify(requestBody),
-        });
-
-        if (!response.ok) {
-          throw new Error(`Failed to fetch whisper prediction: ${response.status}`);
-        }
-
-        const prediction = await response.json();
+        const audioId = await resolveAudioId(
+          selectedFile || selectedEmbeddingFile || '', originalDataset || dataset,
+        );
+        const prediction = firstJobResult<any>(await runJob({
+          operation: 'prediction', model, audio_ids: [audioId],
+        }));
         
         let whisperPrediction: WhisperPrediction;
         

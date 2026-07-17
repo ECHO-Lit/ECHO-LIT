@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { HelpCircle } from "lucide-react";
 import { API_BASE } from '@/lib/api';
+import { materializeAudio, runJob } from '@/lib/jobs';
 import { getFeatureExplanation } from "@/lib/audioFeatures";
 
 interface ScalersVisualizationProps {
@@ -159,22 +160,10 @@ export const ScalersVisualization = ({ model, dataset }: ScalersVisualizationPro
         requestBody.dataset = dataset;
       }
 
-      const response = await fetch(`${API_BASE}/inferences/audio-frequency-batch`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        credentials: 'include', // Include session cookies
-        body: JSON.stringify(requestBody),
+      const assets = await Promise.all(selectedPoints.map((filename) => materializeAudio(dataset || '', filename)));
+      const analysis = await runJob<AudioFrequencyAnalysis>({
+        operation: 'audio_features', audio_ids: assets.map((asset) => asset.audio_id),
       });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Audio frequency analysis error:', response.status, errorText);
-        throw new Error(`Failed to fetch audio frequency analysis: ${response.status} - ${errorText}`);
-      }
-
-      const analysis = await response.json();
       setAudioFrequencyAnalysis(analysis);
     } catch (error) {
       console.error("Error fetching audio frequency analysis:", error);
@@ -201,22 +190,10 @@ export const ScalersVisualization = ({ model, dataset }: ScalersVisualizationPro
         requestBody.dataset = dataset;
       }
 
-      const response = await fetch(`${API_BASE}/inferences/whisper-batch`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        credentials: 'include',
-        body: JSON.stringify(requestBody),
+      const assets = await Promise.all(selectedPoints.map((filename) => materializeAudio(dataset || '', filename)));
+      const analysis = await runJob<WhisperBatchAnalysis>({
+        operation: 'prediction', model, audio_ids: assets.map((asset) => asset.audio_id),
       });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Whisper analysis error:', response.status, errorText);
-        throw new Error(`Failed to fetch whisper analysis: ${response.status} - ${errorText}`);
-      }
-
-      const analysis = await response.json();
       setWhisperAnalysis(analysis);
     } catch (error) {
       console.error("Error fetching whisper analysis:", error);
@@ -242,22 +219,10 @@ export const ScalersVisualization = ({ model, dataset }: ScalersVisualizationPro
         requestBody.dataset = dataset;
       }
 
-      const response = await fetch(`${API_BASE}/inferences/wav2vec2-batch`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        credentials: 'include',
-        body: JSON.stringify(requestBody),
+      const assets = await Promise.all(selectedPoints.map((filename) => materializeAudio(dataset || '', filename)));
+      const prediction = await runJob<Wav2Vec2BatchPrediction>({
+        operation: 'prediction', model: 'wav2vec2', audio_ids: assets.map((asset) => asset.audio_id),
       });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Batch prediction error:', response.status, errorText);
-        throw new Error(`Failed to fetch batch predictions: ${response.status} - ${errorText}`);
-      }
-
-      const prediction = await response.json();
       setBatchPrediction(prediction);
     } catch (error) {
       console.error("Error fetching batch predictions:", error);

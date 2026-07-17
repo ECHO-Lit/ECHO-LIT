@@ -147,22 +147,7 @@ def transcribe_whisper(model_id, audio_file, chunk_length_s=30, batch_size=8, re
 
     # For attention extraction, we need to use the raw model, not the pipeline
     if return_attention:
-        
-        processor = WhisperProcessor.from_pretrained(model_id)
-        # CRITICAL FIX: Use eager attention to support output_attentions=True.
-        # `low_cpu_mem_usage=False` disables the meta-device init path that in
-        # some transformers versions leaves `proj_out.weight` (the LM head,
-        # tied to `decoder.embed_tokens`) uninitialized -> random logits ->
-        # `.generate()` emits garbage token indices -> downstream tensor
-        # shape / index-out-of-bounds crashes.
-        model = WhisperForConditionalGeneration.from_pretrained(
-            model_id, attn_implementation="eager", low_cpu_mem_usage=False
-        )
-        # Explicitly re-tie weights in case the loader skipped the standard
-        # `_tie_weights` hook (safe no-op when already tied).
-        if hasattr(model, "tie_weights"):
-            model.tie_weights()
-        model = _safe_to_device(model, device)
+        processor, model = get_whisper_attention_models(model_id)
         
         # Process audio to input features
         input_features = processor(audio, sampling_rate=sample_rate, return_tensors="pt").input_features
@@ -540,13 +525,26 @@ def predict_emotion_wave2vec_with_attention(audio_path):
 
 
 _EMO_MODEL_ID = "r-f/wav2vec-english-speech-emotion-recognition"
-feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(_EMO_MODEL_ID)
-emo_model = _Wav2Vec2ForSpeechClassification.from_pretrained(_EMO_MODEL_ID, attn_implementation="eager")
 emo_device = INFERENCE_DEVICE
-emo_model = _safe_to_device(emo_model, emo_device)
-emo_model.eval()
+feature_extractor = None
+emo_model = None
+
+
+def get_emotion_models():
+    """Lazily load the emotion model inside a worker process."""
+    global feature_extractor, emo_model
+    if feature_extractor is None:
+        feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(_EMO_MODEL_ID)
+    if emo_model is None:
+        emo_model = _Wav2Vec2ForSpeechClassification.from_pretrained(
+            _EMO_MODEL_ID, attn_implementation="eager"
+        )
+        emo_model = _safe_to_device(emo_model, emo_device)
+        emo_model.eval()
+    return feature_extractor, emo_model
 
 def predict_emotion_wave2vec(audio_path, return_attention=False):
+    feature_extractor, emo_model = get_emotion_models()
     audio, rate = librosa.load(audio_path, sr=16000)
     inputs = feature_extractor(audio, sampling_rate=rate, return_tensors="pt", padding=True)
 
@@ -953,6 +951,14 @@ _whisper_model_large = None
 # different weight shapes.
 _whisper_gen_model_base = None
 _whisper_gen_model_large = None
+_whisper_attention_processor_base = None
+_whisper_attention_model_base = None
+_whisper_attention_processor_large = None
+_whisper_attention_model_large = None
+_whisper_saliency_processor_base = None
+_whisper_saliency_model_base = None
+_whisper_saliency_processor_large = None
+_whisper_saliency_model_large = None
 
 
 def get_whisper_base_models():
@@ -1006,6 +1012,116 @@ def get_whisper_gen_model(model_id: str):
     elif model_id == "openai/whisper-large-v3":
         _whisper_gen_model_large = model
     return model
+
+
+def get_whisper_attention_models(model_id: str):
+    """Return a cached eager-attention Whisper generation variant."""
+    global _whisper_attention_processor_base, _whisper_attention_model_base
+    global _whisper_attention_processor_large, _whisper_attention_model_large
+    if model_id == "openai/whisper-base":
+        processor, model = _whisper_attention_processor_base, _whisper_attention_model_base
+    else:
+        processor, model = _whisper_attention_processor_large, _whisper_attention_model_large
+    if processor is None:
+        processor = WhisperProcessor.from_pretrained(model_id)
+    if model is None:
+        model = WhisperForConditionalGeneration.from_pretrained(
+            model_id, attn_implementation="eager", low_cpu_mem_usage=False
+        )
+        if hasattr(model, "tie_weights"):
+            model.tie_weights()
+        model = _safe_to_device(model, INFERENCE_DEVICE)
+        model.eval()
+    if model_id == "openai/whisper-base":
+        _whisper_attention_processor_base, _whisper_attention_model_base = processor, model
+    else:
+        _whisper_attention_processor_large, _whisper_attention_model_large = processor, model
+    return processor, model
+
+
+def get_whisper_saliency_models(model_id: str):
+    """Return a cached encoder reserved for gradient-enabled analysis."""
+    global _whisper_saliency_processor_base, _whisper_saliency_model_base
+    global _whisper_saliency_processor_large, _whisper_saliency_model_large
+    if model_id == "openai/whisper-base":
+        processor, model = _whisper_saliency_processor_base, _whisper_saliency_model_base
+    else:
+        processor, model = _whisper_saliency_processor_large, _whisper_saliency_model_large
+    if processor is None:
+        processor = WhisperProcessor.from_pretrained(model_id)
+    if model is None:
+        kwargs = (
+            {"torch_dtype": inference_dtype(allow_half=True)}
+            if model_id.endswith("large-v3")
+            else {}
+        )
+        model = WhisperModel.from_pretrained(model_id, **kwargs)
+        model = _safe_to_device(model, INFERENCE_DEVICE)
+    if model_id == "openai/whisper-base":
+        _whisper_saliency_processor_base, _whisper_saliency_model_base = processor, model
+    else:
+        _whisper_saliency_processor_large, _whisper_saliency_model_large = processor, model
+    return processor, model
+
+
+def unload_model_resources(model: str, purpose: str) -> None:
+    """Release a registry entry and its accelerator memory."""
+    global feature_extractor, emo_model
+    global _whisper_processor_base, _whisper_model_base
+    global _whisper_processor_large, _whisper_model_large
+    global _whisper_gen_model_base, _whisper_gen_model_large
+    global _whisper_attention_processor_base, _whisper_attention_model_base
+    global _whisper_attention_processor_large, _whisper_attention_model_large
+    global _whisper_saliency_processor_base, _whisper_saliency_model_base
+    global _whisper_saliency_processor_large, _whisper_saliency_model_large
+    from app.core.device import clear_accelerator_cache
+
+    if model == "wav2vec2":
+        if emo_model is not None:
+            emo_model.to("cpu")
+        feature_extractor = None
+        emo_model = None
+    elif model == "whisper-base":
+        if purpose == "encoder":
+            if _whisper_model_base is not None:
+                _whisper_model_base.to("cpu")
+            _whisper_processor_base = None
+            _whisper_model_base = None
+        elif purpose == "gradient":
+            if _whisper_saliency_model_base is not None:
+                _whisper_saliency_model_base.to("cpu")
+            _whisper_saliency_processor_base = None
+            _whisper_saliency_model_base = None
+        elif purpose == "eager-attention":
+            if _whisper_attention_model_base is not None:
+                _whisper_attention_model_base.to("cpu")
+            _whisper_attention_processor_base = None
+            _whisper_attention_model_base = None
+        else:
+            if _whisper_gen_model_base is not None:
+                _whisper_gen_model_base.to("cpu")
+            _whisper_gen_model_base = None
+    elif model == "whisper-large":
+        if purpose == "encoder":
+            if _whisper_model_large is not None:
+                _whisper_model_large.to("cpu")
+            _whisper_processor_large = None
+            _whisper_model_large = None
+        elif purpose == "gradient":
+            if _whisper_saliency_model_large is not None:
+                _whisper_saliency_model_large.to("cpu")
+            _whisper_saliency_processor_large = None
+            _whisper_saliency_model_large = None
+        elif purpose == "eager-attention":
+            if _whisper_attention_model_large is not None:
+                _whisper_attention_model_large.to("cpu")
+            _whisper_attention_processor_large = None
+            _whisper_attention_model_large = None
+        else:
+            if _whisper_gen_model_large is not None:
+                _whisper_gen_model_large.to("cpu")
+            _whisper_gen_model_large = None
+    clear_accelerator_cache()
 
 def extract_whisper_embeddings(audio_file_path: str, model_size: str = "base") -> np.ndarray:
     """
@@ -1061,6 +1177,7 @@ def extract_wav2vec2_embeddings(audio_file_path: str) -> np.ndarray:
     Returns:
         numpy array of embeddings
     """
+    feature_extractor, emo_model = get_emotion_models()
     # Load audio
     audio, rate = librosa.load(audio_file_path, sr=16000)
     

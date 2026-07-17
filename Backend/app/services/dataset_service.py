@@ -1,8 +1,8 @@
 from pathlib import Path
 from typing import Dict, List, Optional
 import csv
-import librosa
 import logging
+from app.core.audio_probe import probe_audio
 from .custom_dataset_service import (
     get_custom_dataset_manager, 
     is_custom_dataset, 
@@ -33,8 +33,7 @@ DATASET_BASE_DIRS: Dict[str, Path] = {
 def calculate_audio_duration(audio_path: Path) -> float:
     """Calculate duration of audio file in seconds"""
     try:
-        # Use librosa to get duration without loading the entire audio
-        duration = librosa.get_duration(path=str(audio_path))
+        duration, _, _ = probe_audio(audio_path)
         return round(duration, 2)
     except Exception as e:
         logger.warning(f"Could not calculate duration for {audio_path}: {e}")
