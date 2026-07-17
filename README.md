@@ -54,7 +54,9 @@ ECHO extends the interpretability paradigm to audio models, providing researcher
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows/Mac) or Docker Engine + Compose plugin (Linux)
 - **Windows**: enable the WSL 2 backend in Docker Desktop settings
-- **GPU users**: NVIDIA driver 555+, then verify with `docker run --rm --gpus all nvidia/cuda:12.6.0-base-ubuntu22.04 nvidia-smi`
+- **NVIDIA users**: driver 555+, then verify with `docker run --rm --gpus all nvidia/cuda:12.6.0-base-ubuntu22.04 nvidia-smi`
+- **AMD users**: Linux with a ROCm-supported GPU and host driver
+- **Mac GPU users**: run the backend natively; Docker Desktop does not expose MPS
 
 ## Quickstart (Docker)
 
@@ -78,12 +80,36 @@ volume. Subsequent boots reuse it — no re-download.
 - **Backend**: http://localhost:8000/health
 - **Redis**: localhost:6379
 
-### GPU mode (NVIDIA opt-in)
+### GPU modes
 
 ```bash
-# Start GPU backend instead of CPU backend (avoids port 8000 conflict)
+# NVIDIA (Linux or WSL 2 with NVIDIA Container Toolkit)
 docker compose --profile gpu up redis frontend backend-gpu --build
+
+# AMD ROCm (Linux with a supported ROCm host driver)
+docker compose --profile amd up redis frontend backend-amd --build
 ```
+
+Only run one backend profile because all backend services expose port 8000.
+Docker Desktop on macOS cannot pass the Metal GPU into a Linux container; run
+the backend natively on macOS to use MPS:
+
+```bash
+cd Backend
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+`ML_DEVICE=auto` selects NVIDIA CUDA or AMD ROCm first, Apple MPS second, and
+CPU as a fallback. Set `ML_DEVICE=cpu`, `mps`, `nvidia`, `amd`, or `cuda:1` to
+override selection. For a native AMD install, install the ROCm build of
+`torch` and `torchaudio` from the version-matched PyTorch ROCm wheel index
+before installing `requirements.txt`.
+
+The `/health` response reports the selected device, backend, GPU name, PyTorch
+version, and CUDA/ROCm runtime version.
 
 ### Common operations
 

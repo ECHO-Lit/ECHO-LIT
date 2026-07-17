@@ -13,6 +13,7 @@ x-backend-common: &backend-common
     HF_HOME: /home/appuser/.cache/huggingface
     TRANSFORMERS_CACHE: /home/appuser/.cache/huggingface
     PYTHONUNBUFFERED: "1"
+    ML_DEVICE: auto
   volumes:
     - ./Backend/app:/app/app          # hot-reload: only source, not full Backend dir
     - ./Backend/data:/app/data
@@ -63,8 +64,8 @@ services:
 
   # ── Backend (GPU — opt-in) ─────────────────────────────────────
   # Requires NVIDIA driver 555+ and NVIDIA Container Toolkit in WSL2.
-  # WARNING: both backend and backend-gpu bind port 8000. Do NOT start
-  # both simultaneously. GPU users run:
+  # WARNING: all backend variants bind port 8000. Do NOT start more than one.
+  # NVIDIA GPU users run:
   #   docker compose --profile gpu up redis frontend backend-gpu
   backend-gpu:
     <<: *backend-common
@@ -82,6 +83,27 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+
+  # ── Backend (AMD GPU / ROCm — opt-in, Linux only) ───────────────
+  # Requires a ROCm-supported GPU and host driver. Uses PyTorch's CUDA-shaped
+  # API internally; /health reports the backend as "rocm".
+  backend-amd:
+    <<: *backend-common
+    container_name: echo-backend-amd
+    build:
+      context: ./Backend
+      dockerfile: Dockerfile
+      args:
+        VARIANT: rocm
+    profiles: [amd]
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+    ipc: host
+    security_opt:
+      - seccomp=unconfined
 
   # ── Frontend (Vite dev server) ─────────────────────────────────
   frontend:

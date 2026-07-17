@@ -4,6 +4,10 @@ ARG VARIANT=cpu
 # ── CPU base ──────────────────────────────────────────────────
 FROM python:3.11-slim AS base-cpu
 
+# AMD ROCm wheels bundle user-space runtime libraries. The host supplies the
+# kernel driver through /dev/kfd and /dev/dri (configured in Compose).
+FROM python:3.11-slim AS base-rocm
+
 # ── GPU base ──────────────────────────────────────────────────
 FROM nvidia/cuda:12.6.0-runtime-ubuntu22.04 AS base-gpu
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -36,14 +40,17 @@ WORKDIR /app
 # Copy requirements first so pip layer is cached across code-only changes.
 COPY requirements.txt ./
 
-# CPU: strip the cu126 extra-index line, install from CPU wheel index.
-# GPU: install as-is (cu126 line already in requirements.txt).
-RUN if [ "${VARIANT}" = "cpu" ]; then \
-      tail -n +2 requirements.txt > /tmp/req.txt && \
-      python3 -m pip install --extra-index-url https://download.pytorch.org/whl/cpu -r /tmp/req.txt; \
+# Install the platform-specific torch wheel first. The shared requirements file
+# stays portable for native macOS installs and will reuse this installed wheel.
+RUN if [ "${VARIANT}" = "gpu" ]; then \
+      TORCH_INDEX=https://download.pytorch.org/whl/cu126; \
+    elif [ "${VARIANT}" = "rocm" ]; then \
+      TORCH_INDEX=https://download.pytorch.org/whl/rocm6.4; \
     else \
-      python3 -m pip install -r requirements.txt; \
-    fi
+      TORCH_INDEX=https://download.pytorch.org/whl/cpu; \
+    fi && \
+    python3 -m pip install torch torchaudio --index-url "${TORCH_INDEX}" && \
+    python3 -m pip install -r requirements.txt
 
 COPY app ./app
 

@@ -7,5 +7,6 @@ class Settings(BaseSettings):
     COOKIE_SECURE: bool = False
     COOKIE_SAMESITE: str = "lax"  # use "none" on cross-site + https
     COOKIE_DOMAIN: str | None = None
+    ML_DEVICE: str = "auto"
 
 settings = Settings()

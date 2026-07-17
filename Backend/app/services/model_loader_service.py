@@ -20,6 +20,7 @@ import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 import umap
+from app.core.device import INFERENCE_DEVICE, inference_dtype
 
 
 class _Wav2Vec2ClassificationHead(nn.Module):
@@ -84,7 +85,7 @@ def _safe_to_device(model, device):
             raise
         logger.warning(f"Meta tensor detected moving to {device}; reloading {name_or_path} with device_map")
         cls = type(model)
-        load_kwargs = {"device_map": {"": device}}
+        load_kwargs = {"device_map": {"": str(device)}}
         dtype = getattr(model, "dtype", None)
         if dtype is not None:
             load_kwargs["torch_dtype"] = dtype
@@ -92,8 +93,7 @@ def _safe_to_device(model, device):
 
 
 def transcribe_whisper(model_id, audio_file, chunk_length_s=30, batch_size=8, return_timestamps=False, return_attention=False):
-    device = 0 if torch.cuda.is_available() else -1
-    torch_dtype = torch.float32
+    device = INFERENCE_DEVICE
     # Load audio
     audio, sample_rate = librosa.load(audio_file, sr=16000)
     audio = audio.astype(np.float32)
@@ -162,7 +162,7 @@ def transcribe_whisper(model_id, audio_file, chunk_length_s=30, batch_size=8, re
         # `_tie_weights` hook (safe no-op when already tied).
         if hasattr(model, "tie_weights"):
             model.tie_weights()
-        model = _safe_to_device(model, "cuda:0" if torch.cuda.is_available() else "cpu")
+        model = _safe_to_device(model, device)
         
         # Process audio to input features
         input_features = processor(audio, sampling_rate=sample_rate, return_tensors="pt").input_features
@@ -332,14 +332,14 @@ def transcribe_whisper(model_id, audio_file, chunk_length_s=30, batch_size=8, re
                         # CRITICAL FIX: Use eager attention for output_attentions=True
                         model_for_attention = WhisperModel.from_pretrained(model_id, attn_implementation="eager")
                     
-                    if device and device != "cpu":
+                    if device.type != "cpu":
                         model_for_attention = _safe_to_device(model_for_attention, device)
                     
                     # Process audio properly
                     inputs = processor(audio, sampling_rate=sample_rate, return_tensors="pt")
                     input_features = inputs.input_features
                     
-                    if device and device != "cpu":
+                    if device.type != "cpu":
                         input_features = input_features.to(device)
                     
                     # Extract attention with proper error handling
@@ -542,7 +542,7 @@ def predict_emotion_wave2vec_with_attention(audio_path):
 _EMO_MODEL_ID = "r-f/wav2vec-english-speech-emotion-recognition"
 feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(_EMO_MODEL_ID)
 emo_model = _Wav2Vec2ForSpeechClassification.from_pretrained(_EMO_MODEL_ID, attn_implementation="eager")
-emo_device = "cuda:0" if torch.cuda.is_available() else "cpu"
+emo_device = INFERENCE_DEVICE
 emo_model = _safe_to_device(emo_model, emo_device)
 emo_model.eval()
 
@@ -958,7 +958,7 @@ _whisper_gen_model_large = None
 def get_whisper_base_models():
     global _whisper_processor_base, _whisper_model_base
     if _whisper_processor_base is None:
-        device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        device = INFERENCE_DEVICE
         _whisper_processor_base = WhisperProcessor.from_pretrained("openai/whisper-base")
         _whisper_model_base = WhisperModel.from_pretrained("openai/whisper-base")
         _whisper_model_base = _safe_to_device(_whisper_model_base, device)
@@ -968,11 +968,11 @@ def get_whisper_base_models():
 def get_whisper_large_models():
     global _whisper_processor_large, _whisper_model_large
     if _whisper_processor_large is None:
-        device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        device = INFERENCE_DEVICE
         _whisper_processor_large = WhisperProcessor.from_pretrained("openai/whisper-large-v3")
         _whisper_model_large = WhisperModel.from_pretrained(
             "openai/whisper-large-v3",
-            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+            torch_dtype=inference_dtype(allow_half=True),
         )
         _whisper_model_large = _safe_to_device(_whisper_model_large, device)
     return _whisper_processor_large, _whisper_model_large
@@ -999,8 +999,7 @@ def get_whisper_gen_model(model_id: str):
     )
     if hasattr(model, "tie_weights"):
         model.tie_weights()
-    device = "cuda:0" if torch.cuda.is_available() else "cpu"
-    model = _safe_to_device(model, device)
+    model = _safe_to_device(model, INFERENCE_DEVICE)
     model.eval()
     if model_id == "openai/whisper-base":
         _whisper_gen_model_base = model
