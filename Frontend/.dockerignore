@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.vite/
+.env
+.env.*
+!.env.example
+*.log
+.git/
+.gitignore
+Dockerfile
+.dockerignore
+README.md

@@ -425,6 +425,7 @@ export const PredictionPanel = ({ selectedFile, selectedEmbeddingFile, model, da
                 selectedFile={selectedFile || selectedEmbeddingFile}
                 model={model}
                 dataset={dataset}
+                originalDataset={originalDataset}
               />
             </div>
           </TabsContent>
@@ -435,7 +436,7 @@ export const PredictionPanel = ({ selectedFile, selectedEmbeddingFile, model, da
                 <AttentionVisualization
                   selectedFile={selectedFile || selectedEmbeddingFile}
                   model={model}
-                  dataset={dataset}
+                  dataset={originalDataset && originalDataset !== 'custom' ? originalDataset : dataset}
                 />
               </div>
             </TabsContent>

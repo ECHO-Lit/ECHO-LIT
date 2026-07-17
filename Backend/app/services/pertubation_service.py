@@ -26,11 +26,21 @@ def apply_time_masking(waveform, mask_start_percent, mask_end_percent):
     channels, length = waveform.shape
     start_idx = int(length * mask_start_percent / 100)
     end_idx = int(length * mask_end_percent / 100)
-    
+
     # Create a copy to avoid modifying original
     masked_waveform = waveform.clone()
-    masked_waveform[:, start_idx:end_idx] = 0
-    
+    # Replace with a very low amplitude noise floor (~ -80 dBFS) instead of
+    # hard zero. A perfectly silent region causes Whisper's ASR pipeline to
+    # emit an empty generation for the corresponding chunk, which then
+    # crashes `_extract_token_timestamps` and `generate_with_fallback`
+    # (tensor-shape / index-out-of-bounds errors, see the fallback ladder
+    # in `transcribe_whisper`). The dither is perceptually inaudible but
+    # keeps the mel-spectrogram non-degenerate.
+    if end_idx > start_idx:
+        masked_waveform[:, start_idx:end_idx] = (
+            torch.randn(channels, end_idx - start_idx, dtype=masked_waveform.dtype) * 1e-4
+        )
+
     return masked_waveform
 
 def apply_frequency_masking(waveform, sample_rate, mask_freq_start, mask_freq_end):
@@ -89,35 +99,15 @@ def apply_pitch_shift(waveform, sample_rate, pitch_shift_semitones):
         
         print(f"DEBUG: Using librosa.effects.pitch_shift with n_steps={pitch_shift_semitones}")
         print(f"DEBUG: Audio length: {len(audio_np)} samples")
-        
-        # Apply pitch shift using librosa with timeout protection
-        import signal
-        import time
-        
-        def timeout_handler(signum, frame):
-            raise TimeoutError("Pitch shift operation timed out")
-        
-        # Set a timeout of 30 seconds
-        signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(30)
-        
-        try:
-            shifted_audio = librosa.effects.pitch_shift(
-                y=audio_np, 
-                sr=sample_rate, 
-                n_steps=pitch_shift_semitones
-            )
-            signal.alarm(0)  # Cancel the alarm
-            
-            # Convert back to torch tensor
-            result = torch.from_numpy(shifted_audio).unsqueeze(0)  # Add channel dimension
-            print(f"DEBUG: Librosa pitch shift completed successfully, output shape: {result.shape}")
-            return result
-            
-        except TimeoutError:
-            signal.alarm(0)  # Cancel the alarm
-            print("DEBUG: Pitch shift timed out, returning original waveform")
-            return waveform
+
+        shifted_audio = librosa.effects.pitch_shift(
+            y=audio_np,
+            sr=sample_rate,
+            n_steps=pitch_shift_semitones,
+        )
+        result = torch.from_numpy(shifted_audio).unsqueeze(0)
+        print(f"DEBUG: Librosa pitch shift completed successfully, output shape: {result.shape}")
+        return result
             
     except Exception as e:
         print(f"DEBUG: Pitch shift failed with error: {e}")
@@ -280,7 +270,10 @@ def perturb_and_save(file_path: str, perturbations: List[Dict[str, Any]], output
     
     # Load the audio file
     try:
-        waveform, sample_rate = torchaudio.load(str(resolved_path))
+        audio_np, sample_rate = librosa.load(str(resolved_path), sr=None, mono=False)
+        if audio_np.ndim == 1:
+            audio_np = audio_np[np.newaxis, :]
+        waveform = torch.from_numpy(audio_np).float()
     except Exception as e:
         return {
             "original_file": file_path,
@@ -295,17 +288,38 @@ def perturb_and_save(file_path: str, perturbations: List[Dict[str, Any]], output
     
     # Apply perturbations
     perturbed_waveform, applied_perturbations = apply_perturbations(waveform, sample_rate, perturbations)
-    
+
+    # Sanitize: frequency masking (FFT/iFFT), pitch_shift, and time_stretch can
+    # emit NaN/inf on degenerate inputs. If those samples get saved and later
+    # fed into Whisper, `.generate()` produces bad token indices which trigger
+    # a CUDA device-side assert. Once that assert fires the CUDA context is
+    # poisoned for the process — every subsequent from_pretrained fails with
+    # `cudaMemGetInfo`. Fix the numbers at the source instead.
+    pw_np = perturbed_waveform.detach().cpu().numpy() if hasattr(perturbed_waveform, "detach") else perturbed_waveform.numpy()
+    if not np.all(np.isfinite(pw_np)):
+        bad = int(np.sum(~np.isfinite(pw_np)))
+        print(f"DEBUG: perturbation produced {bad}/{pw_np.size} non-finite samples; zeroing them")
+        pw_np = np.nan_to_num(pw_np, nan=0.0, posinf=0.0, neginf=0.0)
+    peak = float(np.max(np.abs(pw_np))) if pw_np.size > 0 else 0.0
+    if peak > 1.0:
+        print(f"DEBUG: perturbation peak amplitude {peak:.3f} > 1.0; normalizing")
+        pw_np = pw_np / peak
+    perturbed_waveform = torch.from_numpy(pw_np)
+
     # Generate output filename
     input_path = Path(file_path)
     output_filename = f"{input_path.stem}_perturbed_{uuid.uuid4().hex[:8]}{input_path.suffix}"
     output_path = Path(output_dir) / output_filename
-    
+
     # Ensure output directory exists
     Path(output_dir).mkdir(parents=True, exist_ok=True)
-    
+
     # Save the perturbed audio
-    torchaudio.save(str(output_path), perturbed_waveform, sample_rate)
+    import soundfile as sf
+    save_np = perturbed_waveform.numpy()
+    if save_np.ndim == 2:
+        save_np = save_np.T
+    sf.write(str(output_path), save_np, sample_rate)
     
     # Calculate duration
     duration_ms = int(perturbed_waveform.shape[-1] / sample_rate * 1000)

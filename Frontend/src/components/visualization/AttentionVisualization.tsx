@@ -61,25 +61,33 @@ export const AttentionVisualization = ({ selectedFile, model, dataset }: Attenti
         head: selectedHead
       };
 
+      // Detect uploaded/perturbed files (same logic as SaliencyVisualization)
+      const isUploadedFile = typeof selectedFile === 'object' && selectedFile?.file_path && (
+        selectedFile.file_path.includes('uploads/') ||
+        selectedFile.file_path.startsWith('uploads/') ||
+        selectedFile.message === "Perturbed file" ||
+        selectedFile.message === "File uploaded successfully" ||
+        selectedFile.message === "File uploaded and processed successfully"
+      ) && selectedFile.message !== "Selected from embeddings" && selectedFile.message !== "Selected from dataset";
+
       // Handle file path resolution following your patterns
-      if (typeof selectedFile === 'string') {
-        // Dataset file
-        if (dataset) {
+      if (isUploadedFile) {
+        requestBody.file_path = selectedFile.file_path;
+      } else if (typeof selectedFile === 'string') {
+        // String dataset file reference
+        if (dataset && dataset !== 'custom') {
           requestBody.dataset = dataset;
           requestBody.dataset_file = selectedFile;
         } else {
           throw new Error("Dataset required for dataset file selection");
         }
+      } else if (selectedFile?.file_path && dataset && dataset !== 'custom') {
+        // Dataset file object with a real dataset name
+        requestBody.dataset = dataset;
+        requestBody.dataset_file = selectedFile.file_path;
       } else if (selectedFile?.file_path) {
-        // Check if we have a dataset - if so, this is a dataset file
-        if (dataset) {
-          // This is a dataset file (either custom or standard dataset)
-          requestBody.dataset = dataset;
-          requestBody.dataset_file = selectedFile.file_path;
-        } else {
-          // Regular uploaded file
-          requestBody.file_path = selectedFile.file_path;
-        }
+        // Fallback: treat as uploaded file
+        requestBody.file_path = selectedFile.file_path;
       } else {
         throw new Error("No valid file selected");
       }

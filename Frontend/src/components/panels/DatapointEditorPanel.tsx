@@ -181,12 +181,20 @@ export const DatapointEditorPanel = ({
     setCurrentTime(0);
     setDuration(0);
     setAudioMetadata({}); // Reset metadata when file changes
-    
+
     // Reset wavesurfer instance if it exists
     if (wavesurferRef.current) {
       wavesurferRef.current.stop();
     }
   }, [selectedFile?.file_id, dataset, showPerturbed, perturbationResult?.filename]);
+
+  // Snap the Original/Perturbed toggle back to Original whenever the selected
+  // file changes or when there is no valid perturbation for the current file.
+  // Without this, `showPerturbed` (local state) sticks after switching files,
+  // leaving the panel rendering the "Perturbed" tab with only a placeholder.
+  useEffect(() => {
+    setShowPerturbed(false);
+  }, [selectedFile?.file_id]);
   
   return (
     <TooltipProvider>

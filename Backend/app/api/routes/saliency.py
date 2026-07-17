@@ -91,7 +91,9 @@ async def generate_saliency_endpoint(http_request: Request, request: SaliencyReq
         return SaliencyResponse(**result)
         
     except Exception as e:
-        logger.error(f"Error generating saliency: {str(e)}")
+        import traceback
+        tb = traceback.format_exc()
+        logger.error(f"Error generating saliency for {resolved_path} (model={request.model}, method={request.method}): {e}\n{tb}")
         raise HTTPException(status_code=500, detail=f"Saliency generation failed: {str(e)}")
 
 @router.get("/saliency/{method}/{model}/{file_id}")

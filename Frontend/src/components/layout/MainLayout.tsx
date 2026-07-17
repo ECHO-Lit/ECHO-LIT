@@ -386,8 +386,14 @@ export const MainLayout = () => {
     if (dataset.startsWith('custom:')) {
       return dataset;
     }
-    // Legacy behavior: if there are uploaded files and no custom dataset, show as "custom"
-    if (uploadedFiles && uploadedFiles.length > 0) {
+    // Legacy behavior: if there are user-uploaded files and no custom dataset,
+    // show as "custom". Ignore perturbation-produced files here, since they
+    // originate from a dataset selection and should not flip the whole UI to
+    // a custom-dataset state (which hides ground truth, etc.).
+    const nonPerturbedUploads = (uploadedFiles || []).filter(
+      (f) => f?.message !== "Perturbed file"
+    );
+    if (nonPerturbedUploads.length > 0) {
       return "custom";
     }
     // Otherwise use the selected dataset

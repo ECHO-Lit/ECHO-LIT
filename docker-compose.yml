@@ -1,0 +1,113 @@
+name: echo
+
+# Shared backend config — used by both CPU and GPU services via YAML anchors.
+x-backend-common: &backend-common
+  working_dir: /app
+  environment:
+    REDIS_URL: redis://redis:6379/0
+    SESSION_COOKIE_NAME: sid
+    SESSION_TTL_SECONDS: "86400"
+    COOKIE_SECURE: "false"
+    COOKIE_SAMESITE: lax
+    ALLOWED_ORIGINS: http://localhost:8080,http://127.0.0.1:8080
+    HF_HOME: /home/appuser/.cache/huggingface
+    TRANSFORMERS_CACHE: /home/appuser/.cache/huggingface
+    PYTHONUNBUFFERED: "1"
+  volumes:
+    - ./Backend/app:/app/app          # hot-reload: only source, not full Backend dir
+    - ./Backend/data:/app/data
+    - ./Backend/uploads:/app/uploads
+    - hf-cache:/home/appuser/.cache/huggingface
+  ports:
+    - "8000:8000"
+  depends_on:
+    redis:
+      condition: service_healthy
+  healthcheck:
+    test: ["CMD", "python3", "-c",
+      "import urllib.request,sys; r=urllib.request.urlopen('http://localhost:8000/health',timeout=3); sys.exit(0 if r.status==200 else 1)"]
+    interval: 30s
+    timeout: 10s
+    retries: 5
+    start_period: 120s   # allow time for first-run model downloads
+  command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/app"]
+  restart: unless-stopped
+
+services:
+  # ── Redis ──────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: echo-redis
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Backend (CPU — default) ────────────────────────────────────
+  # Runs on every `docker compose up`. GPU users: see backend-gpu below.
+  backend:
+    <<: *backend-common
+    container_name: echo-backend
+    build:
+      context: ./Backend
+      dockerfile: Dockerfile
+      args:
+        VARIANT: cpu
+
+  # ── Backend (GPU — opt-in) ─────────────────────────────────────
+  # Requires NVIDIA driver 555+ and NVIDIA Container Toolkit in WSL2.
+  # WARNING: both backend and backend-gpu bind port 8000. Do NOT start
+  # both simultaneously. GPU users run:
+  #   docker compose --profile gpu up redis frontend backend-gpu
+  backend-gpu:
+    <<: *backend-common
+    container_name: echo-backend-gpu
+    build:
+      context: ./Backend
+      dockerfile: Dockerfile
+      args:
+        VARIANT: gpu
+    profiles: [gpu]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # ── Frontend (Vite dev server) ─────────────────────────────────
+  frontend:
+    build:
+      context: ./Frontend
+      dockerfile: Dockerfile
+      target: dev
+    container_name: echo-frontend
+    environment:
+      # Browser-side URL — resolves from the user's host, not inside the container.
+      VITE_API_BASE_URL: http://localhost:8000
+      # Polling required for Vite HMR on Windows bind-mounts.
+      CHOKIDAR_USEPOLLING: "true"
+      WATCHPACK_POLLING: "true"
+    volumes:
+      - ./Frontend:/app
+      # Named volume keeps the container's node_modules intact, preventing
+      # the host's Windows node_modules from shadowing the Linux install.
+      - frontend-node-modules:/app/node_modules
+    ports:
+      - "8080:8080"
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  hf-cache:
+  frontend-node-modules:

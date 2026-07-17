@@ -53,6 +53,12 @@ def generate_whisper_saliency(audio_file_path: str, model_size: str = "base", me
     if isinstance(audio, (list, tuple)):
         audio = np.asarray(audio)
     if hasattr(audio, "shape") and audio is not None:
+        # Sanitize before anything touches CUDA — NaN/inf here would cause
+        # the encoder to emit garbage and can trigger a CUDA device-side
+        # assert that poisons the whole process's CUDA context.
+        if not np.all(np.isfinite(audio)):
+            logger.warning(f"generate_whisper_saliency: non-finite samples in {audio_file_path}; zeroing them")
+            audio = np.nan_to_num(audio, nan=0.0, posinf=0.0, neginf=0.0)
         max_seconds = MAX_SALIENCY_SECONDS_SHAP if method == "shap" else MAX_SALIENCY_SECONDS
         max_len = int(max_seconds * 16000)
         if len(audio) > max_len:
@@ -64,7 +70,18 @@ def generate_whisper_saliency(audio_file_path: str, model_size: str = "base", me
         processor, model = get_whisper_base_models()
     else:
         processor, model = get_whisper_large_models()
-    
+
+    # Defensive reset: previous saliency runs enable gradient checkpointing.
+    # A finally block restores it, but if the process was interrupted or hit an
+    # unexpected error path, the flag may still be set — leading to inconsistent
+    # forward behaviour on later runs. Ensure a clean slate.
+    model.eval()
+    if hasattr(model, "gradient_checkpointing_disable"):
+        try:
+            model.gradient_checkpointing_disable()
+        except Exception:
+            pass
+
     device = next(model.parameters()).device
     input_features = processor(audio, sampling_rate=16000, return_tensors="pt").input_features
     input_features = input_features.to(device)
@@ -76,21 +93,22 @@ def generate_whisper_saliency(audio_file_path: str, model_size: str = "base", me
         return enc.pow(2).mean(dim=(1, 2))             # [B]
     
     if method == "gradcam":
-        # Optimize memory usage for GPU
-        torch.cuda.empty_cache()
-        
-        # Use gradient checkpointing to save memory
-        if hasattr(model, "gradient_checkpointing_enable"):
-            model.gradient_checkpointing_enable()
-        
-        # Use smaller batch size and fewer steps to fit in GPU memory
-        n_steps = 16  # Reduced from 32 to 16
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        # NOTE: gradient checkpointing intentionally NOT enabled here.
+        # With Captum IG's interpolated inputs (n_steps forward+backward passes)
+        # the re-run of the encoder under checkpointing can produce shape
+        # mismatches inside Whisper's attention (e.g. "tensor a (2) must match
+        # tensor b (0) at non-singleton dim 1"). The memory saving is not worth
+        # the correctness risk, and this path already uses internal_batch_size=1.
+        n_steps = 16
         internal_batch_size = 1
-        
-        # Monitor GPU memory
+
         if torch.cuda.is_available():
             logger.info(f"GPU memory before saliency: {torch.cuda.memory_allocated()/1024**2:.2f} MB")
-        
+
+        attributions = None
         try:
             ig = IntegratedGradients(model_forward)
             attributions = ig.attribute(
@@ -99,28 +117,28 @@ def generate_whisper_saliency(audio_file_path: str, model_size: str = "base", me
                 internal_batch_size=internal_batch_size,
             )
         except RuntimeError as e:
-            if "CUDA out of memory" in str(e) or "out of memory" in str(e).lower():
-                # Clear cache and try again with even lower memory settings
+            msg = str(e)
+            if "CUDA out of memory" in msg or "out of memory" in msg.lower():
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
-                logger.warning("First attempt failed, trying with even lower memory settings...")
-                
-                # Reduce memory usage further
-                n_steps = 8
-                
-                # Try with gradient accumulation
+                logger.warning("Whisper IG OOM; retrying with fewer steps")
                 try:
                     ig = IntegratedGradients(model_forward)
                     attributions = ig.attribute(
                         input_features,
-                        n_steps=n_steps,
+                        n_steps=8,
                         internal_batch_size=internal_batch_size,
                     )
-                except RuntimeError as e2:
-                    logger.error(f"Saliency computation failed on GPU: {str(e2)}")
-                    raise RuntimeError("Failed to compute saliency on GPU after optimization attempts") from e2
+                except Exception as e2:
+                    logger.error(f"Whisper IG retry failed: {e2}; falling back to energy map")
+                    attributions = None
             else:
-                raise
+                # Any other runtime error (e.g. transient shape mismatch inside
+                # the encoder) falls back to the deterministic energy map
+                # rather than surfacing a 500. This keeps saliency available
+                # even when IG's autograd path hits an edge case.
+                logger.exception("Whisper IG failed; falling back to energy map")
+                attributions = None
     elif method == "lime":
         lime = Lime(model_forward)
         attributions = lime.attribute(input_features)
@@ -183,13 +201,17 @@ def generate_whisper_saliency(audio_file_path: str, model_size: str = "base", me
     )
     if use_energy_fallback:
         logger.info("Using Whisper energy-map fallback for saliency")
-        with torch.no_grad():
-            enc = model.encoder(input_features).last_hidden_state  # [B, T, H]
-            energy = enc.abs().mean(dim=2).squeeze(0).detach().cpu().numpy()
-        if energy.size > 0:
-            e_min, e_ptp = float(np.min(energy)), float(np.ptp(energy))
-            saliency_scores = (energy - e_min) / (e_ptp + 1e-9)
-        else:
+        try:
+            with torch.no_grad():
+                enc = model.encoder(input_features).last_hidden_state  # [B, T, H]
+                energy = enc.abs().mean(dim=2).squeeze(0).detach().cpu().numpy()
+            if energy.size > 0:
+                e_min, e_ptp = float(np.min(energy)), float(np.ptp(energy))
+                saliency_scores = (energy - e_min) / (e_ptp + 1e-9)
+            else:
+                saliency_scores = np.zeros(1, dtype=np.float32)
+        except Exception:
+            logger.exception("Whisper energy-map fallback failed; returning empty saliency")
             saliency_scores = np.zeros(1, dtype=np.float32)
 
     # Create dense series with smoothing and percentile clipping
@@ -311,16 +333,47 @@ def generate_whisper_saliency(audio_file_path: str, model_size: str = "base", me
 ################################################################################################################
 
 def generate_wav2vec2_saliency(audio_file_path: str, method: str = "gradcam", existing_prediction: Dict = None) -> Dict:
+    # Derive device from actual model params, not the import-time global.
+    # A previous CUDA OOM fallback (or reload) may have relocated the model, and
+    # `emo_device` (a string captured at import) can otherwise diverge from
+    # `next(emo_model.parameters()).device`, producing device-mismatch errors.
+    runtime_device = next(emo_model.parameters()).device
+    # Defensive reset: prior attention-extraction paths may have flipped
+    # `output_attentions` on the base config; ensure model is in eval mode.
+    emo_model.eval()
+    if getattr(emo_model.config, "output_attentions", False):
+        emo_model.config.output_attentions = False
+    if hasattr(emo_model, "wav2vec2") and getattr(emo_model.wav2vec2.config, "output_attentions", False):
+        emo_model.wav2vec2.config.output_attentions = False
+
     audio, rate = librosa.load(audio_file_path, sr=16000)
+    # NaN/inf in the waveform propagate into logits and can trip a CUDA
+    # device-side assert (which then poisons the whole process's CUDA
+    # context). Sanitize up-front.
+    if not np.all(np.isfinite(audio)):
+        logger.warning(f"generate_wav2vec2_saliency: non-finite samples in {audio_file_path}; zeroing them")
+        audio = np.nan_to_num(audio, nan=0.0, posinf=0.0, neginf=0.0)
+    # Wav2Vec2 CNN reduces the waveform through 7 conv layers with total
+    # effective downsampling of ~320. Empirically an input < ~1600 samples
+    # (~0.1 s) can produce a length that mismatches the attention-mask
+    # feature-length calculation (giving the "tensor a (N) vs tensor b (0)
+    # at dim 1" broadcast error inside the encoder). Bump the minimum well
+    # above the raw CNN-arithmetic floor of 400.
+    MIN_WAV2VEC2_SAMPLES = 1600
+    if len(audio) < MIN_WAV2VEC2_SAMPLES:
+        raise ValueError(
+            f"Audio file is too short ({len(audio)} samples at 16 kHz). "
+            f"Minimum required for wav2vec2 saliency is {MIN_WAV2VEC2_SAMPLES} samples (~{MIN_WAV2VEC2_SAMPLES/16000:.3f}s)."
+        )
     # Crop to safe max duration to bound memory
     max_seconds = MAX_SALIENCY_SECONDS_SHAP if method == "shap" else MAX_SALIENCY_SECONDS
     max_len = int(max_seconds * rate)
     if len(audio) > max_len:
         audio = audio[:max_len]
     inputs = feature_extractor(audio, sampling_rate=rate, return_tensors="pt", padding=True)
-    
-    input_values = inputs.input_values.to(emo_device)
-    attention_mask = inputs.attention_mask.to(emo_device) if "attention_mask" in inputs else None
+
+    input_values = inputs.input_values.to(runtime_device)
+    attention_mask = inputs.attention_mask.to(runtime_device) if "attention_mask" in inputs else None
     
     input_values.requires_grad_(True)
     
@@ -331,6 +384,8 @@ def generate_wav2vec2_saliency(audio_file_path: str, method: str = "gradcam", ex
         target_idx = int(torch.argmax(tmp_probs, dim=-1).item())
 
     def model_forward(inputs, mask=None, cls_idx: int = 0):
+        if mask is not None and mask.shape[0] != inputs.shape[0]:
+            mask = mask.expand(inputs.shape[0], -1)
         outputs = emo_model(input_values=inputs, attention_mask=mask)
         return outputs.logits[:, cls_idx]
     
@@ -346,24 +401,28 @@ def generate_wav2vec2_saliency(audio_file_path: str, method: str = "gradcam", ex
         except RuntimeError as e:
             if "CUDA out of memory" in str(e):
                 logger.warning("CUDA OOM during Wav2Vec2 saliency. Falling back to CPU with fewer steps.")
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                cpu_device = torch.device("cpu")
+                # Move inputs to CPU and temporarily move model — restore in finally to avoid global corruption
+                input_values_cpu = input_values.detach().to(cpu_device)
+                input_values_cpu.requires_grad_(True)
+                attention_mask_cpu = attention_mask.detach().to(cpu_device) if attention_mask is not None else None
+                original_device = next(emo_model.parameters()).device
                 try:
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-                    cpu_device = torch.device("cpu")
-                    # Move model and inputs to CPU
-                    if hasattr(emo_model, 'to'):
-                        emo_model.to(cpu_device)
-                    input_values_cpu = input_values.detach().to(cpu_device)
-                    input_values_cpu.requires_grad_(True)
-                    attention_mask_cpu = attention_mask.detach().to(cpu_device) if attention_mask is not None else None
-                    attributions = ig.attribute(
+                    emo_model.to(cpu_device)
+                    ig_cpu = IntegratedGradients(model_forward)
+                    attributions = ig_cpu.attribute(
                         input_values_cpu,
                         additional_forward_args=(attention_mask_cpu, target_idx),
                         n_steps=16,
                         internal_batch_size=1,
                     )
-                except Exception:
-                    raise
+                    # replace input_values ref so downstream normalization works on CPU
+                    input_values = input_values_cpu
+                    attention_mask = attention_mask_cpu
+                finally:
+                    emo_model.to(original_device)
             else:
                 raise
     elif method == "lime":

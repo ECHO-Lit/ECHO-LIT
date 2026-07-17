@@ -1,10 +1,12 @@
 import logging
+from typing import Any, Dict, List
 import torch
+import torch.nn as nn
 from transformers import (
-    pipeline,
     Wav2Vec2FeatureExtractor,
     Wav2Vec2ForSequenceClassification,
     Wav2Vec2Model,
+    Wav2Vec2PreTrainedModel,
     Wav2Vec2Processor,
     WhisperProcessor,
     WhisperModel,
@@ -12,29 +14,155 @@ from transformers import (
     AutoProcessor,
     AutoModel,
 )
+from transformers.modeling_outputs import SequenceClassifierOutput
 import librosa
 import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 import umap
 
+
+class _Wav2Vec2ClassificationHead(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.dense = nn.Linear(config.hidden_size, config.hidden_size)
+        self.dropout = nn.Dropout(getattr(config, "final_dropout", 0.1))
+        self.out_proj = nn.Linear(config.hidden_size, config.num_labels)
+
+    def forward(self, features):
+        x = self.dropout(features)
+        x = self.dense(x)
+        x = torch.tanh(x)
+        x = self.dropout(x)
+        return self.out_proj(x)
+
+
+class _Wav2Vec2ForSpeechClassification(Wav2Vec2PreTrainedModel):
+    """Matches r-f/wav2vec-english-speech-emotion-recognition checkpoint architecture."""
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.num_labels = config.num_labels
+        self.wav2vec2 = Wav2Vec2Model(config)
+        self.classifier = _Wav2Vec2ClassificationHead(config)
+        self.post_init()
+
+    def forward(self, input_values, attention_mask=None, output_attentions=False, **kwargs):
+        outputs = self.wav2vec2(
+            input_values,
+            attention_mask=attention_mask,
+            output_attentions=output_attentions,
+        )
+        hidden_states = torch.mean(outputs.last_hidden_state, dim=1)
+        logits = self.classifier(hidden_states)
+        return SequenceClassifierOutput(
+            loss=None,
+            logits=logits,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+        )
+
 logger = logging.getLogger(__name__)
+
+
+def _safe_to_device(model, device):
+    """Move a HuggingFace model to `device`, handling meta-tensor weights.
+
+    Newer transformers versions may keep weights on the meta device when
+    `low_cpu_mem_usage=True` is implied on load. A plain `.to()` then raises
+    "Cannot copy out of meta tensor; no data!". If that happens, reload the
+    checkpoint with an explicit `device_map` so weights land on the real device.
+    """
+    try:
+        return model.to(device)
+    except NotImplementedError as e:
+        msg = str(e)
+        if "meta tensor" not in msg and "to_empty" not in msg:
+            raise
+        name_or_path = getattr(getattr(model, "config", None), "_name_or_path", None) or getattr(model, "name_or_path", None)
+        if not name_or_path:
+            raise
+        logger.warning(f"Meta tensor detected moving to {device}; reloading {name_or_path} with device_map")
+        cls = type(model)
+        load_kwargs = {"device_map": {"": device}}
+        dtype = getattr(model, "dtype", None)
+        if dtype is not None:
+            load_kwargs["torch_dtype"] = dtype
+        return cls.from_pretrained(name_or_path, **load_kwargs)
 
 
 def transcribe_whisper(model_id, audio_file, chunk_length_s=30, batch_size=8, return_timestamps=False, return_attention=False):
     device = 0 if torch.cuda.is_available() else -1
-    torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+    torch_dtype = torch.float32
     # Load audio
     audio, sample_rate = librosa.load(audio_file, sr=16000)
     audio = audio.astype(np.float32)
+    logger.info(f"transcribe_whisper: file={audio_file}, audio.shape={audio.shape}, sample_rate={sample_rate}, return_attention={return_attention}, return_timestamps={return_timestamps}")
+    if audio.size == 0:
+        raise ValueError(f"Loaded audio is empty for file: {audio_file}")
+    # Sanitize: NaN/inf in the waveform propagate through the Whisper encoder
+    # and can trigger a CUDA device-side assert during `.generate()` (bad
+    # token indices from a poisoned logit distribution). Once that happens
+    # the whole CUDA context is dead until the process is restarted, so
+    # every subsequent `from_pretrained` also fails with `cudaMemGetInfo`.
+    # Replace non-finite samples with zeros up-front.
+    if not np.all(np.isfinite(audio)):
+        bad = int(np.sum(~np.isfinite(audio)))
+        logger.warning(f"transcribe_whisper: {bad}/{audio.size} non-finite samples in {audio_file}; zeroing them")
+        audio = np.nan_to_num(audio, nan=0.0, posinf=0.0, neginf=0.0)
+    # Clip absurd amplitude values that would still be finite but unusable
+    peak = float(np.max(np.abs(audio))) if audio.size > 0 else 0.0
+    if peak > 100.0:
+        logger.warning(f"transcribe_whisper: peak amplitude {peak:.2f} > 100 in {audio_file}; normalizing")
+        audio = audio / peak
+
+    # Universal dither: any 5-second window that is exactly silent causes
+    # Whisper's chunked pipeline to emit an empty generation, which then
+    # crashes `_extract_token_timestamps` and `generate_with_fallback`
+    # (see the fallback ladder below). This affects: (a) pre-fix perturbed
+    # files still on disk that hard-zeroed a range, (b) audio that happens
+    # to contain a long natural silence, (c) frequency-masked audio that
+    # cancels out into effective silence. Detect any long silent run and
+    # add ~-80 dBFS Gaussian noise there — perceptually inaudible, keeps
+    # the mel-spectrogram non-degenerate so at least one token is emitted
+    # per chunk. Cheaper than full-array dither and only touches problems.
+    if audio.size >= sample_rate:  # >= 1 s of audio
+        silent_mask = np.abs(audio) < 1e-8
+        if silent_mask.any():
+            # Only patch if any contiguous silent run is >= 1 s (much shorter
+            # than the 5 s pipeline chunk; guarantees the chunk isn't all zero).
+            # np.diff on int-cast mask finds run boundaries.
+            m = silent_mask.astype(np.int8)
+            edges = np.diff(np.concatenate([[0], m, [0]]))
+            run_starts = np.where(edges == 1)[0]
+            run_ends = np.where(edges == -1)[0]
+            min_run = sample_rate  # 1 s
+            patched = 0
+            for s, e in zip(run_starts, run_ends):
+                if e - s >= min_run:
+                    audio[s:e] = np.random.default_rng(0).standard_normal(e - s).astype(np.float32) * 1e-4
+                    patched += (e - s)
+            if patched > 0:
+                logger.info(f"transcribe_whisper: dithered {patched} silent samples in {audio_file} to prevent Whisper empty-chunk crash")
 
     # For attention extraction, we need to use the raw model, not the pipeline
     if return_attention:
         
         processor = WhisperProcessor.from_pretrained(model_id)
-        # CRITICAL FIX: Use eager attention to support output_attentions=True
-        model = WhisperForConditionalGeneration.from_pretrained(model_id, attn_implementation="eager")
-        model = model.to("cuda:0" if torch.cuda.is_available() else "cpu")
+        # CRITICAL FIX: Use eager attention to support output_attentions=True.
+        # `low_cpu_mem_usage=False` disables the meta-device init path that in
+        # some transformers versions leaves `proj_out.weight` (the LM head,
+        # tied to `decoder.embed_tokens`) uninitialized -> random logits ->
+        # `.generate()` emits garbage token indices -> downstream tensor
+        # shape / index-out-of-bounds crashes.
+        model = WhisperForConditionalGeneration.from_pretrained(
+            model_id, attn_implementation="eager", low_cpu_mem_usage=False
+        )
+        # Explicitly re-tie weights in case the loader skipped the standard
+        # `_tie_weights` hook (safe no-op when already tied).
+        if hasattr(model, "tie_weights"):
+            model.tie_weights()
+        model = _safe_to_device(model, "cuda:0" if torch.cuda.is_available() else "cpu")
         
         # Process audio to input features
         input_features = processor(audio, sampling_rate=sample_rate, return_tensors="pt").input_features
@@ -132,9 +260,9 @@ def transcribe_whisper(model_id, audio_file, chunk_length_s=30, batch_size=8, re
                     
                     whisper_model = WhisperModel.from_pretrained(model_id)
                     # Use the processor that's already defined above
-                    
+
                     # Move to same device
-                    whisper_model = whisper_model.to(device)
+                    whisper_model = _safe_to_device(whisper_model, device)
                     
                     # Process audio using existing processor
                     input_features = processor(audio, sampling_rate=16000, return_tensors="pt").input_features
@@ -205,7 +333,7 @@ def transcribe_whisper(model_id, audio_file, chunk_length_s=30, batch_size=8, re
                         model_for_attention = WhisperModel.from_pretrained(model_id, attn_implementation="eager")
                     
                     if device and device != "cpu":
-                        model_for_attention = model_for_attention.to(device)
+                        model_for_attention = _safe_to_device(model_for_attention, device)
                     
                     # Process audio properly
                     inputs = processor(audio, sampling_rate=sample_rate, return_tensors="pt")
@@ -296,58 +424,86 @@ def transcribe_whisper(model_id, audio_file, chunk_length_s=30, batch_size=8, re
             
             return result_dict
     
-    # For regular transcription without attention, use pipeline
-    try:
-        pipe = pipeline(
-            "automatic-speech-recognition",
-            model=model_id,
-            torch_dtype=torch_dtype,
-            device=device,
-        )
-    except NotImplementedError as e:
-        if "meta tensor" in str(e):
-            # Fallback for meta tensor issue: load on CPU first then move to CUDA
-            pipe = pipeline(
-                "automatic-speech-recognition",
-                model=model_id,
-                torch_dtype=torch_dtype,
-                device=-1,  # Force CPU first
-            )
-            if torch.cuda.is_available():
-                try:
-                    pipe.model = pipe.model.to("cuda:0")
-                except Exception:
-                    pass  # Stay on CPU if move fails
-        else:
-            raise
-    audio, sample_rate = librosa.load(audio_file, sr=16000)
-    audio = audio.astype(np.float32)
+    # Both paths use the cached gen model so tie_weights is always applied
+    # and the model is never re-loaded per request.
+    gen_model = get_whisper_gen_model(model_id)
+    gen_proc = WhisperProcessor.from_pretrained(model_id)
 
     if return_timestamps:
-        
-        result = pipe(
-            audio,
-            return_timestamps="word",  # Get word-level timestamps instead of chunk-level
-            chunk_length_s=5,  # Use smaller chunks (5 seconds instead of 30)
-            batch_size=batch_size,
-        )
+        text_parts: List[str] = []
+        chunks_out: List[Dict[str, Any]] = []
+        chunk_size = 30 * sample_rate  # Whisper's native context window
+        n = int(audio.shape[0])
+        offset_s = 0.0
+        try:
+            for start in range(0, n, chunk_size):
+                segment = audio[start:start + chunk_size]
+                if segment.size == 0:
+                    continue
+                inputs = gen_proc(
+                    segment, sampling_rate=sample_rate, return_tensors="pt"
+                ).input_features.to(gen_model.device)
+                with torch.no_grad():
+                    gen_ids = gen_model.generate(
+                        inputs,
+                        max_length=448,
+                        num_beams=1,
+                        do_sample=False,
+                        return_timestamps=True,
+                        task="transcribe",
+                        language="en",
+                    )
+                decoded = gen_proc.tokenizer.decode(
+                    gen_ids[0], skip_special_tokens=True, decode_with_timestamps=False
+                )
+                text_parts.append(decoded.strip())
+                try:
+                    offsets = gen_proc.tokenizer.decode(
+                        gen_ids[0], skip_special_tokens=False, output_offsets=True
+                    ).get("offsets", [])
+                except Exception:
+                    offsets = []
+                for off in offsets:
+                    ts = off.get("timestamp") or (None, None)
+                    if ts[0] is None or ts[1] is None:
+                        continue
+                    off_start = float(ts[0]) + offset_s
+                    off_end = float(ts[1]) + offset_s
+                    off_text = (off.get("text") or "").strip()
+                    words = off_text.split()
+                    if len(words) <= 1 or off_end <= off_start:
+                        chunks_out.append({"text": off_text, "timestamp": [off_start, off_end]})
+                        continue
+                    span = (off_end - off_start) / len(words)
+                    for i, w in enumerate(words):
+                        w_start = off_start + i * span
+                        w_end = off_start + (i + 1) * span
+                        chunks_out.append({"text": w, "timestamp": [w_start, w_end]})
+                offset_s += segment.shape[0] / sample_rate
+            return {
+                "text": " ".join(p for p in text_parts if p).strip(),
+                "chunks": chunks_out,
+                "audio": audio,
+                "sample_rate": sample_rate,
+            }
+        except Exception as gen_err:
+            logger.exception(f"Direct Whisper generate() failed: {gen_err}; returning empty transcript")
+            return {"text": "", "chunks": [], "audio": audio, "sample_rate": sample_rate}
     else:
-        # For regular transcription, use original parameters
-        result = pipe(
-            audio,
-            return_timestamps=return_timestamps,
-            chunk_length_s=chunk_length_s,
-            batch_size=batch_size,
-        )
-    
-    if return_timestamps:
-        return {
-            "text": result["text"],
-            "chunks": result.get("chunks", []),
-            "audio": audio,
-            "sample_rate": sample_rate
-        }
-    return result["text"]
+        # Regular transcription: processor truncates to Whisper's 30-s context.
+        inputs = gen_proc(
+            audio, sampling_rate=sample_rate, return_tensors="pt"
+        ).input_features.to(gen_model.device)
+        with torch.no_grad():
+            gen_ids = gen_model.generate(
+                inputs,
+                max_length=448,
+                num_beams=1,
+                do_sample=False,
+                task="transcribe",
+                language="en",
+            )
+        return gen_proc.tokenizer.decode(gen_ids[0], skip_special_tokens=True)
 
 def transcribe_whisper_large(audio_file_path):
     model_id = "openai/whisper-large-v3"
@@ -385,9 +541,10 @@ def predict_emotion_wave2vec_with_attention(audio_path):
 
 _EMO_MODEL_ID = "r-f/wav2vec-english-speech-emotion-recognition"
 feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(_EMO_MODEL_ID)
-emo_model = Wav2Vec2ForSequenceClassification.from_pretrained(_EMO_MODEL_ID)
+emo_model = _Wav2Vec2ForSpeechClassification.from_pretrained(_EMO_MODEL_ID, attn_implementation="eager")
 emo_device = "cuda:0" if torch.cuda.is_available() else "cpu"
-emo_model = emo_model.to(emo_device)
+emo_model = _safe_to_device(emo_model, emo_device)
+emo_model.eval()
 
 def predict_emotion_wave2vec(audio_path, return_attention=False):
     audio, rate = librosa.load(audio_path, sr=16000)
@@ -398,21 +555,11 @@ def predict_emotion_wave2vec(audio_path, return_attention=False):
     attention_mask = inputs.attention_mask.to(emo_device) if "attention_mask" in inputs else None
 
     with torch.no_grad():
-        # Ensure the model config allows attention output
-        if return_attention:
-            # Temporarily set config to ensure attention is returned
-            original_output_attentions = getattr(emo_model.config, 'output_attentions', False)
-            emo_model.config.output_attentions = True
-        
         outputs = emo_model(
-            input_values=input_values, 
+            input_values=input_values,
             attention_mask=attention_mask,
-            output_attentions=return_attention
+            output_attentions=return_attention,
         )
-        
-        # Restore original config
-        if return_attention:
-            emo_model.config.output_attentions = original_output_attentions
         logits = outputs.logits  # [batch, num_labels]
         probs = torch.nn.functional.softmax(logits, dim=-1)
         pred = torch.argmax(probs, dim=-1)
@@ -448,16 +595,15 @@ def predict_emotion_wave2vec(audio_path, return_attention=False):
                 # Force attention output on the base model
                 original_config = base_wav2vec2.config.output_attentions
                 base_wav2vec2.config.output_attentions = True
-                
-                # Run the base wav2vec2 model directly with attention
-                base_outputs = base_wav2vec2(
-                    input_values=input_values,
-                    attention_mask=attention_mask,
-                    output_attentions=True
-                )
-                
-                # Restore original config
-                base_wav2vec2.config.output_attentions = original_config
+                try:
+                    # Run the base wav2vec2 model directly with attention
+                    base_outputs = base_wav2vec2(
+                        input_values=input_values,
+                        attention_mask=attention_mask,
+                        output_attentions=True
+                    )
+                finally:
+                    base_wav2vec2.config.output_attentions = original_config
                 
                 logger.info(f"Base wav2vec2 output keys: {list(base_outputs.keys()) if hasattr(base_outputs, 'keys') else dir(base_outputs)}")
                 
@@ -623,44 +769,47 @@ def predict_emotion_wave2vec(audio_path, return_attention=False):
                     logger.info(f"Found encoder in fine-tuned model: {type(encoder)}")
                     
                     # Temporarily modify the encoder to output attentions
+                    original_encoder_attention = encoder.config.output_attentions
                     encoder.config.output_attentions = True
-                    
-                    # Process audio through feature extractor and encoder
-                    with torch.no_grad():
-                        # Get features from feature extractor
-                        if hasattr(emo_model.wav2vec2, 'feature_extractor'):
-                            model_feature_extractor = emo_model.wav2vec2.feature_extractor
-                            extract_features = model_feature_extractor(input_values)
-                            
-                            # Get features through feature projection
-                            if hasattr(emo_model.wav2vec2, 'feature_projection'):
-                                feature_projection = emo_model.wav2vec2.feature_projection
-                                hidden_states, extract_features = feature_projection(extract_features)
-                                
-                                # Pass through encoder with attention
-                                encoder_outputs = encoder(
-                                    hidden_states,
-                                    attention_mask=attention_mask,
-                                    output_attentions=True,
-                                    output_hidden_states=False,
-                                    return_dict=True,
-                                )
-                                
-                                if hasattr(encoder_outputs, "attentions") and encoder_outputs.attentions is not None:
-                                    logger.info(f"Method 4 - Found attentions in encoder: {len(encoder_outputs.attentions)} layers")
-                                    attention_data = []
-                                    for layer_idx, layer_attention in enumerate(encoder_outputs.attentions):
-                                        if layer_attention is not None:
-                                            logger.info(f"Encoder Layer {layer_idx} attention shape: {layer_attention.shape}")
-                                            layer_data = []
-                                            for head_idx in range(layer_attention.shape[1]):
-                                                head_matrix = layer_attention[0, head_idx].detach().cpu().numpy().tolist()
-                                                layer_data.append(head_matrix)
-                                            attention_data.append(layer_data)
-                                    
-                                    if attention_data:
-                                        found_attention = True
-                                        logger.info(f"✅ SUCCESS: Got attention from fine-tuned model encoder!")
+                    try:
+                        # Process audio through feature extractor and encoder
+                        with torch.no_grad():
+                            # Get features from feature extractor
+                            if hasattr(emo_model.wav2vec2, 'feature_extractor'):
+                                model_feature_extractor = emo_model.wav2vec2.feature_extractor
+                                extract_features = model_feature_extractor(input_values)
+
+                                # Get features through feature projection
+                                if hasattr(emo_model.wav2vec2, 'feature_projection'):
+                                    feature_projection = emo_model.wav2vec2.feature_projection
+                                    hidden_states, extract_features = feature_projection(extract_features)
+
+                                    # Pass through encoder with attention
+                                    encoder_outputs = encoder(
+                                        hidden_states,
+                                        attention_mask=attention_mask,
+                                        output_attentions=True,
+                                        output_hidden_states=False,
+                                        return_dict=True,
+                                    )
+
+                                    if hasattr(encoder_outputs, "attentions") and encoder_outputs.attentions is not None:
+                                        logger.info(f"Method 4 - Found attentions in encoder: {len(encoder_outputs.attentions)} layers")
+                                        attention_data = []
+                                        for layer_idx, layer_attention in enumerate(encoder_outputs.attentions):
+                                            if layer_attention is not None:
+                                                logger.info(f"Encoder Layer {layer_idx} attention shape: {layer_attention.shape}")
+                                                layer_data = []
+                                                for head_idx in range(layer_attention.shape[1]):
+                                                    head_matrix = layer_attention[0, head_idx].detach().cpu().numpy().tolist()
+                                                    layer_data.append(head_matrix)
+                                                attention_data.append(layer_data)
+
+                                        if attention_data:
+                                            found_attention = True
+                                            logger.info(f"✅ SUCCESS: Got attention from fine-tuned model encoder!")
+                    finally:
+                        encoder.config.output_attentions = original_encoder_attention
                             
             except Exception as e:
                 logger.warning(f"Method 4 failed: {e}")
@@ -798,6 +947,13 @@ _whisper_processor_base = None
 _whisper_model_base = None
 _whisper_processor_large = None
 _whisper_model_large = None
+# Cached `WhisperForConditionalGeneration` (LM head + generate) for the
+# direct-generate transcription path. Kept separate from the encoder-only
+# `WhisperModel` cache above because they are different classes with
+# different weight shapes.
+_whisper_gen_model_base = None
+_whisper_gen_model_large = None
+
 
 def get_whisper_base_models():
     global _whisper_processor_base, _whisper_model_base
@@ -805,28 +961,52 @@ def get_whisper_base_models():
         device = "cuda:0" if torch.cuda.is_available() else "cpu"
         _whisper_processor_base = WhisperProcessor.from_pretrained("openai/whisper-base")
         _whisper_model_base = WhisperModel.from_pretrained("openai/whisper-base")
-        _whisper_model_base = _whisper_model_base.to(device)
+        _whisper_model_base = _safe_to_device(_whisper_model_base, device)
     return _whisper_processor_base, _whisper_model_base
+
 
 def get_whisper_large_models():
     global _whisper_processor_large, _whisper_model_large
     if _whisper_processor_large is None:
         device = "cuda:0" if torch.cuda.is_available() else "cpu"
         _whisper_processor_large = WhisperProcessor.from_pretrained("openai/whisper-large-v3")
-        try:
-            _whisper_model_large = WhisperModel.from_pretrained(
-                "openai/whisper-large-v3",
-                torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-            )
-            _whisper_model_large = _whisper_model_large.to(device)
-        except NotImplementedError as e:
-            if "meta tensor" in str(e):
-                # Handle meta tensor issue for embeddings model too
-                _whisper_model_large = WhisperModel.from_pretrained("openai/whisper-large-v3")
-                _whisper_model_large = _whisper_model_large.to(device)
-            else:
-                raise
+        _whisper_model_large = WhisperModel.from_pretrained(
+            "openai/whisper-large-v3",
+            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+        )
+        _whisper_model_large = _safe_to_device(_whisper_model_large, device)
     return _whisper_processor_large, _whisper_model_large
+
+
+def get_whisper_gen_model(model_id: str):
+    """Return a cached `WhisperForConditionalGeneration` for `model_id`.
+
+    Used by the direct-`generate` transcription path (`transcribe_whisper`).
+    `low_cpu_mem_usage=False` + explicit `tie_weights()` avoids the meta-init
+    path that leaves `proj_out.weight` untied → random logits → empty/garbage
+    generations that crashed the pipeline's timestamp extractor.
+    """
+    global _whisper_gen_model_base, _whisper_gen_model_large
+    cache = None
+    if model_id == "openai/whisper-base":
+        cache = _whisper_gen_model_base
+    elif model_id == "openai/whisper-large-v3":
+        cache = _whisper_gen_model_large
+    if cache is not None:
+        return cache
+    model = WhisperForConditionalGeneration.from_pretrained(
+        model_id, attn_implementation="eager", low_cpu_mem_usage=False
+    )
+    if hasattr(model, "tie_weights"):
+        model.tie_weights()
+    device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    model = _safe_to_device(model, device)
+    model.eval()
+    if model_id == "openai/whisper-base":
+        _whisper_gen_model_base = model
+    elif model_id == "openai/whisper-large-v3":
+        _whisper_gen_model_large = model
+    return model
 
 def extract_whisper_embeddings(audio_file_path: str, model_size: str = "base") -> np.ndarray:
     """

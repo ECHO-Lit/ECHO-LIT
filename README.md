@@ -52,71 +52,70 @@ ECHO extends the interpretability paradigm to audio models, providing researcher
 
 ## Prerequisites
 
-- **Frontend**:
-  - Node.js (v18 or higher)
-  - npm or bun package manager
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows/Mac) or Docker Engine + Compose plugin (Linux)
+- **Windows**: enable the WSL 2 backend in Docker Desktop settings
+- **GPU users**: NVIDIA driver 555+, then verify with `docker run --rm --gpus all nvidia/cuda:12.6.0-base-ubuntu22.04 nvidia-smi`
 
-- **Backend**:
-  - Python 3.11
-  - Docker (for Redis)
+## Quickstart (Docker)
 
-## Installation
-
-### 1. Clone the repository
 ```bash
+# 1. Clone
 git clone https://github.com/AnasSAV/ECHO.git
 cd ECHO
+
+# 2. Copy env files (edit if needed — defaults work out of the box)
+cp Backend/.env.example Backend/.env
+cp Frontend/.env.example Frontend/.env
+
+# 3. Boot the full stack
+docker compose up --build
 ```
 
-### 2. Set up the Frontend
+First boot downloads Whisper + Wav2Vec2 models (~3.4 GB) into the `hf-cache`
+volume. Subsequent boots reuse it — no re-download.
+
+- **Frontend**: http://localhost:8080
+- **Backend**: http://localhost:8000/health
+- **Redis**: localhost:6379
+
+### GPU mode (NVIDIA opt-in)
+
 ```bash
-cd Frontend
-npm install
-npm run dev
+# Start GPU backend instead of CPU backend (avoids port 8000 conflict)
+docker compose --profile gpu up redis frontend backend-gpu --build
 ```
 
-### 3. Start Redis server in Docker
+### Common operations
+
 ```bash
-# In a new terminal
-cd Backend
-docker compose up -d
+# Stop everything
+docker compose down
+
+# Reset all volumes (clears Redis, HF model cache, uploads)
+docker compose down -v
+
+# Rebuild after changing requirements.txt
+docker compose build --no-cache backend
+
+# Pre-warm the HF model cache without starting the full stack
+docker compose run --rm backend python3 -c \
+  "from transformers import pipeline; pipeline('automatic-speech-recognition', model='openai/whisper-base')"
+
+# Run backend tests
+docker compose run --rm backend pytest
 ```
 
-### 4. Set up the Backend
+### Windows tips
 
-#### Using Python venv (recommended)
-```bash
-cd Backend
-python -m venv .venv
-.venv\Scripts\activate  # On Windows
-source .venv/bin/activate  # On Unix or MacOS
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-uvicorn app.main:app --reload
-```
+- Use the **WSL 2 backend** in Docker Desktop (Settings → General) for faster
+  bind-mount I/O and GPU passthrough.
+- Keep the repo at a short path (`C:\dev\ECHO`) to avoid `MAX_PATH` issues.
+- If Vite HMR stops firing, confirm `CHOKIDAR_USEPOLLING=true` is set in
+  `docker-compose.yml` (it already is by default).
+- Dataset paths inside the Linux container are **case-sensitive**:
+  `data/common_voice_valid_dev` and `data/ravdess_subset` must match exactly.
 
-#### Using Miniconda (alternative)
-```bash
-# Initialize conda for your shell (Only if you have not used Conda before)
-conda init cmd.exe
-
-# Navigate to your project folder
-cd Backend
-
-# Create the environment with Python 3.10
-conda create -n ECHO python=3.10 -y
-
-# Activate the environment
-conda activate ECHO
-
-# Install dependencies
-conda install -c pytorch -c nvidia -c conda-forge fastapi uvicorn starlette httpx python-multipart python-dotenv pydantic-settings anyio numpy pandas librosa pysoundfile transformers pytorch torchvision torchaudio pytorch-cuda=12.1 redis-py pytest pytest-asyncio requests -y
-
-# Start the backend server
-uvicorn app.main:app --reload
-```
-
-### 5. Access the Application
+### Access the Application
 Open your browser and navigate to [http://localhost:8080](http://localhost:8080)
 
 

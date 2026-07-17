@@ -1393,7 +1393,8 @@ async def extract_attention_pairs_endpoint(
         logger.info("=== HTTPException caught and re-raised ===")
         raise
     except Exception as e:
-        logger.error(f"=== UNEXPECTED EXCEPTION: {e} ===")
+        logger.error(f"=== UNEXPECTED EXCEPTION in attention-pairs: {type(e).__name__}: {e} ===")
         import traceback
-        logger.error(f"Full traceback: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"Attention extraction failed: {str(e)}")
+        tb = traceback.format_exc()
+        logger.error(f"Full traceback:\n{tb}")
+        raise HTTPException(status_code=500, detail=f"Attention extraction failed: {type(e).__name__}: {str(e)}")
