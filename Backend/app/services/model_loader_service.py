@@ -88,7 +88,47 @@ def _safe_to_device(model, device):
         dtype = getattr(model, "dtype", None)
         if dtype is not None:
             load_kwargs["torch_dtype"] = dtype
-        return cls.from_pretrained(name_or_path, **load_kwargs)
+        # Carry the original attention implementation across the reload;
+        # dropping it silently breaks `output_attentions=True` callers.
+        attn_impl = getattr(getattr(model, "config", None), "_attn_implementation", None)
+        if attn_impl:
+            load_kwargs["attn_implementation"] = attn_impl
+        reloaded = cls.from_pretrained(name_or_path, **load_kwargs)
+        # This reload bypasses the caller's `tie_weights()`. Without re-tying,
+        # a tied LM head (e.g. Whisper's `proj_out`) is left randomly
+        # initialised -> random logits -> fluent multilingual garbage.
+        if hasattr(reloaded, "tie_weights"):
+            reloaded.tie_weights()
+        return reloaded
+
+
+def _verify_whisper_lm_head(model, model_id):
+    """Raise if Whisper's LM head is not tied to the decoder embeddings.
+
+    `proj_out.weight` is absent from the checkpoint and only exists via
+    weight tying. When tying is skipped the head stays random and the model
+    emits fluent multilingual garbage instead of a transcript -- with no
+    error. Because the loaded model is cached in a module-level global and
+    every result is written to Redis for 6h, one bad load silently poisons
+    every prediction until both are cleared. Fail the load instead.
+    """
+    proj = getattr(model, "proj_out", None)
+    try:
+        emb = model.model.decoder.embed_tokens
+    except AttributeError:
+        return
+    if proj is None or emb is None:
+        return
+    # Tied weights share storage; the equality check is the fallback for
+    # loaders that copy rather than alias.
+    if proj.weight.data_ptr() == emb.weight.data_ptr():
+        return
+    if torch.equal(proj.weight, emb.weight):
+        return
+    raise RuntimeError(
+        f"{model_id}: LM head (proj_out) is not tied to decoder embeddings; "
+        "the model would emit garbage tokens. Refusing to use this load."
+    )
 
 
 def transcribe_whisper(model_id, audio_file, chunk_length_s=30, batch_size=8, return_timestamps=False, return_attention=False):
@@ -163,6 +203,7 @@ def transcribe_whisper(model_id, audio_file, chunk_length_s=30, batch_size=8, re
         if hasattr(model, "tie_weights"):
             model.tie_weights()
         model = _safe_to_device(model, "cuda:0" if torch.cuda.is_available() else "cpu")
+        _verify_whisper_lm_head(model, model_id)
         
         # Process audio to input features
         input_features = processor(audio, sampling_rate=sample_rate, return_tensors="pt").input_features
@@ -1002,6 +1043,9 @@ def get_whisper_gen_model(model_id: str):
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     model = _safe_to_device(model, device)
     model.eval()
+    # Verify before caching: a broken model latched into the global below
+    # would serve garbage for the whole process lifetime.
+    _verify_whisper_lm_head(model, model_id)
     if model_id == "openai/whisper-base":
         _whisper_gen_model_base = model
     elif model_id == "openai/whisper-large-v3":
