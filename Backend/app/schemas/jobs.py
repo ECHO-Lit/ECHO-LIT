@@ -134,6 +134,7 @@ class TaskEnvelope(BaseModel):
     model: str | None = None
     audio: list[TaskAudio]
     parameters: dict[str, Any] = Field(default_factory=dict)
+    execution_profile: Literal["mock", "mps", "cpu", "cloud-gpu"]
     result_schema_version: str
     code_version: str
 

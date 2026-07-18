@@ -73,40 +73,80 @@ cd ECHO
 cp Backend/.env.example Backend/.env
 cp Frontend/.env.example Frontend/.env
 
-# 3. Boot the full stack
-docker compose up --build
+# 3. Boot the lightweight stack (no model libraries or model downloads)
+docker compose --profile mock up --build
 ```
 
-First boot starts a CPU API control plane and a separate local worker. Model
-weights are downloaded only by the worker into `hf-cache`; the API image does
-not contain or import the ML runtime.
+The default `mock` execution profile starts a CPU API control plane and a
+deterministic worker built from the API dependencies. It exercises the real
+Redis queues, job states, storage, caching, cancellation, and result contracts
+without installing PyTorch or downloading model weights.
 
 - **Frontend**: http://localhost:8080
 - **API**: http://localhost:8000/health
 - **Redis**: localhost:6379
 
-### GPU modes
+### Execution profiles
 
-```bash
-# NVIDIA (Linux or WSL 2 with NVIDIA Container Toolkit). Disable the local
-# all-queue worker so only the GPU worker consumes GPU queues.
-docker compose --profile gpu up --build --scale worker-model-local=0 redis api scheduler frontend worker-cpu worker-gpu
+| Profile | Worker | Use case |
+| --- | --- | --- |
+| `mock` | Lightweight Docker worker | Everyday UI/API development |
+| `mps` | Native macOS PyTorch worker | Real models on Apple Metal |
+| `cpu` | Docker model worker | Real-model CPU fallback |
+| `cloud-gpu` | CUDA/ROCm worker | Production only |
 
-# AMD ROCm (Linux with a supported ROCm host driver)
-docker compose --profile amd up --build --scale worker-model-local=0 redis api scheduler frontend worker-cpu worker-amd
-```
+Mock results are isolated from real results in the analysis cache. Task
+envelopes also carry their execution profile, and a worker rejects tasks from a
+different profile.
+
+#### Apple Metal (MPS)
 
 Docker Desktop on macOS cannot pass the Metal GPU into a Linux container. Keep
-the API in Compose and run the worker natively to use MPS:
+the lightweight control plane in Compose, then run one native worker for the
+CPU and model queues:
 
 ```bash
+# One-time native worker setup
 cd Backend
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-STORAGE_LOCAL_ROOT=shared-storage ML_DEVICE=mps \
-  celery -A app.core.celery_app:celery_app worker \
-  --queues=gpu-fast,gpu-large --concurrency=1 --prefetch-multiplier=1
+python3.12 -m venv .venv-mps
+.venv-mps/bin/pip install -r requirements-worker.txt
+cd ..
+
+# Start Docker services configured to dispatch real model jobs
+EXECUTION_PROFILE=mps docker compose up --build -d \
+  redis api scheduler frontend
+
+# Foreground native worker; Ctrl-C stops model execution
+./scripts/run-mps-worker.sh
+```
+
+The launcher verifies that `torch.backends.mps.is_available()` is true, forces
+`ML_DEVICE=mps`, uses Celery's single-process `solo` pool, and retains at most
+one model-registry entry by default. Unsupported MPS operations may fall back
+to CPU through `PYTORCH_ENABLE_MPS_FALLBACK=1`.
+
+Switch back to the model-free stack with:
+
+```bash
+docker compose down
+docker compose --profile mock up --build
+```
+
+#### CPU and production GPU modes
+
+```bash
+# Real-model CPU fallback
+EXECUTION_PROFILE=cpu docker compose --profile real --profile cpu-model up --build
+
+# NVIDIA production worker (Linux/WSL 2 with NVIDIA Container Toolkit)
+ENVIRONMENT=production EXECUTION_PROFILE=cloud-gpu ALLOW_PAID_EXECUTION=true \
+  docker compose --profile real --profile gpu up --build \
+  redis api scheduler frontend worker-cpu worker-gpu
+
+# AMD ROCm production worker
+ENVIRONMENT=production EXECUTION_PROFILE=cloud-gpu ALLOW_PAID_EXECUTION=true \
+  docker compose --profile real --profile amd up --build \
+  redis api scheduler frontend worker-cpu worker-amd
 ```
 
 `ML_DEVICE=auto` selects NVIDIA CUDA or AMD ROCm first, Apple MPS second, and
@@ -128,7 +168,7 @@ docker compose down
 docker compose down -v
 
 # Rebuild after changing requirements
-docker compose build --no-cache api worker-cpu worker-model-local
+docker compose build --no-cache api worker-mock worker-cpu worker-model-local
 
 # Pre-warm the HF model cache without starting the full stack
 docker compose run --rm worker-model-local python3 -c \

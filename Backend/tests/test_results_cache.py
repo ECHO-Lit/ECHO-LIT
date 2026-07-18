@@ -30,6 +30,7 @@ def test_content_cache_key_is_stable_and_parameter_sensitive():
             "filename": "audio.wav", "media_type": "audio/wav", "sha256": "abc",
         }],
         "parameters": {},
+        "execution_profile": "mock",
         "result_schema_version": "v1",
         "code_version": "test",
     }
@@ -37,3 +38,5 @@ def test_content_cache_key_is_stable_and_parameter_sensitive():
     assert first == analysis_cache_key(TaskEnvelope.model_validate(base))
     changed = {**base, "parameters": {"timestamps": True}}
     assert first != analysis_cache_key(TaskEnvelope.model_validate(changed))
+    real = {**base, "execution_profile": "mps"}
+    assert first != analysis_cache_key(TaskEnvelope.model_validate(real))

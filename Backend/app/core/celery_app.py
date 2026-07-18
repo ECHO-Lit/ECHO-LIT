@@ -33,9 +33,21 @@ celery_app.conf.update(
 )
 
 
-def queue_for(operation: str, model: str | None) -> str:
+def queue_for(
+    operation: str,
+    model: str | None,
+    execution_profile: str | None = None,
+) -> str:
+    profile = execution_profile or settings.EXECUTION_PROFILE
+    if profile == "mock":
+        return "mock"
     if operation in {"perturbation", "audio_features"}:
         return "cpu"
     if operation in {"saliency", "attention"} or model == "whisper-large":
         return "gpu-large"
     return "gpu-fast"
+
+
+def finalization_queue_for(execution_profile: str | None = None) -> str:
+    profile = execution_profile or settings.EXECUTION_PROFILE
+    return "mock" if profile == "mock" else "cpu"

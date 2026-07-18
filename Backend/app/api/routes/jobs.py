@@ -83,6 +83,7 @@ async def create_job(payload: JobCreateRequest, request: Request):
             for asset in assets
         ],
         parameters=payload.parameters,
+        execution_profile=settings.EXECUTION_PROFILE,
         result_schema_version=settings.RESULT_SCHEMA_VERSION,
         code_version=settings.CODE_VERSION,
     )
@@ -95,7 +96,15 @@ async def create_job(payload: JobCreateRequest, request: Request):
         task = celery_app.send_task(
             task_name,
             args=[envelope.model_dump(mode="json")],
-            queue="cpu" if len(assets) > 1 else queue_for(payload.operation.value, payload.model),
+            queue=(
+                queue_for("audio_features", None, settings.EXECUTION_PROFILE)
+                if len(assets) > 1
+                else queue_for(
+                    payload.operation.value,
+                    payload.model,
+                    settings.EXECUTION_PROFILE,
+                )
+            ),
         )
         await jobs.update(job_id, task_id=task.id)
     except Exception as exc:

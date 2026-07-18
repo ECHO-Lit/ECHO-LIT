@@ -21,15 +21,21 @@ by Celery Beat; production S3 buckets must apply a matching lifecycle rule.
 
 - `api`: FastAPI, session validation, upload validation, job authorization, and
   result proxying. It has no PyTorch or Transformers dependency.
+- `worker-mock`: model-free local worker consuming the `mock` queue and writing
+  deterministic contract-compatible results through the real storage and job
+  repositories.
 - `worker-cpu`: CPU-only perturbation, feature, projection, and maintenance work.
-- `worker-model-local`: development model worker consuming GPU queues on CPU.
+- Native MPS worker: single macOS process consuming `cpu`, `gpu-fast`, and
+  `gpu-large` while executing real models on Apple Metal. It cannot run inside
+  Docker Desktop.
+- `worker-model-local`: opt-in development model worker consuming GPU queues on CPU.
 - `worker-gpu` / `worker-amd`: optional CUDA/ROCm workers consuming `gpu-fast`
   and `gpu-large`, with concurrency one per GPU.
 - `scheduler`: Celery Beat for transient-object maintenance.
 - `redis`: separate logical databases for sessions/cache, job metadata, broker,
   and Celery results, configured with persistence and `noeviction`.
 - `ObjectStorage`: shared filesystem locally or an S3-compatible bucket in
-production. Clients and queue messages never receive storage keys.
+  production. Clients and queue messages never receive storage keys.
 
 Apply `Backend/s3-lifecycle.json` to the production bucket so transient
 uploads, cache objects, generated audio, and result artifacts expire after
@@ -39,6 +45,7 @@ uploads, cache objects, generated audio, and result artifacts expire after
 
 | Queue | Operations |
 | --- | --- |
+| `mock` | All operations when `EXECUTION_PROFILE=mock` |
 | `gpu-fast` | Whisper Base, Wav2Vec2, and embeddings |
 | `gpu-large` | Whisper Large, attention, and saliency |
 | `cpu` | Perturbations, audio features, projections, and cleanup |
@@ -46,6 +53,10 @@ uploads, cache objects, generated audio, and result artifacts expire after
 The worker-owned model registry keys entries by model, purpose, revision, and
 device. Standard, attention, saliency, and embedding variants can therefore be
 loaded and evicted independently.
+
+The API writes `mock`, `mps`, `cpu`, or `cloud-gpu` into every task envelope.
+Workers reject mismatched profiles, and the profile is part of the cache key so
+fixture results cannot be returned by real model execution.
 
 ## Production configuration
 

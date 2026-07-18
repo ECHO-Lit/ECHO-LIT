@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+import os
 from pathlib import Path
+from typing import Coroutine, TypeVar
 
 from celery.signals import heartbeat_sent
 from redis import from_url as sync_redis_from_url
@@ -10,7 +12,7 @@ from redis.exceptions import RedisError
 
 from celery import chord
 
-from app.core.celery_app import celery_app, queue_for
+from app.core.celery_app import celery_app, finalization_queue_for, queue_for
 from app.core.storage import StorageError
 from app.core.settings import settings
 from app.repositories.jobs import JobRepository
@@ -18,6 +20,20 @@ from app.worker.executor import complete_batch_from_cache, execute, execute_batc
 
 
 _heartbeat_redis = sync_redis_from_url(settings.JOB_REDIS_URL, decode_responses=True)
+_worker_loop: asyncio.AbstractEventLoop | None = None
+_worker_loop_pid: int | None = None
+T = TypeVar("T")
+
+
+def _run(coroutine: Coroutine[object, object, T]) -> T:
+    """Run async repository code on one event loop per Celery worker process."""
+    global _worker_loop, _worker_loop_pid
+    process_id = os.getpid()
+    if _worker_loop is None or _worker_loop.is_closed() or _worker_loop_pid != process_id:
+        _worker_loop = asyncio.new_event_loop()
+        _worker_loop_pid = process_id
+        asyncio.set_event_loop(_worker_loop)
+    return _worker_loop.run_until_complete(coroutine)
 
 
 @heartbeat_sent.connect
@@ -36,12 +52,12 @@ def publish_worker_heartbeat(sender=None, **kwargs) -> None:
 )
 def execute_job(self, envelope: dict) -> None:
     try:
-        asyncio.run(execute(envelope, self.request.id))
+        _run(execute(envelope, self.request.id))
     except (StorageError, RedisError) as exc:
         if self.request.retries >= self.max_retries:
             from app.schemas.jobs import JobError, JobStatus
 
-            asyncio.run(JobRepository().update(
+            _run(JobRepository().update(
                 envelope["job_id"],
                 status=JobStatus.failure,
                 error=JobError(
@@ -56,18 +72,23 @@ def execute_job(self, envelope: dict) -> None:
 
 @celery_app.task(bind=True, name="app.worker.tasks.orchestrate_batch")
 def orchestrate_batch(self, envelope: dict) -> None:
-    if asyncio.run(complete_batch_from_cache(envelope)):
+    if _run(complete_batch_from_cache(envelope)):
         return
     operation = envelope["operation"]
     model = envelope.get("model")
+    execution_profile = envelope["execution_profile"]
     signatures = [
-        execute_job_item.s(envelope, index).set(queue=queue_for(operation, model))
+        execute_job_item.s(envelope, index).set(
+            queue=queue_for(operation, model, execution_profile)
+        )
         for index in range(len(envelope["audio"]))
     ]
-    callback = finalize_batch_job.s(envelope).set(queue="cpu")
+    callback = finalize_batch_job.s(envelope).set(
+        queue=finalization_queue_for(execution_profile)
+    )
     result = chord(signatures)(callback)
     child_ids = [child.id for child in (result.parent.results if result.parent else [])]
-    asyncio.run(JobRepository().update(
+    _run(JobRepository().update(
         envelope["job_id"],
         task_id=self.request.id,
         child_task_ids=child_ids,
@@ -82,12 +103,12 @@ def orchestrate_batch(self, envelope: dict) -> None:
 )
 def execute_job_item(self, envelope: dict, asset_index: int) -> dict:
     try:
-        return asyncio.run(execute_batch_item(envelope, asset_index, self.request.id))
+        return _run(execute_batch_item(envelope, asset_index, self.request.id))
     except (StorageError, RedisError) as exc:
         if self.request.retries >= self.max_retries:
             from app.schemas.jobs import JobError, JobStatus
 
-            asyncio.run(JobRepository().update(
+            _run(JobRepository().update(
                 envelope["job_id"],
                 status=JobStatus.failure,
                 error=JobError(
@@ -103,11 +124,11 @@ def execute_job_item(self, envelope: dict, asset_index: int) -> dict:
 @celery_app.task(name="app.worker.tasks.finalize_batch_job", acks_late=True)
 def finalize_batch_job(child_results: list[dict], envelope: dict) -> None:
     try:
-        asyncio.run(finalize_batch(child_results, envelope))
+        _run(finalize_batch(child_results, envelope))
     except Exception as exc:
         from app.schemas.jobs import JobError, JobStatus
 
-        asyncio.run(JobRepository().update(
+        _run(JobRepository().update(
             envelope["job_id"],
             status=JobStatus.failure,
             error=JobError(code="batch_finalize_failed", message=str(exc)[:500], retryable=False),

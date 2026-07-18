@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -32,6 +33,12 @@ class JobCancelled(Exception):
     pass
 
 
+def _result_model_revision(envelope: TaskEnvelope) -> str | None:
+    if envelope.execution_profile == "mock":
+        return "mock-fixture-v1"
+    return MODEL_REVISIONS.get(envelope.model or "")
+
+
 def _jsonable(value: Any) -> Any:
     try:
         import numpy as np
@@ -56,6 +63,7 @@ def analysis_cache_key(envelope: TaskEnvelope) -> str:
         "revision": MODEL_REVISIONS.get(envelope.model or ""),
         "audio": [asset.sha256 for asset in envelope.audio],
         "parameters": envelope.parameters,
+        "execution_profile": envelope.execution_profile,
         "schema": envelope.result_schema_version,
         "code": envelope.code_version,
     }
@@ -166,7 +174,12 @@ def _execute_one(
     model: str | None,
     audio_path: Path,
     parameters: dict[str, Any],
+    execution_profile: str,
 ) -> Any:
+    if execution_profile == "mock":
+        from app.worker.mock_executor import execute_one
+
+        return execute_one(operation, model, audio_path, parameters)
     if model:
         from app.worker.model_registry import model_registry
 
@@ -223,13 +236,20 @@ async def _execute_perturbation(
     storage: ObjectStorage,
     temp_root: Path,
 ) -> dict[str, Any]:
-    from app.services.pertubation_service import perturb_and_save
+    if envelope.execution_profile == "mock":
+        from app.worker.mock_executor import create_perturbation
 
-    result = perturb_and_save(
-        file_path=str(input_path),
-        perturbations=envelope.parameters["perturbations"],
-        output_dir=str(temp_root),
-    )
+        result = create_perturbation(
+            input_path, temp_root, envelope.parameters["perturbations"]
+        )
+    else:
+        from app.services.pertubation_service import perturb_and_save
+
+        result = perturb_and_save(
+            file_path=str(input_path),
+            perturbations=envelope.parameters["perturbations"],
+            output_dir=str(temp_root),
+        )
     if not result.get("success"):
         raise ValueError(result.get("error") or "Perturbation failed")
     output = Path(result["perturbed_file"])
@@ -263,6 +283,35 @@ async def _execute_perturbation(
     }
 
 
+async def _mock_checkpoint(envelope: TaskEnvelope, jobs: JobRepository) -> None:
+    if envelope.execution_profile != "mock":
+        return
+    if settings.MOCK_JOB_SCENARIO == "failure":
+        raise RuntimeError("Simulated mock worker failure")
+    delay = settings.MOCK_JOB_DELAY_SECONDS
+    if settings.MOCK_JOB_SCENARIO == "slow" and delay == 0:
+        delay = 2.0
+    while delay > 0:
+        await asyncio.sleep(min(0.25, delay))
+        delay -= 0.25
+        await _check_cancel(envelope.job_id, jobs)
+
+
+def _reduce_dimensions(envelope: TaskEnvelope, embeddings: list[list[float]]) -> Any:
+    n_components = int(envelope.parameters.get("n_components", 2))
+    if envelope.execution_profile == "mock":
+        from app.worker.mock_executor import reduce_dimensions
+
+        return reduce_dimensions(embeddings, n_components)
+    from app.services.model_loader_service import reduce_dimensions
+
+    return reduce_dimensions(
+        embeddings,
+        method=envelope.parameters.get("reduction", "pca"),
+        n_components=n_components,
+    )
+
+
 async def execute(envelope_data: dict[str, Any], celery_task_id: str) -> None:
     started_at = time.monotonic()
     envelope = TaskEnvelope.model_validate(envelope_data)
@@ -278,6 +327,9 @@ async def execute(envelope_data: dict[str, Any], celery_task_id: str) -> None:
     # Generated audio is session-owned. Reusing a cached perturbation payload
     # would leak an audio_id owned by the session that originally created it.
     cacheable = envelope.operation.value != "perturbation"
+    cache_enabled = cacheable and not (
+        envelope.execution_profile == "mock" and settings.MOCK_JOB_SCENARIO != "success"
+    )
     await jobs.update(
         envelope.job_id,
         status=JobStatus.started,
@@ -289,8 +341,13 @@ async def execute(envelope_data: dict[str, Any], celery_task_id: str) -> None:
         envelope.job_id, envelope.operation.value, envelope.model, queue_latency,
     )
     try:
+        if envelope.execution_profile != settings.EXECUTION_PROFILE:
+            raise RuntimeError(
+                "Task execution profile does not match this worker "
+                f"({envelope.execution_profile!r} != {settings.EXECUTION_PROFILE!r})"
+            )
         await _check_cancel(envelope.job_id, jobs)
-        cached_key = await redis_module.redis.get(cache_pointer_key) if cacheable else None
+        cached_key = await redis_module.redis.get(cache_pointer_key) if cache_enabled else None
         if cached_key and storage.exists(cached_key):
             job_result_key = f"results/{envelope.session_id}/{envelope.job_id}/result.json"
             cached_payload = storage.get_json(cached_key)
@@ -328,11 +385,16 @@ async def execute(envelope_data: dict[str, Any], celery_task_id: str) -> None:
                 )
                 local_path = temp_root / f"{asset.audio_id}{Path(asset.filename).suffix}"
                 storage.download_file(asset.object_key, local_path)
+                await _mock_checkpoint(envelope, jobs)
                 if envelope.operation.value == "perturbation":
                     output = await _execute_perturbation(envelope, local_path, storage, temp_root)
                 else:
                     output = _execute_one(
-                        envelope.operation.value, envelope.model, local_path, envelope.parameters
+                        envelope.operation.value,
+                        envelope.model,
+                        local_path,
+                        envelope.parameters,
+                        envelope.execution_profile,
                     )
                 items.append({"audio_id": asset.audio_id, "result": _jsonable(output)})
                 await jobs.update(
@@ -351,10 +413,11 @@ async def execute(envelope_data: dict[str, Any], celery_task_id: str) -> None:
                 "model": envelope.model,
                 "items": items,
                 "metadata": {
-                    "model_revision": MODEL_REVISIONS.get(envelope.model or ""),
+                    "model_revision": _result_model_revision(envelope),
                     "parameters": envelope.parameters,
                     "result_schema_version": envelope.result_schema_version,
                     "code_version": envelope.code_version,
+                    "execution_profile": envelope.execution_profile,
                     "cache_key": cache_digest,
                     "cache_hit": False,
                     "queue_latency_seconds": queue_latency,
@@ -362,6 +425,8 @@ async def execute(envelope_data: dict[str, Any], celery_task_id: str) -> None:
                 },
             }
             try:
+                if envelope.execution_profile == "mock":
+                    raise ImportError
                 from app.core.device import accelerator_memory_allocated_mb
 
                 result["metadata"]["accelerator_memory_mb"] = accelerator_memory_allocated_mb()
@@ -369,18 +434,10 @@ async def execute(envelope_data: dict[str, Any], celery_task_id: str) -> None:
                 result["metadata"]["accelerator_memory_mb"] = None
             _aggregate_batch(result, [asset.filename for asset in envelope.audio])
             if envelope.operation.value == "embedding" and len(items) > 1:
-                from app.services.model_loader_service import reduce_dimensions
-
                 embeddings = [item["result"] for item in items]
-                result["projection"] = _jsonable(
-                    reduce_dimensions(
-                        embeddings,
-                        method=envelope.parameters.get("reduction", "pca"),
-                        n_components=int(envelope.parameters.get("n_components", 2)),
-                    )
-                )
+                result["projection"] = _jsonable(_reduce_dimensions(envelope, embeddings))
 
-            if cacheable:
+            if cache_enabled:
                 result_key = f"cache/{cache_digest}/result.json"
                 storage.put_json(result_key, _jsonable(result))
                 await redis_module.redis.set(
@@ -435,6 +492,11 @@ async def execute_batch_item(
     jobs = JobRepository()
     asset = envelope.audio[asset_index]
     try:
+        if envelope.execution_profile != settings.EXECUTION_PROFILE:
+            raise RuntimeError(
+                "Task execution profile does not match this worker "
+                f"({envelope.execution_profile!r} != {settings.EXECUTION_PROFILE!r})"
+            )
         await _check_cancel(envelope.job_id, jobs)
         await jobs.update(
             envelope.job_id,
@@ -449,8 +511,13 @@ async def execute_batch_item(
         with tempfile.TemporaryDirectory(prefix=f"echo-{envelope.job_id}-{asset_index}-") as temp_dir:
             local_path = Path(temp_dir) / f"{asset.audio_id}{Path(asset.filename).suffix}"
             storage.download_file(asset.object_key, local_path)
+            await _mock_checkpoint(envelope, jobs)
             output = _execute_one(
-                envelope.operation.value, envelope.model, local_path, envelope.parameters
+                envelope.operation.value,
+                envelope.model,
+                local_path,
+                envelope.parameters,
+                envelope.execution_profile,
             )
         completed_key = f"job:{envelope.job_id}:completed-items"
         client = redis_module.job_redis
@@ -515,10 +582,11 @@ async def finalize_batch(
             for item in ordered
         ],
         "metadata": {
-            "model_revision": MODEL_REVISIONS.get(envelope.model or ""),
+            "model_revision": _result_model_revision(envelope),
             "parameters": envelope.parameters,
             "result_schema_version": envelope.result_schema_version,
             "code_version": envelope.code_version,
+            "execution_profile": envelope.execution_profile,
             "cache_key": analysis_cache_key(envelope),
             "cache_hit": False,
             "execution_seconds": time.monotonic() - started_at,
@@ -526,13 +594,9 @@ async def finalize_batch(
     }
     _aggregate_batch(result, [item["filename"] for item in ordered])
     if envelope.operation.value == "embedding":
-        from app.services.model_loader_service import reduce_dimensions
-
-        result["projection"] = _jsonable(reduce_dimensions(
-            [item["result"] for item in ordered],
-            method=envelope.parameters.get("reduction", "pca"),
-            n_components=int(envelope.parameters.get("n_components", 2)),
-        ))
+        result["projection"] = _jsonable(
+            _reduce_dimensions(envelope, [item["result"] for item in ordered])
+        )
     storage = get_storage()
     cache_digest = analysis_cache_key(envelope)
     cache_result_key = f"cache/{cache_digest}/result.json"

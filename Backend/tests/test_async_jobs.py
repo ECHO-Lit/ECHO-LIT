@@ -146,15 +146,19 @@ def test_job_contract_rejects_invalid_combinations():
 
 
 def test_queue_routing_matches_worker_classes():
-    from app.core.celery_app import queue_for
+    from app.core.celery_app import finalization_queue_for, queue_for
 
-    assert queue_for("prediction", "whisper-base") == "gpu-fast"
-    assert queue_for("embedding", "wav2vec2") == "gpu-fast"
-    assert queue_for("prediction", "whisper-large") == "gpu-large"
-    assert queue_for("attention", "whisper-base") == "gpu-large"
-    assert queue_for("saliency", "wav2vec2") == "gpu-large"
-    assert queue_for("perturbation", None) == "cpu"
-    assert queue_for("audio_features", None) == "cpu"
+    assert queue_for("prediction", "whisper-base", "mock") == "mock"
+    assert queue_for("attention", "whisper-large", "mock") == "mock"
+    assert finalization_queue_for("mock") == "mock"
+    assert queue_for("prediction", "whisper-base", "mps") == "gpu-fast"
+    assert queue_for("embedding", "wav2vec2", "mps") == "gpu-fast"
+    assert queue_for("prediction", "whisper-large", "mps") == "gpu-large"
+    assert queue_for("attention", "whisper-base", "cloud-gpu") == "gpu-large"
+    assert queue_for("saliency", "wav2vec2", "cloud-gpu") == "gpu-large"
+    assert queue_for("perturbation", None, "mps") == "cpu"
+    assert queue_for("audio_features", None, "cloud-gpu") == "cpu"
+    assert finalization_queue_for("mps") == "cpu"
 
 
 def test_model_registry_reuses_and_evicts_variants(monkeypatch):
@@ -232,6 +236,7 @@ async def test_worker_execution_progress_result_and_cache(sample_audio_file, mon
                 media_type="audio/wav",
                 sha256=asset.sha256,
             )],
+            execution_profile="mock",
             result_schema_version="v1",
             code_version="test",
         )
@@ -246,3 +251,53 @@ async def test_worker_execution_progress_result_and_cache(sample_audio_file, mon
     second = await run("second-job")
     assert second.status == JobStatus.success
     assert second.cache_hit is True
+
+
+def test_mock_outputs_are_deterministic_and_frontend_compatible(sample_audio_file):
+    from app.worker.mock_executor import execute_one
+
+    first = execute_one("prediction", "wav2vec2", sample_audio_file, {})
+    second = execute_one("prediction", "wav2vec2", sample_audio_file, {})
+    assert first == second
+    assert first["predicted_emotion"] in first["probabilities"]
+    assert sum(first["probabilities"].values()) == pytest.approx(1, abs=1e-5)
+
+    saliency = execute_one(
+        "saliency", "whisper-base", sample_audio_file, {"method": "gradcam"}
+    )
+    assert saliency["segments"]
+    assert saliency["series"]
+    attention = execute_one(
+        "attention", "whisper-base", sample_audio_file, {"layer_idx": 6, "head_idx": 0}
+    )
+    assert attention["attention_pairs"]
+    assert attention["timestamp_attention"]
+    embedding = execute_one("embedding", "whisper-base", sample_audio_file, {})
+    assert len(embedding) == 32
+
+
+def test_execution_profile_safety_validation():
+    from pydantic import ValidationError
+    from app.core.settings import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(
+            ENVIRONMENT="development",
+            EXECUTION_PROFILE="cloud-gpu",
+            ALLOW_PAID_EXECUTION=True,
+            _env_file=None,
+        )
+    with pytest.raises(ValidationError):
+        Settings(
+            ENVIRONMENT="production",
+            EXECUTION_PROFILE="cloud-gpu",
+            ALLOW_PAID_EXECUTION=False,
+            _env_file=None,
+        )
+    production = Settings(
+        ENVIRONMENT="production",
+        EXECUTION_PROFILE="cloud-gpu",
+        ALLOW_PAID_EXECUTION=True,
+        _env_file=None,
+    )
+    assert production.EXECUTION_PROFILE == "cloud-gpu"

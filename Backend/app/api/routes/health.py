@@ -15,7 +15,7 @@ async def metrics():
     job_counts = await redis_module.job_redis.hgetall("metrics:jobs")
     queue_depth = {
         queue: await redis_module.broker_redis.llen(queue)
-        for queue in ("cpu", "gpu-fast", "gpu-large")
+        for queue in ("mock", "cpu", "gpu-fast", "gpu-large")
     }
     return {
         "jobs": {key: int(value) for key, value in job_counts.items()},
@@ -55,7 +55,7 @@ async def health():
         "workers": len(worker_keys),
         "queue_depth": {
             queue: await redis_module.broker_redis.llen(queue) if checks["broker_redis"] else None
-            for queue in ("cpu", "gpu-fast", "gpu-large")
+            for queue in ("mock", "cpu", "gpu-fast", "gpu-large")
         },
     }
     if details:

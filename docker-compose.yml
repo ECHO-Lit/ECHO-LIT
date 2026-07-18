@@ -1,7 +1,9 @@
 name: echo
 
 x-runtime-environment: &runtime-environment
-  ENVIRONMENT: development
+  ENVIRONMENT: ${ENVIRONMENT:-development}
+  EXECUTION_PROFILE: ${EXECUTION_PROFILE:-mock}
+  ALLOW_PAID_EXECUTION: ${ALLOW_PAID_EXECUTION:-false}
   REDIS_URL: redis://redis:6379/0
   JOB_REDIS_URL: redis://redis:6379/1
   CELERY_BROKER_URL: redis://redis:6379/2
@@ -14,6 +16,8 @@ x-runtime-environment: &runtime-environment
   MAX_AUDIO_DURATION_SECONDS: "600"
   TASK_SOFT_TIME_LIMIT_SECONDS: "3300"
   TASK_TIME_LIMIT_SECONDS: "3600"
+  MOCK_JOB_SCENARIO: ${MOCK_JOB_SCENARIO:-success}
+  MOCK_JOB_DELAY_SECONDS: ${MOCK_JOB_DELAY_SECONDS:-0}
   ENABLE_LEGACY_SYNC_INFERENCE: "false"
   HF_HOME: /home/appuser/.cache/huggingface
   PYTHONUNBUFFERED: "1"
@@ -89,7 +93,29 @@ services:
       args:
         ROLE: worker
         VARIANT: cpu
+    profiles: [real]
     command: ["celery", "-A", "app.core.celery_app:celery_app", "worker", "--loglevel=INFO", "--queues=cpu", "--concurrency=2", "--prefetch-multiplier=1"]
+
+  worker-mock:
+    container_name: echo-worker-mock
+    build:
+      context: ./Backend
+      dockerfile: Dockerfile
+      args:
+        ROLE: api
+        VARIANT: cpu
+    profiles: [mock]
+    working_dir: /app
+    environment:
+      <<: *runtime-environment
+    volumes:
+      - ./Backend/app:/app/app
+      - ./Backend/shared-storage:/app/shared-storage
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: ["celery", "-A", "app.core.celery_app:celery_app", "worker", "--loglevel=INFO", "--queues=mock,cpu", "--pool=solo", "--concurrency=1", "--prefetch-multiplier=1"]
+    restart: unless-stopped
 
   worker-model-local:
     <<: *worker-common
@@ -100,6 +126,7 @@ services:
       args:
         ROLE: worker
         VARIANT: cpu
+    profiles: [cpu-model]
     command: ["celery", "-A", "app.core.celery_app:celery_app", "worker", "--loglevel=INFO", "--queues=gpu-fast,gpu-large", "--concurrency=1", "--prefetch-multiplier=1"]
 
   scheduler:
