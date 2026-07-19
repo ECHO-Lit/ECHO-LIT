@@ -1,0 +1,3 @@
+filename,duration,sample_rate,channels,source,variant
+voices_speech_16khz.wav,3.4,16000,1,VOiCES,16 kHz
+voices_speech_8khz.wav,3.4,8000,1,VOiCES,8 kHz

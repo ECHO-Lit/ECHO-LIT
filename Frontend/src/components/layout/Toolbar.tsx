@@ -44,9 +44,9 @@ interface CustomDataset {
 }
 
 const modelDatasetMap: Record<string, string[]> = {
-  "whisper-base": ["common-voice", "ravdess", "custom"],
-  "whisper-large": ["common-voice", "ravdess", "custom"],
-  "wav2vec2": ["common-voice", "ravdess", "custom"],
+  "whisper-base": ["sample-speech", "common-voice", "ravdess", "custom"],
+  "whisper-large": ["sample-speech", "common-voice", "ravdess", "custom"],
+  "wav2vec2": ["sample-speech", "common-voice", "ravdess", "custom"],
 };
 
 const defaultDatasetForModel: Record<string, string> = {
@@ -167,6 +167,7 @@ const onModelChange = (value: string) => {
                   </TooltipTrigger>
                   <TooltipContent className="space-y-1">
                     <p className="text-xs">Select the audio dataset to analyze:</p>
+                    <p className="text-xs">• Sample Speech: Tiny local test fixture</p>
                     <p className="text-xs">• Common Voice: Speech recognition dataset</p>
                     <p className="text-xs">• RAVDESS: Emotion recognition dataset</p>
                     <p className="text-xs">• Custom: Your uploaded datasets</p>
@@ -181,7 +182,8 @@ const onModelChange = (value: string) => {
                 {/* Built-in datasets */}
                 {allowedDatasets.filter(ds => ds !== 'custom').map((ds) => {
                   let label = ds;
-                  if (ds === "common-voice") label = "Common Voice";
+                  if (ds === "sample-speech") label = "Sample Speech";
+                  else if (ds === "common-voice") label = "Common Voice";
                   else if (ds === "ravdess") label = "RAVDESS";
                   return (
                     <SelectItem key={ds} value={ds}>

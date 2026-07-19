@@ -356,7 +356,7 @@ export const AudioDatasetPanel = ({
   // Cleanup on unmount or when dataset changes
   // Reload function to refresh dataset metadata
   const handleReloadDataset = useCallback(async () => {
-    const allowed = ["common-voice", "ravdess"];
+    const allowed = ["sample-speech", "common-voice", "ravdess"];
     const datasetToUse = originalDataset || dataset;
     if (!allowed.includes(datasetToUse)) {
       setDatasetMetadata([]);
@@ -411,7 +411,7 @@ export const AudioDatasetPanel = ({
     }
     
     // Handle both global datasets and custom datasets
-    const allowed = ["common-voice", "ravdess"];
+    const allowed = ["sample-speech", "common-voice", "ravdess"];
     const isCustomDataset = datasetToUse.startsWith('custom:');
     
     if (!allowed.includes(datasetToUse) && !isCustomDataset) {

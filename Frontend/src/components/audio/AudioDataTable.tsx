@@ -41,7 +41,7 @@ interface AudioDataTableProps {
   searchQuery: string;
   apiData?: unknown;
   model: string;
-  dataset: string; // "custom" | "common-voice" | "ravdess"
+  dataset: string; // "custom" | "sample-speech" | "common-voice" | "ravdess"
   datasetMetadata?: Record<string, string | number>[];
   uploadedFiles?: UploadedFile[];
   onFilePlay?: (file: UploadedFile) => void;
