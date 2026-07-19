@@ -86,7 +86,7 @@ PARAMETER_MODELS: dict[JobOperation, type[OperationParameters]] = {
 
 class JobCreateRequest(BaseModel):
     operation: JobOperation
-    audio_ids: list[str] = Field(min_length=1, max_length=50)
+    audio_ids: list[str] = Field(min_length=1, max_length=200)
     model: str | None = None
     parameters: dict[str, Any] = Field(default_factory=dict)
 

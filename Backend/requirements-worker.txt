@@ -1,5 +1,5 @@
 -r requirements-api.txt
-transformers>=4.30.0
+transformers==4.46.3
 torch
 librosa>=0.10.0
 soundfile>=0.12.0

@@ -4,7 +4,9 @@
 FROM node:20-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+# Cache mount persists npm's download cache across builds — only new/changed
+# packages hit the network on subsequent package.json edits.
+RUN --mount=type=cache,target=/root/.npm npm ci
 
 # ── Dev target: source arrives via bind-mount at runtime ───────
 FROM node:20-alpine AS dev

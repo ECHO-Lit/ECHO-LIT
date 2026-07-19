@@ -17,7 +17,6 @@ ARG ROLE=worker
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libsndfile1 && \
@@ -30,7 +29,10 @@ RUN useradd -m -u 1000 appuser && \
 WORKDIR /app
 COPY requirements-api.txt requirements-worker.txt ./
 
-RUN if [ "${ROLE}" = "api" ]; then \
+# Cache mount persists downloaded wheels across builds — only new/changed
+# packages hit the network on subsequent requirements file edits.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    if [ "${ROLE}" = "api" ]; then \
       python3 -m pip install -r requirements-api.txt; \
     else \
       if [ "${VARIANT}" = "gpu" ]; then TORCH_INDEX=https://download.pytorch.org/whl/cu126; \

@@ -8,6 +8,7 @@ import { EmbeddingProvider } from "../../contexts/EmbeddingContext";
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { AudioReference } from '@/lib/api';
 import { firstJobResult, materializeAudio, resolveAudioId, runJob } from '@/lib/jobs';
+import { computeTranscriptMetrics } from '@/lib/textMetrics';
 
 interface UploadedFile {
   audio_id?: string;
@@ -19,6 +20,7 @@ interface UploadedFile {
   duration?: number;
   sample_rate?: number;
   prediction?: string;
+  ground_truth?: string;
 }
 
 interface Wav2Vec2Prediction {
@@ -91,8 +93,28 @@ export const MainLayout = () => {
           model,
           audio_ids: [perturbationResult.audio_id],
         });
-        const prediction = firstJobResult(jobResult);
-        setPerturbedPredictions(prediction);
+        const prediction = firstJobResult<any>(jobResult);
+        // Whisper jobs return a plain transcript string; the display expects
+        // a WhisperPrediction-shaped object.
+        if (model?.includes('whisper')) {
+          const transcript = typeof prediction === 'string'
+            ? prediction
+            : prediction?.text || prediction?.predicted_transcript || "";
+          setPerturbedPredictions({
+            predicted_transcript: transcript,
+            ground_truth: "",
+            accuracy_percentage: null,
+            word_error_rate: null,
+            character_error_rate: null,
+            levenshtein_distance: null,
+            exact_match: null,
+            character_similarity: null,
+            word_count_predicted: transcript ? transcript.trim().split(/\s+/).length : 0,
+            word_count_truth: 0,
+          });
+        } else {
+          setPerturbedPredictions(prediction);
+        }
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : "Unknown error";
         setPredictionError(errorMessage);
@@ -134,7 +156,12 @@ export const MainLayout = () => {
         const prediction = firstJobResult<Wav2Vec2Prediction>(await runJob({
           operation: 'prediction', model: 'wav2vec2', audio_ids: [audioId],
         }, { signal: abortController.signal }));
-        setWav2vecPrediction(prediction);
+        // Ground-truth emotion comes from the dataset row attached at selection time.
+        setWav2vecPrediction(
+          prediction && selectedFile?.ground_truth
+            ? { ...prediction, ground_truth_emotion: prediction.ground_truth_emotion || selectedFile.ground_truth }
+            : prediction,
+        );
         
         // Update predictionMap for uploaded files
         if (selectedFile && prediction) {
@@ -206,35 +233,37 @@ export const MainLayout = () => {
           operation: 'prediction', model, audio_ids: [audioId],
         }, { signal: abortController.signal }));
         
+        // The job worker returns a plain transcript; ground truth comes from
+        // the dataset row attached at selection time. Metrics are computed
+        // client-side with the same formulas the legacy accuracy endpoint used.
+        const transcript = typeof prediction === 'string'
+          ? prediction
+          : prediction?.text || prediction?.predicted_transcript || JSON.stringify(prediction);
+        const groundTruth = selectedFile?.ground_truth || "";
+
+        // Ground truth (attached in AudioDatasetPanel from the dataset row)
+        // is the only reliable signal — audio_id alone doesn't distinguish
+        // an uploaded file from a materialized dataset selection, since both
+        // get one from the same /audio/materialize call.
         let whisperPrediction: WhisperPrediction;
-        
-        if (isUploadedFile || isCustomDataset) {
-          // For uploaded files or custom datasets, convert basic prediction to expected format
+        if (!groundTruth) {
           whisperPrediction = {
-            predicted_transcript: typeof prediction === 'string' ? prediction : prediction?.text || JSON.stringify(prediction),
-            ground_truth: "",
+            predicted_transcript: transcript,
+            ground_truth: groundTruth,
             accuracy_percentage: null,
             word_error_rate: null,
             character_error_rate: null,
             levenshtein_distance: null,
             exact_match: null,
             character_similarity: null,
-            word_count_predicted: 0,
+            word_count_predicted: transcript ? transcript.split(/\s+/).length : 0,
             word_count_truth: 0
           };
         } else {
-          // For regular dataset files, the accuracy endpoint returns all the metrics
           whisperPrediction = {
-            predicted_transcript: prediction.predicted_transcript || "",
-            ground_truth: prediction.ground_truth || "",
-            accuracy_percentage: prediction.accuracy_percentage !== null ? prediction.accuracy_percentage : null,
-            word_error_rate: prediction.word_error_rate !== null ? prediction.word_error_rate : null,
-            character_error_rate: prediction.character_error_rate !== null ? prediction.character_error_rate : null,
-            levenshtein_distance: prediction.levenshtein_distance !== null ? prediction.levenshtein_distance : null,
-            exact_match: prediction.exact_match !== null ? prediction.exact_match : null,
-            character_similarity: prediction.character_similarity !== null ? prediction.character_similarity : null,
-            word_count_predicted: prediction.word_count_predicted || 0,
-            word_count_truth: prediction.word_count_truth || 0
+            predicted_transcript: transcript,
+            ground_truth: groundTruth,
+            ...computeTranscriptMetrics(transcript, groundTruth),
           };
         }
         

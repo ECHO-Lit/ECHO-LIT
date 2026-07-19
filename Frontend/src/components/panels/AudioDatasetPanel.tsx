@@ -9,7 +9,7 @@ import { AudioUploader } from "../audio/AudioUploader";
 import { AudioDataTable } from "../audio/AudioDataTable";
 import { toast } from "sonner";
 import { API_BASE } from '@/lib/api';
-import { firstJobResult, materializeAudio, runJob } from '@/lib/jobs';
+import { materializeAudio, runJob } from '@/lib/jobs';
 
 interface UploadedFile {
   audio_id?: string;
@@ -20,7 +20,8 @@ interface UploadedFile {
   size?: number;
   duration?: number;
   sample_rate?: number;
-  prediction?:string
+  prediction?: string;
+  ground_truth?: string;
 }
 
 interface AudioDatasetPanelProps {
@@ -70,6 +71,7 @@ export const AudioDatasetPanel = ({
   const [isInferenceComplete, setIsInferenceComplete] = useState(false);
   const [currentModelDataset, setCurrentModelDataset] = useState<string>("");
   const abortControllerRef = useRef<AbortController | null>(null);
+  const runningBatchKeyRef = useRef<string | null>(null);
 
   // Sync selectedRow when selectedFile changes from external selection (e.g., embeddings)
   useEffect(() => {
@@ -132,6 +134,12 @@ export const AudioDatasetPanel = ({
     const pathVal = (match["path"] || match["filepath"] || match["file"] || match["filename"]) as string | undefined;
     const filename = pathVal ? (pathVal.split("/").pop() || pathVal.split("\\").pop() || String(id)) : String(id);
 
+    // Ground truth lives in the dataset metadata row; attach it here so the
+    // prediction panels can display it and compute accuracy metrics.
+    const groundTruth = String(
+      match["sentence"] ?? match["transcript"] ?? match["text"] ?? match["emotion"] ?? match["label"] ?? "",
+    );
+
     try {
       const audio = await materializeAudio(originalDataset || dataset, filename);
       onFileSelect({
@@ -143,6 +151,7 @@ export const AudioDatasetPanel = ({
         size: audio.size_bytes,
         duration: audio.duration_seconds,
         sample_rate: audio.sample_rate,
+        ground_truth: groundTruth || undefined,
       });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Unable to prepare audio');
@@ -183,9 +192,17 @@ export const AudioDatasetPanel = ({
       console.log(`Inference already completed for ${modelDatasetKey}, skipping`);
       return;
     }
-    
+
+    // Guard against duplicate concurrent runs for the same model+dataset —
+    // StrictMode double-fires effects and unstable parent callbacks re-trigger
+    // this effect, which previously spawned duplicate batch jobs.
+    if (runningBatchKeyRef.current === modelDatasetKey) {
+      return;
+    }
+    runningBatchKeyRef.current = modelDatasetKey;
+
     console.log(`Starting batch inference check for ${model} on ${datasetMetadata.length} files in ${dataset} dataset`);
-    
+
     // Abort any ongoing inference
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -199,159 +216,75 @@ export const AudioDatasetPanel = ({
     setBatchInferenceQueue([]);
     setInferenceStatus({}); // Clear inference status for new dataset
     
-    // First, check what's already cached
-    const checkCachedResults = async () => {
+    // Run the whole dataset as ONE batch job. The worker fans it out into
+    // per-file tasks and content-addressed caching makes repeat runs (page
+    // refresh, model switch back) complete without re-running the models.
+    const runBatchInference = async () => {
+      const signal = abortControllerRef.current?.signal;
+      const entries = datasetMetadata.map((row, index) => {
+        const fileId = String(row["id"] || row["path"] || row["filepath"] || row["file"] || row["filename"] || index);
+        const pathVal = (row["path"] || row["filepath"] || row["file"] || row["filename"]) as string;
+        const filename = pathVal ? (pathVal.split("/").pop() || pathVal.split("\\").pop() || pathVal) : fileId;
+        return { fileId, filename };
+      });
+
       try {
-        const filenames = datasetMetadata.map(row => {
-          const pathVal = (row["path"] || row["filepath"] || row["file"] || row["filename"]) as string;
-          return pathVal ? (pathVal.split("/").pop() || pathVal.split("\\").pop() || pathVal) : String(row["id"] || "unknown");
+        setBatchInferenceQueue(entries.map((entry) => entry.fileId));
+        setInferenceStatus(Object.fromEntries(entries.map((entry) => [entry.fileId, 'loading' as const])));
+        onBatchInferenceStart?.();
+
+        const assets = await Promise.all(
+          entries.map((entry) => materializeAudio(datasetToUse, entry.filename, signal)),
+        );
+        const result: any = await runJob({
+          operation: 'prediction',
+          model: model || 'whisper-base',
+          audio_ids: assets.map((asset) => asset.audio_id),
+        }, {
+          signal,
+          onProgress: (status) => setCurrentInferenceIndex(status.progress?.current ?? 0),
         });
 
-        // The job worker performs content-addressed cache lookup. Queue all files;
-        // cached jobs complete without model execution.
-        const cached_results: Record<string, string> = {};
-        const missing_files = filenames;
-        const cache_hit_rate = 0;
-        
-        console.log(`Cache hit rate: ${(cache_hit_rate * 100).toFixed(1)}% (${Object.keys(cached_results).length}/${filenames.length})`);
-        
-        // Load cached results
-        const newPredictionMap: Record<string, string> = {};
-        const newInferenceStatus: Record<string, 'idle' | 'loading' | 'done' | 'error'> = {};
-        
-        // Map cached results to file IDs
-        datasetMetadata.forEach((row, index) => {
-          const fileId = String(row["id"] || row["path"] || row["filepath"] || row["file"] || row["filename"] || index);
-          const pathVal = (row["path"] || row["filepath"] || row["file"] || row["filename"]) as string;
-          const filename = pathVal ? (pathVal.split("/").pop() || pathVal.split("\\").pop() || pathVal) : fileId;
-          
-          if (cached_results[filename]) {
-            newPredictionMap[fileId] = cached_results[filename];
-            newInferenceStatus[fileId] = 'done';
+        // Aggregated batch results carry per-file values keyed by filename.
+        const byFilename: Record<string, string> = {};
+        for (const entry of result.individual_transcripts || []) byFilename[entry.filename] = entry.transcript;
+        for (const entry of result.individual_predictions || []) byFilename[entry.filename] = entry.predicted_emotion;
+        if (!result.individual_transcripts && !result.individual_predictions && Array.isArray(result.items)) {
+          // Single-file jobs skip aggregation; items are request-ordered.
+          result.items.forEach((item: any, index: number) => {
+            const value = item.result;
+            byFilename[entries[index]?.filename] = typeof value === 'string'
+              ? value : value?.text || value?.predicted_emotion || JSON.stringify(value);
+          });
+        }
+
+        const statuses: Record<string, 'idle' | 'loading' | 'done' | 'error'> = {};
+        entries.forEach((entry) => {
+          const text = byFilename[entry.filename];
+          if (text !== undefined) {
+            onPredictionUpdate?.(entry.fileId, text);
+            statuses[entry.fileId] = 'done';
           } else {
-            newInferenceStatus[fileId] = 'idle';
+            statuses[entry.fileId] = 'error';
           }
         });
-        
-        // Update external predictionMap via callback
-        Object.entries(newPredictionMap).forEach(([fileId, prediction]) => {
-          if (onPredictionUpdate) {
-            onPredictionUpdate(fileId, prediction);
-          }
-        });
-        setInferenceStatus(newInferenceStatus);
-        
-        if (missing_files.length === 0) {
-          // All files are cached, we're done!
-          console.log('All files are cached, inference complete');
-          setIsInferenceComplete(true);
-          if (onBatchInferenceComplete) {
-            onBatchInferenceComplete();
-          }
-          return;
-        }
-        
-        // Queue only missing files for inference
-        const fileIds = datasetMetadata
-          .filter((row, index) => {
-            const pathVal = (row["path"] || row["filepath"] || row["file"] || row["filename"]) as string;
-            const filename = pathVal ? (pathVal.split("/").pop() || pathVal.split("\\").pop() || pathVal) : String(row["id"] || index);
-            return missing_files.includes(filename);
-          })
-          .map((row, index) => String(row["id"] || row["path"] || row["filepath"] || row["file"] || row["filename"] || index));
-        
-        setBatchInferenceQueue(fileIds);
-        console.log(`Queuing ${fileIds.length} files for inference:`, fileIds);
-        
-        if (onBatchInferenceStart) {
-          onBatchInferenceStart();
-        }
-        
+        setInferenceStatus(statuses);
+        setCurrentInferenceIndex(entries.length);
+        setIsInferenceComplete(true);
+        runningBatchKeyRef.current = null;
+        onBatchInferenceComplete?.();
       } catch (error: any) {
-        if (error.name === 'AbortError') return;
-        console.error('Failed to check cached results:', error);
-        
-        // Fallback: run inference on all files
-        const fileIds = datasetMetadata.map((row, index) => {
-          const id = row["id"] || row["path"] || row["filepath"] || row["file"] || row["filename"] || String(index);
-          return String(id);
-        });
-        
-        setBatchInferenceQueue(fileIds);
+        runningBatchKeyRef.current = null;
+        if (error?.name === 'AbortError') return;
+        console.error('Batch inference failed:', error);
         setInferenceStatus({});
-        
-        if (onBatchInferenceStart) {
-          onBatchInferenceStart();
-        }
+        setBatchInferenceQueue([]);
+        onBatchInferenceComplete?.();
       }
     };
-    
-    checkCachedResults();
+
+    runBatchInference();
   }, [model, dataset, originalDataset, datasetMetadata, onBatchInferenceStart, onBatchInferenceComplete]);
-
-  // Process batch inference queue
-  useEffect(() => {
-    if (batchInferenceQueue.length === 0) return;
-    if (currentInferenceIndex >= batchInferenceQueue.length) {
-      // Batch inference complete
-      console.log('Batch inference completed');
-      setIsInferenceComplete(true);
-      if (onBatchInferenceComplete) {
-        onBatchInferenceComplete();
-      }
-      return;
-    }
-
-    const currentFileId = batchInferenceQueue[currentInferenceIndex];
-    const currentRow = datasetMetadata.find(row => {
-      const id = row["id"] || row["path"] || row["filepath"] || row["file"] || row["filename"];
-      return String(id) === currentFileId;
-    });
-
-    if (!currentRow) {
-      // Skip this file and continue
-      setCurrentInferenceIndex(prev => prev + 1);
-      return;
-    }
-
-    const runInference = async () => {
-      try {
-        setInferenceStatus(prev => ({ ...prev, [currentFileId]: 'loading' }));
-        
-        const pathVal = (currentRow["path"] || currentRow["filepath"] || currentRow["file"] || currentRow["filename"]) as string;
-        const filename = pathVal ? (pathVal.split("/").pop() || pathVal.split("\\").pop() || currentFileId) : currentFileId;
-
-        const asset = await materializeAudio(dataset, filename, abortControllerRef.current?.signal);
-        const prediction = firstJobResult<any>(await runJob({
-          operation: 'prediction', model: model || 'whisper-base', audio_ids: [asset.audio_id],
-        }, { signal: abortControllerRef.current?.signal }));
-        const predictionText = typeof prediction === 'string'
-          ? prediction
-          : prediction?.text || prediction?.predicted_emotion || JSON.stringify(prediction);
-
-        // Update external predictionMap via callback
-        if (onPredictionUpdate) {
-          onPredictionUpdate(currentFileId, predictionText);
-        }
-        setInferenceStatus(prev => ({ ...prev, [currentFileId]: 'done' }));
-        
-        console.log(`Inference complete for ${filename}: ${predictionText}`);
-        
-      } catch (error: any) {
-        if (error.name === 'AbortError') return;
-        console.error(`Inference failed for ${currentFileId}:`, error);
-        setInferenceStatus(prev => ({ ...prev, [currentFileId]: 'error' }));
-      }
-      
-      // Move to next file
-      setCurrentInferenceIndex(prev => prev + 1);
-    };
-
-    // Add small delay to prevent overwhelming the server
-    const timeoutId = setTimeout(runInference, 100);
-    
-    return () => clearTimeout(timeoutId);
-  }, [batchInferenceQueue, currentInferenceIndex, datasetMetadata, model, dataset, originalDataset, onBatchInferenceComplete]);
 
   // Cleanup on unmount or when dataset changes
   // Reload function to refresh dataset metadata

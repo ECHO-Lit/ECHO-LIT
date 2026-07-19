@@ -63,6 +63,42 @@ def analysis_cache_key(envelope: TaskEnvelope) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
+def item_cache_key(envelope: TaskEnvelope, sha256: str) -> str:
+    material = {
+        "operation": envelope.operation.value,
+        "model": envelope.model,
+        "revision": MODEL_REVISIONS.get(envelope.model or ""),
+        "audio": sha256,
+        "parameters": envelope.parameters,
+        "schema": envelope.result_schema_version,
+        "code": envelope.code_version,
+    }
+    canonical = json.dumps(material, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+async def _cached_item_result(envelope: TaskEnvelope, sha256: str, storage: ObjectStorage) -> Any | None:
+    """Per-file result cache so duplicate or re-submitted jobs skip model execution."""
+    if envelope.operation.value == "perturbation":
+        return None
+    pointer = f"analysis-item-cache:{item_cache_key(envelope, sha256)}"
+    cached_key = await redis_module.redis.get(pointer)
+    if cached_key and storage.exists(cached_key):
+        return storage.get_json(cached_key)["result"]
+    return None
+
+
+async def _store_item_result(envelope: TaskEnvelope, sha256: str, storage: ObjectStorage, output: Any) -> None:
+    if envelope.operation.value == "perturbation":
+        return
+    digest = item_cache_key(envelope, sha256)
+    result_key = f"cache-items/{digest}.json"
+    storage.put_json(result_key, {"result": output})
+    await redis_module.redis.set(
+        f"analysis-item-cache:{digest}", result_key, ex=settings.JOB_TTL_SECONDS
+    )
+
+
 def _aggregate_batch(result: dict[str, Any], filenames: list[str]) -> None:
     items = result["items"]
     if result["operation"] == "prediction" and result["model"] == "wav2vec2":
@@ -326,14 +362,19 @@ async def execute(envelope_data: dict[str, Any], celery_task_id: str) -> None:
                         message=f"Processing {asset.filename}",
                     ),
                 )
-                local_path = temp_root / f"{asset.audio_id}{Path(asset.filename).suffix}"
-                storage.download_file(asset.object_key, local_path)
                 if envelope.operation.value == "perturbation":
+                    local_path = temp_root / f"{asset.audio_id}{Path(asset.filename).suffix}"
+                    storage.download_file(asset.object_key, local_path)
                     output = await _execute_perturbation(envelope, local_path, storage, temp_root)
                 else:
-                    output = _execute_one(
-                        envelope.operation.value, envelope.model, local_path, envelope.parameters
-                    )
+                    output = await _cached_item_result(envelope, asset.sha256, storage)
+                    if output is None:
+                        local_path = temp_root / f"{asset.audio_id}{Path(asset.filename).suffix}"
+                        storage.download_file(asset.object_key, local_path)
+                        output = _jsonable(_execute_one(
+                            envelope.operation.value, envelope.model, local_path, envelope.parameters
+                        ))
+                        await _store_item_result(envelope, asset.sha256, storage, output)
                 items.append({"audio_id": asset.audio_id, "result": _jsonable(output)})
                 await jobs.update(
                     envelope.job_id,
@@ -446,12 +487,15 @@ async def execute_batch_item(
             ),
         )
         storage = get_storage()
-        with tempfile.TemporaryDirectory(prefix=f"echo-{envelope.job_id}-{asset_index}-") as temp_dir:
-            local_path = Path(temp_dir) / f"{asset.audio_id}{Path(asset.filename).suffix}"
-            storage.download_file(asset.object_key, local_path)
-            output = _execute_one(
-                envelope.operation.value, envelope.model, local_path, envelope.parameters
-            )
+        output = await _cached_item_result(envelope, asset.sha256, storage)
+        if output is None:
+            with tempfile.TemporaryDirectory(prefix=f"echo-{envelope.job_id}-{asset_index}-") as temp_dir:
+                local_path = Path(temp_dir) / f"{asset.audio_id}{Path(asset.filename).suffix}"
+                storage.download_file(asset.object_key, local_path)
+                output = _jsonable(_execute_one(
+                    envelope.operation.value, envelope.model, local_path, envelope.parameters
+                ))
+            await _store_item_result(envelope, asset.sha256, storage, output)
         completed_key = f"job:{envelope.job_id}:completed-items"
         client = redis_module.job_redis
         pipe = client.pipeline()

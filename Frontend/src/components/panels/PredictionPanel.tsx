@@ -119,16 +119,29 @@ export const PredictionPanel = ({ selectedFile, selectedEmbeddingFile, model, da
         operation: 'prediction', model, audio_ids: [perturbedFile.audio_id],
       }));
 
-      setPerturbedPredictions(prediction);
-      
-      // Extract prediction text and notify parent component
+      // The job worker returns a plain transcript string for whisper; the
+      // display component expects a WhisperPrediction-shaped object.
       let predictionText = "";
       if (model?.includes("whisper")) {
-        // For whisper, extract the transcription text
-        predictionText = prediction?.transcript || prediction?.prediction || "";
-      } else if (model === "wav2vec2") {
-        // For wav2vec2, extract the emotion prediction
-        predictionText = prediction?.emotion || prediction?.prediction || "";
+        const transcript = typeof prediction === 'string'
+          ? prediction
+          : prediction?.text || prediction?.predicted_transcript || "";
+        setPerturbedPredictions({
+          predicted_transcript: transcript,
+          ground_truth: "",
+          accuracy_percentage: null,
+          word_error_rate: null,
+          character_error_rate: null,
+          levenshtein_distance: null,
+          exact_match: null,
+          character_similarity: null,
+          word_count_predicted: transcript ? transcript.trim().split(/\s+/).length : 0,
+          word_count_truth: 0,
+        } as unknown as WhisperPrediction);
+        predictionText = transcript;
+      } else {
+        setPerturbedPredictions(prediction);
+        predictionText = prediction?.predicted_emotion || prediction?.emotion || prediction?.prediction || "";
       }
       
       if (predictionText && onPredictionRefresh) {
