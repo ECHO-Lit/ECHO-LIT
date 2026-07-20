@@ -123,3 +123,13 @@ export const getFeatureExplanation = (featureName: string): string => {
   
   return 'Audio feature - extracting characteristics from the audio signal for analysis.';
 };
+
+// Plain-English explanations for dataset-level EDA charts (not per-feature).
+export const EDA_CHART_EXPLANATIONS: Record<string, string> = {
+  duration_histogram: 'Distribution of clip lengths. Very short or very long clips relative to the rest of the dataset may be padded or truncated differently by the model.',
+  class_balance: 'Count of files per class label. Uneven counts can bias a model toward predicting the majority class, inflating accuracy without real skill.',
+  transcript_length_histogram: 'Distribution of word counts per transcript. Short vs. long utterances stress a speech-to-text model differently and affect how word error rate should be read.',
+  sample_rate_breakdown: 'Sample rates present in the dataset. Mixed sample rates mean some files are resampled before model input, which can introduce artifacts.',
+  correlation_heatmap: 'Pairwise correlation between acoustic features. Strongly correlated (near +1 or -1) features carry redundant information.',
+  feature_box_plot: 'Spread of a feature across the dataset: box = 25th-75th percentile, line = median, whiskers = min/max. Wide boxes mean high variability.',
+};

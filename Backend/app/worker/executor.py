@@ -161,6 +161,7 @@ def _aggregate_batch(result: dict[str, Any], filenames: list[str]) -> None:
             if isinstance(value, (int, float))
         })
         statistics = {}
+        distributions = {}
         for key in numeric_keys:
             values = np.array([
                 analysis["features"][key] for analysis in analyses if key in analysis["features"]
@@ -169,13 +170,16 @@ def _aggregate_batch(result: dict[str, Any], filenames: list[str]) -> None:
                 "mean": float(np.mean(values)), "std": float(np.std(values)),
                 "min": float(np.min(values)), "max": float(np.max(values)),
                 "median": float(np.median(values)),
+                "q1": float(np.percentile(values, 25)), "q3": float(np.percentile(values, 75)),
             }
+            hist, edges = np.histogram(values, bins=min(20, max(1, len(values))))
+            distributions[key] = {"histogram": hist.tolist(), "bins": edges.tolist()}
         ranked = sorted(statistics.items(), key=lambda entry: abs(entry[1]["mean"]), reverse=True)
         result.update({
             "model_context": result.get("model") or "audio_features",
             "individual_analyses": analyses,
             "aggregate_statistics": statistics,
-            "feature_distributions": {},
+            "feature_distributions": distributions,
             "most_common_features": [
                 {"feature": key, "normalized_mean": value["mean"], "stability_score": 1 / (1 + value["std"]),
                  "prevalence_score": 1.0, "mean": value["mean"], "std": value["std"]}

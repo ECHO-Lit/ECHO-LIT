@@ -11,6 +11,7 @@ from app.services.dataset_service import (
     resolve_file,
     media_type_for,
 )
+from app.services.dataset_eda_service import compute_metadata_eda
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,20 @@ async def get_dataset_metadata(dataset: str, request: Request) -> JSONResponse:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read CSV: {e}")
+
+
+@router.get("/{dataset}/eda")
+async def get_dataset_eda(dataset: str, request: Request) -> JSONResponse:
+    try:
+        dataset = unquote(dataset)
+        session_id = get_session_id(request)
+        return JSONResponse(content=compute_metadata_eda(dataset, session_id))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to compute EDA: {e}")
 
 
 @router.get("/{dataset}/file/{file_path:path}")

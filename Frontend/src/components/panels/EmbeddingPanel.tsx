@@ -10,6 +10,7 @@ import { Progress } from "@/components/ui/progress";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { EmbeddingPlot } from "../visualization/EmbeddingPlot";
 import { ScalarPlot } from "../visualization/ScalarPlot";
+import { DatasetEdaView } from "../eda/DatasetEdaView";
 import { useEmbedding } from "../../contexts/EmbeddingContext";
 import { RefreshCw, Eye, Box, Square, BarChart3, HelpCircle } from "lucide-react";
 import { getFeatureExplanation } from "@/lib/audioFeatures";
@@ -379,8 +380,16 @@ export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice
         </Tooltip>
           </h3>
         </div>
-      
-      <div className="flex-1 p-3 bg-panel-background overflow-auto">
+
+      <Tabs defaultValue="embeddings" className="flex-1 flex flex-col overflow-hidden">
+        <div className="px-3 pt-2 border-b border-gray-200">
+          <TabsList className="h-8">
+            <TabsTrigger value="embeddings" className="text-xs">Embeddings</TabsTrigger>
+            <TabsTrigger value="eda" className="text-xs">Dataset EDA</TabsTrigger>
+          </TabsList>
+        </div>
+
+      <TabsContent value="embeddings" className="flex-1 p-3 bg-panel-background overflow-auto m-0">
         <div className="space-y-3">
           {/* Controls Section */}
           <div className="flex-shrink-0 space-y-2.5">
@@ -873,7 +882,12 @@ export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice
           )}
 
         </div>
-      </div>
+      </TabsContent>
+
+      <TabsContent value="eda" className="flex-1 p-3 bg-panel-background overflow-auto m-0">
+        <DatasetEdaView dataset={dataset} availableFiles={availableFiles} />
+      </TabsContent>
+      </Tabs>
     </div>
     </TooltipProvider>
   );
