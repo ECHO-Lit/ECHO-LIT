@@ -2,9 +2,12 @@ import Plot from "react-plotly.js";
 
 interface ClassBalanceBarProps {
   counts: Record<string, number>;
+  // filename lists per class label — when provided, bars become clickable.
+  filenamesByClass?: Record<string, string[]>;
+  onBarClick?: (className: string, filenames: string[]) => void;
 }
 
-export const ClassBalanceBar = ({ counts }: ClassBalanceBarProps) => {
+export const ClassBalanceBar = ({ counts, filenamesByClass, onBarClick }: ClassBalanceBarProps) => {
   const entries = Object.entries(counts).sort(([, a], [, b]) => b - a);
   if (entries.length === 0) {
     return (
@@ -13,6 +16,10 @@ export const ClassBalanceBar = ({ counts }: ClassBalanceBarProps) => {
       </div>
     );
   }
+
+  const customdata = filenamesByClass
+    ? entries.map(([label]) => filenamesByClass[label] || [])
+    : undefined;
 
   return (
     <div className="h-full">
@@ -23,7 +30,8 @@ export const ClassBalanceBar = ({ counts }: ClassBalanceBarProps) => {
             y: entries.map(([, count]) => count),
             type: "bar",
             marker: { color: "hsl(var(--primary))" },
-          },
+            ...(customdata ? { customdata } : {}),
+          } as any,
         ]}
         layout={{
           autosize: true,
@@ -43,7 +51,15 @@ export const ClassBalanceBar = ({ counts }: ClassBalanceBarProps) => {
           responsive: true,
         }}
         useResizeHandler
-        style={{ width: "100%", height: "100%" }}
+        onClick={
+          onBarClick
+            ? (event: any) => {
+                const point = event?.points?.[0];
+                if (point?.customdata) onBarClick(point.x as string, point.customdata as string[]);
+              }
+            : undefined
+        }
+        style={{ width: "100%", height: "100%", cursor: onBarClick ? "pointer" : undefined }}
       />
     </div>
   );

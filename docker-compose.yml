@@ -20,6 +20,7 @@ x-runtime-environment: &runtime-environment
 
 x-worker-common: &worker-common
   working_dir: /app
+  shm_size: '2gb'
   environment:
     <<: *runtime-environment
     ML_DEVICE: auto

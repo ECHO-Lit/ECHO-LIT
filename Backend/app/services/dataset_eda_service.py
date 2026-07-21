@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 from collections import Counter
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
 
 from app.services.dataset_service import load_metadata
+
+
+def _basename(row: dict) -> Optional[str]:
+    raw = row.get("path") or row.get("filepath") or row.get("file") or row.get("filename")
+    return Path(str(raw)).name if raw else None
 
 
 def _to_float(value) -> Optional[float]:
@@ -39,6 +45,20 @@ def compute_metadata_eda(dataset: str, session_id: Optional[str] = None) -> dict
     sample_rates = [r.get("sample_rate") or r.get("samplerate") for r in rows]
     sample_rates = [str(sr) for sr in sample_rates if sr]
 
+    # Keyed by basename so the frontend can join against acoustic-EDA results,
+    # whose `individual_analyses[].filename` is always a plain basename
+    # (materialized via /audio/materialize before the audio_features job runs).
+    labels_by_file = {
+        base: (r.get("emotion") or r.get("label"))
+        for r in rows
+        if (base := _basename(r)) and (r.get("emotion") or r.get("label"))
+    }
+    durations_by_file = {
+        base: d
+        for r in rows
+        if (base := _basename(r)) and (d := _to_float(r.get("duration"))) is not None and d > 0
+    }
+
     return {
         "dataset": dataset,
         "summary": {
@@ -52,4 +72,6 @@ def compute_metadata_eda(dataset: str, session_id: Optional[str] = None) -> dict
         "class_balance": dict(Counter(labels)),
         "transcript_length_histogram": _histogram(word_counts),
         "sample_rate_breakdown": dict(Counter(sample_rates)),
+        "labels_by_file": labels_by_file,
+        "durations_by_file": durations_by_file,
     }

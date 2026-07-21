@@ -23,6 +23,8 @@ interface EmbeddingPanelProps {
   availableFiles?: string[];
   selectedFile?: string | null;
   onFileSelect?: (filename: string) => void;
+  // Pass-through for the Dataset EDA tab's click-to-filter charts.
+  onEdaFilterChange?: (filenames: string[] | null) => void;
 }
 
 // Audio Frequency Analysis interface (reusing from ScalersVisualization)
@@ -113,7 +115,7 @@ interface WhisperAnalysis {
   };
 }
 
-export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice", availableFiles = [], selectedFile, onFileSelect }: EmbeddingPanelProps) => {
+export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice", availableFiles = [], selectedFile, onFileSelect, onEdaFilterChange }: EmbeddingPanelProps) => {
   const [reductionMethod, setReductionMethod] = useState("pca");
   const [is3D, setIs3D] = useState(false);
   const [selectionMode, setSelectionMode] = useState<'box' | 'lasso'>('box');
@@ -885,7 +887,12 @@ export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice
       </TabsContent>
 
       <TabsContent value="eda" className="flex-1 p-3 bg-panel-background overflow-auto m-0">
-        <DatasetEdaView dataset={dataset} availableFiles={availableFiles} />
+        <DatasetEdaView
+          dataset={dataset}
+          availableFiles={availableFiles}
+          onFileSelect={onFileSelect}
+          onFilterChange={onEdaFilterChange}
+        />
       </TabsContent>
       </Tabs>
     </div>

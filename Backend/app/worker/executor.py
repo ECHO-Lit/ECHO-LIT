@@ -193,7 +193,12 @@ def _aggregate_batch(result: dict[str, Any], filenames: list[str]) -> None:
             },
         })
     if len(items) > 1:
-        result["cache_info"] = {"cached_count": 0, "missing_count": len(items), "cache_hit_rate": 0}
+        cached_count = sum(1 for item in items if item.get("cache_hit"))
+        result["cache_info"] = {
+            "cached_count": cached_count,
+            "missing_count": len(items) - cached_count,
+            "cache_hit_rate": cached_count / len(items) if items else 0,
+        }
 
 
 async def _check_cancel(job_id: str, repository: JobRepository) -> None:
@@ -370,8 +375,10 @@ async def execute(envelope_data: dict[str, Any], celery_task_id: str) -> None:
                     local_path = temp_root / f"{asset.audio_id}{Path(asset.filename).suffix}"
                     storage.download_file(asset.object_key, local_path)
                     output = await _execute_perturbation(envelope, local_path, storage, temp_root)
+                    item_cache_hit = False
                 else:
                     output = await _cached_item_result(envelope, asset.sha256, storage)
+                    item_cache_hit = output is not None
                     if output is None:
                         local_path = temp_root / f"{asset.audio_id}{Path(asset.filename).suffix}"
                         storage.download_file(asset.object_key, local_path)
@@ -379,7 +386,7 @@ async def execute(envelope_data: dict[str, Any], celery_task_id: str) -> None:
                             envelope.operation.value, envelope.model, local_path, envelope.parameters
                         ))
                         await _store_item_result(envelope, asset.sha256, storage, output)
-                items.append({"audio_id": asset.audio_id, "result": _jsonable(output)})
+                items.append({"audio_id": asset.audio_id, "result": _jsonable(output), "cache_hit": item_cache_hit})
                 await jobs.update(
                     envelope.job_id,
                     status=JobStatus.processing,

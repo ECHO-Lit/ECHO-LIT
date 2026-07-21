@@ -51,6 +51,9 @@ export const MainLayout = () => {
   const [dataset, setDataset] = useState("common-voice");
   const [batchInferenceStatus, setBatchInferenceStatus] = useState<'idle' | 'running' | 'done'>('idle');
   const [availableFiles, setAvailableFiles] = useState<string[]>([]);
+  // Full dataset metadata rows (from AudioDatasetPanel) — needed to attach
+  // ground truth when a file is selected outside the table (embedding scatter, EDA outliers).
+  const [datasetMetadata, setDatasetMetadata] = useState<Record<string, string | number>[]>([]);
   const [selectedEmbeddingFile, setSelectedEmbeddingFile] = useState<string | null>(null);
   const [perturbationResult, setPerturbationResult] = useState<any>(null);
   
@@ -116,6 +119,8 @@ export const MainLayout = () => {
           setPerturbedPredictions(prediction);
         }
       } catch (err) {
+        // A newer selection superseded this request — not a real failure.
+        if (err instanceof DOMException && err.name === 'AbortError') return;
         const errorMessage = err instanceof Error ? err.message : "Unknown error";
         setPredictionError(errorMessage);
         console.error("Error fetching perturbed predictions:", err);
@@ -268,12 +273,14 @@ export const MainLayout = () => {
         }
         
         setWhisperPrediction(whisperPrediction);
-        
+
         // Update predictionMap for uploaded files and custom datasets
         if (selectedFile && (isUploadedFile || isCustomDataset)) {
           handlePredictionUpdate(selectedFile.file_id, whisperPrediction.predicted_transcript);
         }
       } catch (err) {
+        // A newer selection superseded this request — not a real failure.
+        if (err instanceof DOMException && err.name === 'AbortError') return;
         const errorMessage = err instanceof Error ? err.message : "Unknown error";
         setPredictionError(errorMessage);
         console.error("Error fetching whisper prediction:", err);
@@ -318,6 +325,8 @@ export const MainLayout = () => {
   })();
 
   const [predictionMap, setPredictionMap] = useState<Record<string, string>>({});
+  // Filenames the Dataset EDA tab wants the file table restricted to (or null).
+  const [edaFilter, setEdaFilter] = useState<string[] | null>(null);
 
   const handlePredictionUpdate = (fileId: string, prediction: string) => {
     setPredictionMap(prev => {
@@ -353,9 +362,26 @@ export const MainLayout = () => {
     setSelectedEmbeddingFile(file.filename);
   };
 
+  // Mirrors AudioDatasetPanel's row-click ground-truth lookup — needed here
+  // because selections from the embedding scatter / EDA outliers skip the
+  // table row entirely, so they never get ground_truth attached otherwise.
+  const findGroundTruth = (filename: string): string | undefined => {
+    for (const row of datasetMetadata) {
+      const pathVal = row["path"] || row["filepath"] || row["file"] || row["filename"];
+      const base = typeof pathVal === 'string'
+        ? (pathVal.split("/").pop() || pathVal.split("\\").pop() || pathVal)
+        : undefined;
+      if (base === filename || String(row["id"]) === filename) {
+        const gt = row["sentence"] ?? row["transcript"] ?? row["text"] ?? row["emotion"] ?? row["label"];
+        return gt !== undefined && gt !== null && String(gt).length > 0 ? String(gt) : undefined;
+      }
+    }
+    return undefined;
+  };
+
   const handleEmbeddingSelection = async (filename: string) => {
     setSelectedEmbeddingFile(filename);
-    
+
     // Try to find and select corresponding file in audio dataset
     // First check uploaded files
     const matchingUploadedFile = uploadedFiles.find(f => f.filename === filename);
@@ -363,10 +389,10 @@ export const MainLayout = () => {
       setSelectedFile(matchingUploadedFile);
       return;
     }
-    
+
     try {
       const audio = await materializeAudio(dataset, filename);
-      setSelectedFile(toUploadedFile(audio));
+      setSelectedFile({ ...toUploadedFile(audio), ground_truth: findGroundTruth(filename) });
     } catch (error) {
       console.error('Failed to prepare selected audio:', error);
       setSelectedFile(null);
@@ -421,6 +447,7 @@ export const MainLayout = () => {
   useEffect(() => {
     setPredictionMap({});
     setBatchInferenceStatus('idle');
+    setEdaFilter(null);
   }, [model, dataset]);
 
   const handleBatchInference = async (selectedModel: string, selectedDataset: string) => {
@@ -468,6 +495,7 @@ export const MainLayout = () => {
                 availableFiles={availableFiles}
                 selectedFile={selectedEmbeddingFile}
                 onFileSelect={handleEmbeddingSelection}
+                onEdaFilterChange={setEdaFilter}
               />
             </Panel>
 
@@ -506,8 +534,11 @@ export const MainLayout = () => {
                     onBatchInferenceStart={handleBatchInferenceStart}
                     onBatchInferenceComplete={handleBatchInferenceComplete}
                     onAvailableFilesChange={setAvailableFiles}
+                    onDatasetMetadataChange={setDatasetMetadata}
                     onPredictionUpdate={handlePredictionUpdate}
                     predictionMap={predictionMap}
+                    filterFilenames={edaFilter}
+                    onClearFilter={() => setEdaFilter(null)}
                   />
                 </Panel>
               </PanelGroup>

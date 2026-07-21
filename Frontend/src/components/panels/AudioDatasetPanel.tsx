@@ -37,24 +37,34 @@ interface AudioDatasetPanelProps {
   onBatchInferenceStart?: () => void;
   onBatchInferenceComplete?: () => void;
   onAvailableFilesChange?: (files: string[]) => void;
+  // Full dataset metadata rows, so the caller can look up ground truth for
+  // files selected outside this table (e.g. the embedding scatter, EDA outliers).
+  onDatasetMetadataChange?: (rows: Record<string, string | number>[]) => void;
   onPredictionUpdate?: (fileId: string, prediction: string) => void;
   predictionMap?: Record<string, string>;
+  // Driven by clicking a Dataset EDA chart bucket — restricts the table to
+  // these filenames. onClearFilter resets it from the caller's state.
+  filterFilenames?: string[] | null;
+  onClearFilter?: () => void;
 }
 
-export const AudioDatasetPanel = ({ 
-  apiData, 
+export const AudioDatasetPanel = ({
+  apiData,
   model,
   dataset,
   originalDataset,
-  selectedFile, 
-  onFileSelect, 
+  selectedFile,
+  onFileSelect,
   onUploadSuccess,
   batchInferenceStatus,
   onBatchInferenceStart,
   onBatchInferenceComplete,
   onAvailableFilesChange,
+  onDatasetMetadataChange,
   onPredictionUpdate,
-  predictionMap: externalPredictionMap
+  predictionMap: externalPredictionMap,
+  filterFilenames,
+  onClearFilter,
 }: AudioDatasetPanelProps) => {
   const [selectedRow, setSelectedRow] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -301,28 +311,31 @@ export const AudioDatasetPanel = ({
       if (!res.ok) throw new Error(`Failed to fetch metadata: ${res.status}`);
       const data = await res.json();
       if (Array.isArray(data)) {
-        setDatasetMetadata(data as Record<string, string | number>[]);
-        
+        const rows = data as Record<string, string | number>[];
+        setDatasetMetadata(rows);
+        onDatasetMetadataChange?.(rows);
+
         // Extract filenames for embeddings
         const filenames = data.map((row: Record<string, string | number>) => {
           const pathVal = row["path"] || row["filepath"] || row["file"] || row["filename"];
-          const filename = typeof pathVal === 'string' ? 
-            (pathVal.split("/").pop() || pathVal.split("\\").pop() || pathVal) : 
+          const filename = typeof pathVal === 'string' ?
+            (pathVal.split("/").pop() || pathVal.split("\\").pop() || pathVal) :
             String(pathVal);
           return filename;
         });
-        
+
         onAvailableFilesChange?.(filenames);
         toast.success("Dataset reloaded successfully");
       } else {
         setDatasetMetadata([]);
+        onDatasetMetadataChange?.([]);
         onAvailableFilesChange?.([]);
       }
     } catch (error) {
       console.error('Failed to reload dataset:', error);
       toast.error("Failed to reload dataset");
     }
-  }, [dataset, originalDataset, onAvailableFilesChange]);
+  }, [dataset, originalDataset, onAvailableFilesChange, onDatasetMetadataChange]);
 
   useEffect(() => {
     abortControllerRef.current = new AbortController();
@@ -359,20 +372,23 @@ export const AudioDatasetPanel = ({
         if (!res.ok) throw new Error(`Failed to fetch metadata: ${res.status}`);
         const data = await res.json();
         if (Array.isArray(data)) {
-          setDatasetMetadata(data as Record<string, string | number>[]);
-          
+          const rows = data as Record<string, string | number>[];
+          setDatasetMetadata(rows);
+          onDatasetMetadataChange?.(rows);
+
           // Extract filenames for embeddings
           const filenames = data.map((row: Record<string, string | number>) => {
             const pathVal = row["path"] || row["filepath"] || row["file"] || row["filename"];
-            const filename = typeof pathVal === 'string' ? 
-              (pathVal.split("/").pop() || pathVal.split("\\").pop() || pathVal) : 
+            const filename = typeof pathVal === 'string' ?
+              (pathVal.split("/").pop() || pathVal.split("\\").pop() || pathVal) :
               String(pathVal);
             return filename;
           });
-          
+
           onAvailableFilesChange?.(filenames);
         } else {
           setDatasetMetadata([]);
+          onDatasetMetadataChange?.([]);
           onAvailableFilesChange?.([]);
         }
       } catch (e) {
@@ -530,13 +546,28 @@ export const AudioDatasetPanel = ({
               </TooltipContent>
             </Tooltip>
           </div>
+          {filterFilenames && filterFilenames.length > 0 && (
+            <div className="flex items-center gap-1.5 pt-1.5">
+              <Badge variant="outline" className="text-[10px] bg-primary/10 text-primary border-primary/20">
+                Filtered to {filterFilenames.length} files
+              </Badge>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-5 px-1.5 text-[10px]"
+                onClick={onClearFilter}
+              >
+                Clear
+              </Button>
+            </div>
+          )}
         </div>
       </div>
-      
+
       <div className="flex-1 overflow-hidden px-3 pb-3">
         <Card className="h-full rounded-lg">
           <CardContent className="p-0 h-full">
-            <AudioDataTable 
+            <AudioDataTable
               selectedRow={selectedRow}
               onRowSelect={handleRowSelect}
               searchQuery={searchQuery}
@@ -549,6 +580,7 @@ export const AudioDatasetPanel = ({
               predictionMap={predictionMap}
               inferenceStatus={inferenceStatus}
               onVisibleRowIdsChange={handleVisibleRowIdsChange}
+              filterFilenames={filterFilenames}
             />
           </CardContent>
         </Card>

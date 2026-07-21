@@ -48,9 +48,12 @@ interface AudioDataTableProps {
   predictionMap?: Record<string, string>;
   inferenceStatus?: Record<string, 'idle' | 'loading' | 'done' | 'error'>;
   onVisibleRowIdsChange?: (rowIds: string[]) => void;
+  // When set, restricts dataset rows to these filenames (basename match) —
+  // driven by clicking a bucket in the Dataset EDA charts. Composes with searchQuery.
+  filterFilenames?: string[] | null;
 }
 
-export const AudioDataTable = ({ selectedRow, onRowSelect, searchQuery, apiData, model, dataset, datasetMetadata, uploadedFiles, onFilePlay, predictionMap, inferenceStatus, onVisibleRowIdsChange }: AudioDataTableProps) => {
+export const AudioDataTable = ({ selectedRow, onRowSelect, searchQuery, apiData, model, dataset, datasetMetadata, uploadedFiles, onFilePlay, predictionMap, inferenceStatus, onVisibleRowIdsChange, filterFilenames }: AudioDataTableProps) => {
   // Branch: dataset mode vs custom uploads
   const hasDatasetMetadata = (datasetMetadata?.length || 0) > 0;
   const hasUploadedFiles = uploadedFiles && uploadedFiles.length > 0;
@@ -368,19 +371,29 @@ export const AudioDataTable = ({ selectedRow, onRowSelect, searchQuery, apiData,
   }, [getFrom, model, predictionMap, inferenceStatus, shouldShowGroundTruth]);
 
   // Build table config based on mode
+  const filteredDatasetRows: DatasetRow[] = useMemo(() => {
+    if (!filterFilenames || filterFilenames.length === 0) return datasetRows;
+    const allowed = new Set(filterFilenames);
+    return datasetRows.filter((row) => {
+      const pathVal = getFrom(row, ["path", "filepath", "file", "filename"]);
+      const base = pathVal.split("/").pop()?.split("\\").pop() || pathVal;
+      return allowed.has(base);
+    });
+  }, [datasetRows, filterFilenames, getFrom]);
+
   const data: unknown[] = useMemo(() => {
     if (hasUploadedFiles) {
       // When there are uploaded files, show uploaded files at top, then dataset files
       const combinedData: unknown[] = [...customTableData]; // Uploaded files first
       if (hasDatasetMetadata) {
         // Add dataset files after uploaded files
-        combinedData.push(...datasetRows);
+        combinedData.push(...filteredDatasetRows);
       }
       return combinedData;
     }
     // When no uploaded files, use original logic
-    return hasDatasetMetadata ? datasetRows : customTableData;
-  }, [hasDatasetMetadata, hasUploadedFiles, datasetRows, customTableData]);
+    return hasDatasetMetadata ? filteredDatasetRows : customTableData;
+  }, [hasDatasetMetadata, hasUploadedFiles, filteredDatasetRows, customTableData]);
   const columns: ColumnDef<unknown, unknown>[] = useMemo(
     () => {
       if (hasUploadedFiles) {

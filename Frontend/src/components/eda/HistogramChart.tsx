@@ -5,11 +5,15 @@ interface HistogramChartProps {
   histogram: number[];
   label: string;
   color?: string;
+  // Filenames falling into each bin, same length/order as `histogram`.
+  // When provided, bars become clickable.
+  customdata?: string[][];
+  onBarClick?: (filenames: string[]) => void;
 }
 
 // bins is edges (n+1 values), histogram is bar heights (n values) —
 // the shape numpy.histogram() returns and the backend passes through as-is.
-export const HistogramChart = ({ bins, histogram, label, color = "hsl(var(--primary))" }: HistogramChartProps) => {
+export const HistogramChart = ({ bins, histogram, label, color = "hsl(var(--primary))", customdata, onBarClick }: HistogramChartProps) => {
   if (!bins.length || !histogram.length) {
     return (
       <div className="h-full flex items-center justify-center text-xs text-muted-foreground">
@@ -32,7 +36,8 @@ export const HistogramChart = ({ bins, histogram, label, color = "hsl(var(--prim
             type: "bar",
             marker: { color, line: { color: "hsl(var(--border))", width: 1 } },
             name: label,
-          },
+            ...(customdata ? { customdata } : {}),
+          } as any,
         ]}
         layout={{
           autosize: true,
@@ -53,7 +58,15 @@ export const HistogramChart = ({ bins, histogram, label, color = "hsl(var(--prim
           responsive: true,
         }}
         useResizeHandler
-        style={{ width: "100%", height: "100%" }}
+        onClick={
+          onBarClick
+            ? (event: any) => {
+                const point = event?.points?.[0];
+                if (point?.customdata) onBarClick(point.customdata as string[]);
+              }
+            : undefined
+        }
+        style={{ width: "100%", height: "100%", cursor: onBarClick ? "pointer" : undefined }}
       />
     </div>
   );
