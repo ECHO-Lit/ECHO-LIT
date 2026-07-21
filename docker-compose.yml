@@ -13,8 +13,11 @@ x-backend-common: &backend-common
     HF_HOME: /home/appuser/.cache/huggingface
     TRANSFORMERS_CACHE: /home/appuser/.cache/huggingface
     PYTHONUNBUFFERED: "1"
-    HF_HUB_OFFLINE: "1"
-    TRANSFORMERS_OFFLINE: "1"
+    # Offline by default so a normal boot never stalls on the Hub. Registering
+    # a custom model that is not already in the hf-cache volume needs these
+    # off: `HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 docker compose up`.
+    HF_HUB_OFFLINE: "${HF_HUB_OFFLINE:-1}"
+    TRANSFORMERS_OFFLINE: "${TRANSFORMERS_OFFLINE:-1}"
 
 
   volumes:

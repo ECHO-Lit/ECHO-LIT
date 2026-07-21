@@ -24,6 +24,12 @@ from app.services.model_loader_service import (
     transcribe_whisper_with_timestamps,
     extract_whisper_attention_pairs,
 )
+from app.services.custom_model_service import (
+    ModelValidationError,
+    is_custom_model,
+    resolve_model,
+    run_custom_inference,
+)
 from app.services.dataset_service import resolve_file
 from app.core.redis import get_result, cache_result
 
@@ -142,9 +148,18 @@ async def run_inference(
         session_id,
     )
 
+    # Built-in models dispatch through MODEL_FUNCTIONS; user-registered ones
+    # are referenced as `custom:<session_id>:<name>` and run through the
+    # generic, config-driven path in custom_model_service.
+    custom_spec = None
     func = MODEL_FUNCTIONS.get(model)
     if not func:
-        raise HTTPException(status_code=400, detail=f"Invalid model: {model}")
+        if not is_custom_model(model):
+            raise HTTPException(status_code=400, detail=f"Invalid model: {model}")
+        try:
+            custom_spec = await resolve_model(model)
+        except (ModelValidationError, ValueError) as e:
+            raise HTTPException(status_code=404, detail=str(e))
 
     resolved_path: Optional[Path] = None
 
@@ -179,7 +194,13 @@ async def run_inference(
         return cached_result.get("prediction", cached_result)
 
     # Detect if function is async or sync and call appropriately
-    if inspect.iscoroutinefunction(func):
+    if custom_spec is not None:
+        try:
+            prediction = await asyncio.to_thread(run_custom_inference, custom_spec, str(resolved_path))
+        except Exception as e:
+            logger.exception("Custom model %s failed on %s", model, resolved_path)
+            raise HTTPException(status_code=500, detail=f"Custom model inference failed: {e}")
+    elif inspect.iscoroutinefunction(func):
         prediction = await func(str(resolved_path))
     else:
         prediction = await asyncio.to_thread(func, str(resolved_path))

@@ -1,4 +1,5 @@
 import logging
+import threading
 from typing import Any, Dict, List
 import torch
 import torch.nn as nn
@@ -119,6 +120,14 @@ def _verify_whisper_lm_head(model, model_id):
         return
     if proj is None or emb is None:
         return
+    # A weight still on the meta device has no storage to compare, and
+    # `torch.equal` raises `aten::equal ... Meta tensors` rather than
+    # returning False. Report the real problem instead.
+    if proj.weight.is_meta or emb.weight.is_meta:
+        raise RuntimeError(
+            f"{model_id}: weights are still on the meta device after loading "
+            "(concurrent from_pretrained calls can cause this). Refusing to use this load."
+        )
     # Tied weights share storage; the equality check is the fallback for
     # loaders that copy rather than alias.
     if proj.weight.data_ptr() == emb.weight.data_ptr():
@@ -994,6 +1003,9 @@ _whisper_model_large = None
 # different weight shapes.
 _whisper_gen_model_base = None
 _whisper_gen_model_large = None
+# Serialises `from_pretrained` for the generate-path models; see
+# `get_whisper_gen_model` for why concurrent loads are unsafe.
+_WHISPER_GEN_LOAD_LOCK = threading.Lock()
 
 
 def get_whisper_base_models():
@@ -1035,22 +1047,34 @@ def get_whisper_gen_model(model_id: str):
         cache = _whisper_gen_model_large
     if cache is not None:
         return cache
-    model = WhisperForConditionalGeneration.from_pretrained(
-        model_id, attn_implementation="eager", low_cpu_mem_usage=False
-    )
-    if hasattr(model, "tie_weights"):
-        model.tie_weights()
-    device = "cuda:0" if torch.cuda.is_available() else "cpu"
-    model = _safe_to_device(model, device)
-    model.eval()
-    # Verify before caching: a broken model latched into the global below
-    # would serve garbage for the whole process lifetime.
-    _verify_whisper_lm_head(model, model_id)
-    if model_id == "openai/whisper-base":
-        _whisper_gen_model_base = model
-    elif model_id == "openai/whisper-large-v3":
-        _whisper_gen_model_large = model
-    return model
+
+    # Inference runs in a threadpool (`asyncio.to_thread`), so parallel
+    # requests for an uncached model arrive here at once. Concurrent
+    # `from_pretrained` calls race inside transformers and leave weights
+    # stranded on the meta device, which then fails `.to()` and the LM-head
+    # check. Serialise the load and re-check the cache inside the lock.
+    with _WHISPER_GEN_LOAD_LOCK:
+        if model_id == "openai/whisper-base" and _whisper_gen_model_base is not None:
+            return _whisper_gen_model_base
+        if model_id == "openai/whisper-large-v3" and _whisper_gen_model_large is not None:
+            return _whisper_gen_model_large
+
+        model = WhisperForConditionalGeneration.from_pretrained(
+            model_id, attn_implementation="eager", low_cpu_mem_usage=False
+        )
+        if hasattr(model, "tie_weights"):
+            model.tie_weights()
+        device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        model = _safe_to_device(model, device)
+        model.eval()
+        # Verify before caching: a broken model latched into the global below
+        # would serve garbage for the whole process lifetime.
+        _verify_whisper_lm_head(model, model_id)
+        if model_id == "openai/whisper-base":
+            _whisper_gen_model_base = model
+        elif model_id == "openai/whisper-large-v3":
+            _whisper_gen_model_large = model
+        return model
 
 def extract_whisper_embeddings(audio_file_path: str, model_size: str = "base") -> np.ndarray:
     """

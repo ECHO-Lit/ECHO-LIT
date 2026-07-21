@@ -12,6 +12,8 @@ import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/comp
 import { Upload, HelpCircle } from "lucide-react";
 import { API_BASE } from '@/lib/api';
 import { CustomDatasetManager } from '@/components/dataset/CustomDatasetManager';
+import { CustomModelManager } from '@/components/models/CustomModelManager';
+import { CustomModelSpec, fetchCustomModels, isCustomModel } from '@/lib/customModels';
 
 interface UploadedFile {
   file_id: string;
@@ -42,6 +44,10 @@ interface CustomDataset {
   total_files: number;
 }
 
+// Datasets offered for a model with no explicit entry -- i.e. every custom
+// model, which can run over any audio.
+const ALL_DATASETS = ["common-voice", "ravdess", "custom"];
+
 const modelDatasetMap: Record<string, string[]> = {
   "whisper-base": ["common-voice", "ravdess", "custom"],
   "whisper-large": ["common-voice", "ravdess", "custom"],
@@ -56,6 +62,15 @@ const defaultDatasetForModel: Record<string, string> = {
 
 export const Toolbar = ({apiData, setApiData, selectedFile, uploadedFiles, onFileSelect, model, setModel, dataset, setDataset, onBatchInference}: ToolbarProps) => {
   const [customDatasets, setCustomDatasets] = useState<CustomDataset[]>([]);
+  const [customModels, setCustomModels] = useState<CustomModelSpec[]>([]);
+
+  const loadCustomModels = async () => {
+    try {
+      setCustomModels(await fetchCustomModels());
+    } catch (err) {
+      console.error('Error fetching custom models:', err);
+    }
+  };
 
   const fetchCustomDatasets = async () => {
     try {
@@ -74,6 +89,7 @@ export const Toolbar = ({apiData, setApiData, selectedFile, uploadedFiles, onFil
 
   useEffect(() => {
     fetchCustomDatasets();
+    loadCustomModels();
   }, []);
 
   const handleDatasetCreated = (datasetName: string) => {
@@ -87,11 +103,12 @@ export const Toolbar = ({apiData, setApiData, selectedFile, uploadedFiles, onFil
 
 const onModelChange = (value: string) => {
   setModel(value);
-  
-  // Update dataset based on model
-  const allowedDatasets = modelDatasetMap[value] || ["custom"];
-  const defaultDataset = defaultDatasetForModel[value] || "custom";
-  
+
+  // Update dataset based on model. Custom models are dataset-agnostic -- they
+  // run over whatever audio is selected -- so they keep the current dataset.
+  const allowedDatasets = modelDatasetMap[value] || ALL_DATASETS;
+  const defaultDataset = defaultDatasetForModel[value] || "common-voice";
+
   // Check if current dataset is a custom dataset
   const isCurrentCustomDataset = dataset.startsWith('custom:');
 
@@ -117,7 +134,7 @@ const onModelChange = (value: string) => {
   };
 
   // Get datasets allowed for current model
-  const allowedDatasets = modelDatasetMap[model] || ["custom"];
+  const allowedDatasets = modelDatasetMap[model] || ALL_DATASETS;
 
   return (
     <TooltipProvider>
@@ -143,16 +160,30 @@ const onModelChange = (value: string) => {
                     <p className="text-xs">Choose the AI model for audio analysis:</p>
                     <p className="text-xs">• Whisper: Speech-to-text transcription</p>
                     <p className="text-xs">• Wav2Vec2: Emotion recognition</p>
+                    <p className="text-xs">• Custom: Your registered Hugging Face models</p>
                     </TooltipContent>
                 </Tooltip>
               </div>
               <Select value={model} onValueChange={onModelChange}>
-                <SelectTrigger className="w-32 h-7 border-border text-xs">
+                <SelectTrigger className="w-40 h-7 border-border text-xs">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="whisper-base">Whisper Base</SelectItem>
                   <SelectItem value="wav2vec2">Wav2Vec2</SelectItem>
+
+                  {customModels.length > 0 && (
+                    <>
+                      <SelectItem disabled value="model-separator">
+                        ── Custom Models ──
+                      </SelectItem>
+                      {customModels.map((cm) => (
+                        <SelectItem key={cm.formatted_name} value={cm.formatted_name}>
+                          {cm.name}
+                        </SelectItem>
+                      ))}
+                    </>
+                  )}
                 </SelectContent>
               </Select>
             </div>
@@ -236,6 +267,15 @@ const onModelChange = (value: string) => {
 
       {/* Right side: Action buttons */}
       <div className="flex items-center gap-2.5">
+        <CustomModelManager
+          onModelsChanged={loadCustomModels}
+          onModelRegistered={(formattedName) => {
+            loadCustomModels();
+            onModelChange(formattedName);
+          }}
+          onModelSelected={onModelChange}
+        />
+
         <CustomDatasetManager
           onDatasetCreated={handleDatasetCreated}
           onDatasetSelected={handleDatasetSelected}

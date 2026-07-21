@@ -85,6 +85,72 @@ volume. Subsequent boots reuse it — no re-download.
 docker compose --profile gpu up redis frontend backend-gpu --build
 ```
 
+### Custom models
+
+ECHO supports Hugging Face audio models by **task and architecture**, never by
+model name. Register one from the toolbar (**Custom Models → Add Model**) with
+its repo ID; ECHO derives the task, input tensor, sampling rate, label map and
+tokenizer from the repository config alone.
+
+| Task | Loaded with | Analyses |
+|---|---|---|
+| Sequence-to-sequence ASR | `AutoModelForSpeechSeq2Seq` | transcription, encoder/decoder activations, cross-attention, word projections, embeddings, saliency, activation interventions |
+| CTC ASR | `AutoModelForCTC` | transcription, frame-level token probabilities, encoder activations, embeddings, saliency |
+| Audio classification | `AutoModelForAudioClassification` | class probabilities, embeddings, saliency, perturbation analysis, label interventions |
+
+CTC models expose no decoder analyses because they contain no text decoder.
+
+Registration validates the repo against every constraint in two phases: config
+and processor first (fast, no weights), then a real forward pass on synthetic
+audio to confirm the model returns `logits` and honours
+`output_hidden_states=True`. Limits (parameter count, size, inference time,
+models per session) live in `Backend/app/core/settings.py` under
+`CUSTOM_MODEL_*` and can be overridden by environment variable.
+
+> **Downloads:** `docker-compose.yml` sets `HF_HUB_OFFLINE=1`, so only
+> already-cached repos can be registered. To add new ones, start the backend
+> with `HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0`.
+
+Verified examples, one per task:
+
+```bash
+docker compose up -d
+# Allow downloads for the registration step
+docker compose run --rm -e HF_HUB_OFFLINE=0 -e TRANSFORMERS_OFFLINE=0 backend \
+  python3 -c "from transformers import AutoModelForCTC, AutoProcessor; \
+    AutoModelForCTC.from_pretrained('facebook/wav2vec2-base-960h'); \
+    AutoProcessor.from_pretrained('facebook/wav2vec2-base-960h')"
+```
+
+| Repo | Detected as |
+|---|---|
+| `openai/whisper-base` | sequence-to-sequence ASR |
+| `facebook/wav2vec2-base-960h` | CTC ASR |
+| `superb/hubert-base-superb-er` | audio classification (4 labels) |
+
+The API is also usable directly:
+
+```bash
+# Config-only compatibility check (no weights downloaded)
+curl -c cookies.txt -X POST http://localhost:8000/custom-models/validate \
+  -H "Content-Type: application/json" \
+  -d '{"model_id":"facebook/wav2vec2-base-960h"}'
+
+# Full validation + registration
+curl -b cookies.txt -X POST http://localhost:8000/custom-models/register \
+  -H "Content-Type: application/json" \
+  -d '{"name":"ctc-asr","model_id":"facebook/wav2vec2-base-960h"}'
+
+# Run it through the normal inference route
+curl -b cookies.txt -X POST http://localhost:8000/inferences/run \
+  -H "Content-Type: application/json" \
+  -d '{"model":"custom:<session_id>:ctc-asr","dataset":"common-voice","dataset_file":"sample-000037.mp3"}'
+```
+
+Other endpoints: `GET /custom-models/list`, `GET /custom-models/{name}`,
+`DELETE /custom-models/{name}`, and `GET /custom-models/capabilities` (the full
+support matrix, constraints and limits — the UI renders its documentation from it).
+
 ### Common operations
 
 ```bash

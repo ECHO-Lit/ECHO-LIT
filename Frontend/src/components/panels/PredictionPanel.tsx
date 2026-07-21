@@ -7,6 +7,8 @@ import { AttentionVisualization } from "../visualization/AttentionVisualization"
 import { PerturbationTools } from "../analysis/PerturbationTools";
 import { useState, useEffect } from "react";
 import { API_BASE } from '@/lib/api';
+import { CustomModelPrediction } from '@/components/models/CustomModelPrediction';
+import { isCustomModel } from '@/lib/customModels';
 
 interface UploadedFile {
   file_id: string;
@@ -406,12 +408,20 @@ export const PredictionPanel = ({ selectedFile, selectedEmbeddingFile, model, da
   }, [selectedFile, selectedEmbeddingFile, model, dataset, originalDataset]);
 
   const hasAttention = !!model && model.includes('whisper');
+  // Custom models render their own task-shaped prediction view; the built-in
+  // models feed the DatapointEditorPanel instead.
+  const isCustom = isCustomModel(model);
+  // Written out rather than interpolated: Tailwind only emits classes it can
+  // see literally in the source, so `grid-cols-${n}` would be purged.
+  const tabCount = 2 + (hasAttention ? 1 : 0) + (isCustom ? 1 : 0);
+  const gridColsClass = { 2: 'grid-cols-2', 3: 'grid-cols-3', 4: 'grid-cols-4' }[tabCount] ?? 'grid-cols-2';
 
   return (
     <div className="h-full bg-panel-background border-t border-border">
-      <Tabs defaultValue="saliency" className="h-full">
+      <Tabs defaultValue={isCustom ? 'prediction' : 'saliency'} className="h-full">
         <div className="bg-panel-header border-b border-border px-3 py-2">
-          <TabsList className={`h-7 grid w-full ${hasAttention ? 'grid-cols-3' : 'grid-cols-2'} bg-muted`}>
+          <TabsList className={`h-7 grid w-full ${gridColsClass} bg-muted`}>
+            {isCustom && <TabsTrigger value="prediction" className="text-xs">Prediction</TabsTrigger>}
             <TabsTrigger value="saliency" className="text-xs">Saliency</TabsTrigger>
             {hasAttention && <TabsTrigger value="attention" className="text-xs">Attention</TabsTrigger>}
             <TabsTrigger value="perturbation" className="text-xs">Perturbation</TabsTrigger>
@@ -419,6 +429,18 @@ export const PredictionPanel = ({ selectedFile, selectedEmbeddingFile, model, da
         </div>
 
         <div className="h-[calc(100%-2.5rem)] overflow-auto bg-background">
+          {isCustom && (
+            <TabsContent value="prediction" className="m-0 h-full">
+              <div className="p-3">
+                <CustomModelPrediction
+                  model={model}
+                  selectedFile={selectedFile || selectedEmbeddingFile}
+                  dataset={originalDataset && originalDataset !== 'custom' ? originalDataset : dataset}
+                />
+              </div>
+            </TabsContent>
+          )}
+
           <TabsContent value="saliency" className="m-0 h-full">
             <div className="p-3">
               <SaliencyVisualization
