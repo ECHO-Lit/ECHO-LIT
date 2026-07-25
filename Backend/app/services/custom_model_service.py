@@ -22,6 +22,7 @@ becomes selectable in the UI as `custom:<session_id>:<name>`.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import threading
@@ -745,7 +746,11 @@ async def register_model(
     if not settings.CUSTOM_MODEL_ALLOW_DOWNLOAD:
         raise ModelValidationError("Custom model registration is disabled on this deployment.")
 
-    result = validate_model(model_id, revision, deep=True)
+    # `validate_model` downloads weights and runs a forward pass -- seconds for
+    # a cached repo, minutes for a fresh multi-GB one. Calling it directly here
+    # would block the event loop and stall every other request for that whole
+    # time, including the container healthcheck.
+    result = await asyncio.to_thread(validate_model, model_id, revision, True)
     if not result.get("compatible"):
         raise ModelValidationError(
             result.get("error") or f"'{model_id}' does not satisfy ECHO's custom model constraints.",
