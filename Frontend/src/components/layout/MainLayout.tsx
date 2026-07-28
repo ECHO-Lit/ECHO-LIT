@@ -51,6 +51,12 @@ export const MainLayout = () => {
   const [dataset, setDataset] = useState("common-voice");
   const [batchInferenceStatus, setBatchInferenceStatus] = useState<'idle' | 'running' | 'done'>('idle');
   const [availableFiles, setAvailableFiles] = useState<string[]>([]);
+  // Which dataset `availableFiles` was loaded for. Filenames are only meaningful
+  // against their own dataset, and a plain "clear on change" effect cannot fix
+  // this: React runs child effects BEFORE parent effects, so consumers would
+  // already have fired requests with the stale list before this component could
+  // clear it. Tagging the data makes the guard independent of effect ordering.
+  const [availableFilesDataset, setAvailableFilesDataset] = useState<string>("");
   // Full dataset metadata rows (from AudioDatasetPanel) — needed to attach
   // ground truth when a file is selected outside the table (embedding scatter, EDA outliers).
   const [datasetMetadata, setDatasetMetadata] = useState<Record<string, string | number>[]>([]);
@@ -450,6 +456,24 @@ export const MainLayout = () => {
     setEdaFilter(null);
   }, [model, dataset]);
 
+  // Selection is filename-based, so it too is dataset-scoped.
+  useEffect(() => {
+    setSelectedFile(null);
+    setSelectedEmbeddingFile(null);
+  }, [dataset]);
+
+  // Record which dataset a file list belongs to as it arrives.
+  const handleAvailableFilesChange = useCallback((files: string[]) => {
+    setAvailableFiles(files);
+    setAvailableFilesDataset(dataset);
+  }, [dataset]);
+
+  // Hand consumers an empty list until the file list matches the selected
+  // dataset. Anything that materialises audio (embeddings, acoustics) then
+  // simply waits, instead of firing a request per file that is guaranteed to
+  // 404 because the filename belongs to the previous dataset.
+  const filesForCurrentDataset = availableFilesDataset === dataset ? availableFiles : [];
+
   const handleBatchInference = async (selectedModel: string, selectedDataset: string) => {
     // Don't run batch inference for legacy "custom" (uploaded files only)
     if (selectedDataset === 'custom') return;
@@ -492,7 +516,7 @@ export const MainLayout = () => {
               <EmbeddingPanel
                 model={model}
                 dataset={dataset}
-                availableFiles={availableFiles}
+                availableFiles={filesForCurrentDataset}
                 selectedFile={selectedEmbeddingFile}
                 onFileSelect={handleEmbeddingSelection}
                 onEdaFilterChange={setEdaFilter}
@@ -533,7 +557,7 @@ export const MainLayout = () => {
                     batchInferenceStatus={batchInferenceStatus}
                     onBatchInferenceStart={handleBatchInferenceStart}
                     onBatchInferenceComplete={handleBatchInferenceComplete}
-                    onAvailableFilesChange={setAvailableFiles}
+                    onAvailableFilesChange={handleAvailableFilesChange}
                     onDatasetMetadataChange={setDatasetMetadata}
                     onPredictionUpdate={handlePredictionUpdate}
                     predictionMap={predictionMap}

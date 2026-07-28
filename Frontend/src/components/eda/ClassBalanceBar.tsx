@@ -5,9 +5,21 @@ interface ClassBalanceBarProps {
   // filename lists per class label — when provided, bars become clickable.
   filenamesByClass?: Record<string, string[]>;
   onBarClick?: (className: string, filenames: string[]) => void;
+  // Optional second dataset, rendered as grouped bars. Values are shown as a
+  // share of each dataset so differently-sized datasets stay comparable.
+  counts2?: Record<string, number>;
+  label?: string;
+  label2?: string;
 }
 
-export const ClassBalanceBar = ({ counts, filenamesByClass, onBarClick }: ClassBalanceBarProps) => {
+export const ClassBalanceBar = ({
+  counts,
+  filenamesByClass,
+  onBarClick,
+  counts2,
+  label = "Dataset",
+  label2 = "Comparison",
+}: ClassBalanceBarProps) => {
   const entries = Object.entries(counts).sort(([, a], [, b]) => b - a);
   if (entries.length === 0) {
     return (
@@ -18,29 +30,58 @@ export const ClassBalanceBar = ({ counts, filenamesByClass, onBarClick }: ClassB
   }
 
   const customdata = filenamesByClass
-    ? entries.map(([label]) => filenamesByClass[label] || [])
+    ? entries.map(([className]) => filenamesByClass[className] || [])
     : undefined;
+
+  // In comparison mode both datasets are shown as a percentage of their own total —
+  // raw counts would make the larger dataset look uniformly "more of everything".
+  const isComparing = Boolean(counts2);
+  const total1 = entries.reduce((sum, [, count]) => sum + count, 0) || 1;
+  const total2 = counts2 ? Object.values(counts2).reduce((sum, count) => sum + count, 0) || 1 : 1;
+  const classNames = isComparing
+    ? Array.from(new Set([...entries.map(([name]) => name), ...Object.keys(counts2 ?? {})]))
+    : entries.map(([name]) => name);
+  const toValue = (count: number, total: number) => (isComparing ? (count / total) * 100 : count);
 
   return (
     <div className="h-full">
       <Plot
         data={[
           {
-            x: entries.map(([label]) => label),
-            y: entries.map(([, count]) => count),
+            x: classNames,
+            y: classNames.map((name) => toValue(counts[name] ?? 0, total1)),
             type: "bar",
-            marker: { color: "hsl(var(--primary))" },
-            ...(customdata ? { customdata } : {}),
+            marker: { color: "#2a78d6" },
+            name: label,
+            ...(customdata && !isComparing ? { customdata } : {}),
           } as any,
+          ...(counts2
+            ? [
+                {
+                  x: classNames,
+                  y: classNames.map((name) => toValue(counts2[name] ?? 0, total2)),
+                  type: "bar",
+                  marker: { color: "#eb6834" },
+                  name: label2,
+                } as any,
+              ]
+            : []),
         ]}
         layout={{
           autosize: true,
-          margin: { l: 40, r: 10, t: 10, b: 50 },
+          margin: { l: 40, r: 10, t: 10, b: isComparing ? 60 : 50 },
+          barmode: "group",
           xaxis: { tickfont: { size: 9 }, tickangle: -35 },
-          yaxis: { showgrid: true, gridcolor: "hsl(var(--border))", tickfont: { size: 9 } },
+          yaxis: {
+            showgrid: true,
+            gridcolor: "hsl(var(--border))",
+            tickfont: { size: 9 },
+            title: isComparing ? { text: "% of dataset", font: { size: 9 } } : undefined,
+          },
           plot_bgcolor: "transparent",
           paper_bgcolor: "transparent",
-          showlegend: false,
+          showlegend: isComparing,
+          legend: { orientation: "h", y: -0.32, x: 0, font: { size: 9 } },
           font: { size: 10, color: "hsl(var(--foreground))" },
         }}
         config={{

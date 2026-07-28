@@ -59,6 +59,8 @@ class AttentionParameters(OperationParameters):
 class EmbeddingParameters(OperationParameters):
     reduction: Literal["pca", "tsne", "umap"] = "pca"
     n_components: int = Field(default=2, ge=2, le=3)
+    cluster: bool = False
+    min_cluster_size: int = Field(default=5, ge=2, le=50)
 
 
 class PerturbationSpec(OperationParameters):

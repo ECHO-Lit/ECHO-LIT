@@ -24,6 +24,20 @@ x-worker-common: &worker-common
   environment:
     <<: *runtime-environment
     ML_DEVICE: auto
+    # Celery's prefork pool forks children that inherit native thread-pool state.
+    # OpenMP/BLAS pools do not survive fork intact, which shows up as a bare
+    # SIGSEGV with no Python traceback. Pinning each library to a single thread
+    # avoids that, and also stops N workers each spawning N threads on the same
+    # cores.
+    OMP_NUM_THREADS: "1"
+    OPENBLAS_NUM_THREADS: "1"
+    MKL_NUM_THREADS: "1"
+    NUMEXPR_NUM_THREADS: "1"
+    NUMBA_NUM_THREADS: "1"
+    TOKENIZERS_PARALLELISM: "false"
+    # Turns a future native crash into a Python traceback naming the offending
+    # module, instead of just "signal 11 (SIGSEGV)".
+    PYTHONFAULTHANDLER: "1"
   volumes:
     - ./Backend/app:/app/app
     - ./Backend/shared-storage:/app/shared-storage

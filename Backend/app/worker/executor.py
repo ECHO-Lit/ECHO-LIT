@@ -49,6 +49,41 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
+def _attach_embedding_analysis(
+    result: dict[str, Any], vectors: list[Any], parameters: dict[str, Any]
+) -> None:
+    """Add the 2D/3D projection and (optionally) HDBSCAN clustering to an embedding result.
+
+    Shared by the single-task and batched paths so both stay in step.
+    """
+    if len(vectors) < 2:
+        return
+    from app.services.model_loader_service import reduce_dimensions
+
+    result["projection"] = _jsonable(
+        reduce_dimensions(
+            vectors,
+            method=parameters.get("reduction", "pca"),
+            n_components=int(parameters.get("n_components", 2)),
+        )
+    )
+    if not parameters.get("cluster"):
+        return
+    # Clustering is additive: never fail an otherwise-successful embedding job over it.
+    try:
+        from app.services.clustering_service import cluster_embeddings
+
+        result["clustering"] = _jsonable(
+            cluster_embeddings(
+                vectors,
+                min_cluster_size=int(parameters.get("min_cluster_size", 5)),
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - surfaced to the UI, not swallowed
+        logger.exception("clustering_failed job_id=%s", result.get("job_id"))
+        result["clustering"] = {"error": str(exc)}
+
+
 def analysis_cache_key(envelope: TaskEnvelope) -> str:
     material = {
         "operation": envelope.operation.value,
@@ -238,12 +273,19 @@ def _execute_one(
     elif operation == "attention":
         from app.services.model_loader_service import extract_whisper_attention_pairs
 
-        return extract_whisper_attention_pairs(
+        result = extract_whisper_attention_pairs(
             str(audio_path),
             model_size="large" if model == "whisper-large" else "base",
             layer_idx=int(parameters.get("layer_idx", 6)),
             head_idx=int(parameters.get("head_idx", 0)),
         )
+        # The extractor catches its own exceptions and reports them in-band. Without
+        # this the job would be marked successful with empty attention data — and
+        # that empty payload would be written to the per-file cache, so the failure
+        # would survive a fix to its root cause.
+        if result.get("error"):
+            raise RuntimeError(f"Attention extraction failed: {result['error']}")
+        return result
     elif operation == "embedding":
         from app.services.model_loader_service import (
             extract_wav2vec2_embeddings,
@@ -256,7 +298,10 @@ def _execute_one(
             str(audio_path), "large" if model == "whisper-large" else "base"
         )
     elif operation == "audio_features":
-        from app.services.model_loader_service import extract_audio_frequency_features
+        # Import the librosa-only module directly, NOT via model_loader_service --
+        # that would pull torch/transformers/umap into the forked CPU worker and
+        # reintroduce the OpenMP/LLVM clash that segfaults it.
+        from app.services.audio_features_service import extract_audio_frequency_features
 
         return extract_audio_frequency_features(str(audio_path))
     raise ValueError(f"Unsupported operation/model combination: {operation}/{model}")
@@ -420,16 +465,9 @@ async def execute(envelope_data: dict[str, Any], celery_task_id: str) -> None:
             except Exception:
                 result["metadata"]["accelerator_memory_mb"] = None
             _aggregate_batch(result, [asset.filename for asset in envelope.audio])
-            if envelope.operation.value == "embedding" and len(items) > 1:
-                from app.services.model_loader_service import reduce_dimensions
-
-                embeddings = [item["result"] for item in items]
-                result["projection"] = _jsonable(
-                    reduce_dimensions(
-                        embeddings,
-                        method=envelope.parameters.get("reduction", "pca"),
-                        n_components=int(envelope.parameters.get("n_components", 2)),
-                    )
+            if envelope.operation.value == "embedding":
+                _attach_embedding_analysis(
+                    result, [item["result"] for item in items], envelope.parameters
                 )
 
             if cacheable:
@@ -581,13 +619,9 @@ async def finalize_batch(
     }
     _aggregate_batch(result, [item["filename"] for item in ordered])
     if envelope.operation.value == "embedding":
-        from app.services.model_loader_service import reduce_dimensions
-
-        result["projection"] = _jsonable(reduce_dimensions(
-            [item["result"] for item in ordered],
-            method=envelope.parameters.get("reduction", "pca"),
-            n_components=int(envelope.parameters.get("n_components", 2)),
-        ))
+        _attach_embedding_analysis(
+            result, [item["result"] for item in ordered], envelope.parameters
+        )
     storage = get_storage()
     cache_digest = analysis_cache_key(envelope)
     cache_result_key = f"cache/{cache_digest}/result.json"

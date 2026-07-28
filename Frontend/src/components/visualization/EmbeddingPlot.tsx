@@ -6,6 +6,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ZoomIn, ZoomOut, RotateCcw, Layers3, Target } from "lucide-react";
+import { clusterColor, clusterName, clusterSymbol, NOISE_LABEL } from "@/lib/clusterPalette";
+
+export type EmbeddingColorMode = 'default' | 'cluster';
 
 interface EmbeddingPlotProps {
   selectedMethod?: string;
@@ -15,6 +18,7 @@ interface EmbeddingPlotProps {
   selectedFile?: string | null;
   selectionMode?: 'box' | 'lasso';
   onSelectionChange?: (selectedFiles: string[]) => void;
+  colorMode?: EmbeddingColorMode;
 }
 
 type PlaneType = 'none' | 'xy' | 'xz' | 'yz';
@@ -28,9 +32,10 @@ interface EmbeddingPlotContentProps {
   selectedFile?: string | null;
   selectionMode?: 'box' | 'lasso';
   onSelectionChange?: (selectedFiles: string[]) => void;
+  colorMode?: EmbeddingColorMode;
 }
 
-const EmbeddingPlotContent = ({ selectedMethod, is3D, onPointSelect, onAngleRangeSelect, selectedFile, selectionMode = 'box', onSelectionChange }: EmbeddingPlotContentProps) => {
+const EmbeddingPlotContent = ({ selectedMethod, is3D, onPointSelect, onAngleRangeSelect, selectedFile, selectionMode = 'box', onSelectionChange, colorMode = 'default' }: EmbeddingPlotContentProps) => {
   const { embeddingData, isLoading, error } = useEmbedding();
   const plotRef = useRef<any>(null);
   const [selectedPlane, setSelectedPlane] = useState<PlaneType>('none');
@@ -372,7 +377,54 @@ const EmbeddingPlotContent = ({ selectedMethod, is3D, onPointSelect, onAngleRang
     traceData.hovertemplate = '%{text}<extra></extra>';
   }
 
-  traces.push(traceData);
+  // Cluster view: one trace per cluster, so Plotly renders a clickable legend and
+  // each cluster can be isolated or hidden. Identity is carried by hue AND marker
+  // symbol together -- the palette's colour-blindness margin in this size range is
+  // only safe with that second channel.
+  const clusterMap = embeddingData?.clusterByFilename;
+  const showClusters = colorMode === 'cluster' && !!clusterMap;
+
+  if (showClusters) {
+    const labelsPresent = Array.from(new Set(text.map((filename) => clusterMap[filename] ?? NOISE_LABEL)));
+    // Noise last so it is drawn underneath the real clusters and reads as background.
+    labelsPresent.sort((a, b) => (a === NOISE_LABEL ? 1 : b === NOISE_LABEL ? -1 : a - b));
+
+    for (const label of labelsPresent) {
+      const indices = text
+        .map((filename, index) => ({ filename, index }))
+        .filter(({ filename }) => (clusterMap[filename] ?? NOISE_LABEL) === label)
+        .map(({ index }) => index);
+      if (indices.length === 0) continue;
+
+      const isNoise = label === NOISE_LABEL;
+      const clusterTrace: any = {
+        x: indices.map((i) => x[i]),
+        y: indices.map((i) => y[i]),
+        mode: 'markers',
+        type: is3D ? 'scatter3d' : 'scatter',
+        name: `${clusterName(label)} (${indices.length})`,
+        marker: {
+          // Keep the selected-file highlight visible on top of cluster colouring.
+          size: indices.map((i) => (selectedFile === text[i] ? 12 : isNoise ? 5 : 7)),
+          color: indices.map((i) =>
+            selectedFile === text[i] ? '#FFD700' : clusterColor(label, false),
+          ),
+          symbol: clusterSymbol(label),
+          opacity: isNoise ? 0.55 : 0.85,
+          line: { width: 0, color: 'transparent' },
+          showscale: false,
+        },
+        text: indices.map((i) => `<b>${text[i]}</b><br>${clusterName(label)}`),
+        customdata: indices.map((i) => [text[i], String(label)]),
+        hovertemplate: '%{text}<extra></extra>',
+        showlegend: true,
+      };
+      if (is3D && z) clusterTrace.z = indices.map((i) => z[i]);
+      traces.push(clusterTrace);
+    }
+  } else {
+    traces.push(traceData);
+  }
 
   // Add origin point (0,0,0) highlight for 3D plots or (0,0) for 2D plots
   const originTrace: any = {
@@ -416,7 +468,17 @@ const EmbeddingPlotContent = ({ selectedMethod, is3D, onPointSelect, onAngleRang
     margin: { l: 35, r: 35, t: 35, b: 35 },
     plot_bgcolor: 'white',
     paper_bgcolor: 'white',
-    showlegend: false,
+    // The cluster legend is the identity key -- without it colour alone would have
+    // to carry which group is which.
+    showlegend: showClusters,
+    legend: {
+      font: { size: 9 },
+      orientation: 'h',
+      yanchor: 'bottom',
+      y: -0.18,
+      x: 0,
+      bgcolor: 'rgba(255,255,255,0.85)',
+    },
     font: {
       size: 11,
       color: '#374151'
@@ -615,7 +677,7 @@ const EmbeddingPlotContent = ({ selectedMethod, is3D, onPointSelect, onAngleRang
   );
 };
 
-export const EmbeddingPlot = ({ selectedMethod = "pca", is3D = false, onPointSelect, onAngleRangeSelect, selectedFile, selectionMode = 'box', onSelectionChange }: EmbeddingPlotProps) => {
+export const EmbeddingPlot = ({ selectedMethod = "pca", is3D = false, onPointSelect, onAngleRangeSelect, selectedFile, selectionMode = 'box', onSelectionChange, colorMode = 'default' }: EmbeddingPlotProps) => {
   return (
     <div className="w-full h-full min-h-0 relative">
       <EmbeddingPlotContent
@@ -626,6 +688,7 @@ export const EmbeddingPlot = ({ selectedMethod = "pca", is3D = false, onPointSel
         selectedFile={selectedFile}
         selectionMode={selectionMode}
         onSelectionChange={onSelectionChange}
+        colorMode={colorMode}
       />
     </div>
   );

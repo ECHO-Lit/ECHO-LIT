@@ -19,8 +19,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libsndfile1 && \
+# gcc is a runtime requirement, not a build-time one: Triton (shipped with torch)
+# JIT-compiles CUDA/ROCm kernels on first use and shells out to a host C compiler
+# to build the launcher stub. The nvidia/cuda *runtime* base has no toolchain, so
+# without this any Triton-backed op fails with "Failed to find C compiler".
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libsndfile1 gcc && \
     rm -rf /var/lib/apt/lists/*
+
+# Triton checks $CC first, then searches for cc/gcc/clang on PATH.
+ENV CC=gcc
 
 RUN useradd -m -u 1000 appuser && \
     mkdir -p /home/appuser/.cache/huggingface && \

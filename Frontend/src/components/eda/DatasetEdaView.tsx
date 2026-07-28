@@ -6,13 +6,17 @@ import { HelpCircle, RefreshCw, BarChart3, Download, AlertTriangle } from "lucid
 import { API_BASE } from "@/lib/api";
 import { materializeAudio, runJob } from "@/lib/jobs";
 import { EDA_CHART_EXPLANATIONS, getFeatureExplanation } from "@/lib/audioFeatures";
-import { correlationMatrix, topCorrelatedPairs, quartiles, zScores, bucketize, type Quartiles } from "@/lib/edaStats";
+import { correlationMatrix, topCorrelatedPairs, quartiles, zScores, bucketize, recomputeHistogram, type Quartiles } from "@/lib/edaStats";
 import { exportAcousticFeaturesCsv, exportEdaJson } from "@/lib/edaExport";
+import { readEdaCache, writeEdaCache } from "@/lib/edaCache";
 import { SummaryTiles } from "./SummaryTiles";
 import { HistogramChart } from "./HistogramChart";
 import { ClassBalanceBar } from "./ClassBalanceBar";
 import { BoxPlotChart } from "./BoxPlotChart";
 import { CorrelationHeatmap } from "./CorrelationHeatmap";
+import { ChartCard } from "./ChartCard";
+import { ClusteringSection } from "./ClusteringSection";
+import { NearestNeighborsPanel } from "./NearestNeighborsPanel";
 
 interface MetadataEda {
   dataset: string;
@@ -39,51 +43,39 @@ interface AcousticEda {
   cache_info?: { cached_count: number; missing_count: number; cache_hit_rate: number };
 }
 
-interface ChartCardProps {
-  title: string;
-  explanation?: string;
-  children: React.ReactNode;
-  // "y" = drag-resize taller only (default); "both" = also widen, for the
-  // correlation matrix which needs more room to fit legible labels.
-  resize?: "y" | "both";
-}
-
-const ChartCard = ({ title, explanation, children, resize = "y" }: ChartCardProps) => (
-  <div className="border border-border rounded-lg bg-card p-2">
-    <div className="flex items-center gap-1.5 mb-1 px-1">
-      <span className="text-xs font-medium text-foreground">{title}</span>
-      {explanation && (
-        <Tooltip>
-          <TooltipTrigger>
-            <HelpCircle className="h-3 w-3 text-muted-foreground" />
-          </TooltipTrigger>
-          <TooltipContent className="max-w-xs text-xs">{explanation}</TooltipContent>
-        </Tooltip>
-      )}
-    </div>
-    <div
-      className={`h-56 min-h-[10rem] max-h-[36rem] overflow-hidden ${resize === "both" ? "resize max-w-full" : "resize-y"}`}
-    >
-      {children}
-    </div>
-  </div>
-);
-
 interface DatasetEdaViewProps {
   dataset: string;
   availableFiles: string[];
+  // Drives the nearest-neighbour panel.
+  selectedFile?: string | null;
   // Jump the player to a file (reuses the same chain the embedding scatter uses).
   onFileSelect?: (filename: string) => void;
-  // Filenames to constrain the file table to, or null to clear. Fired when a
-  // chart bucket is clicked.
-  onFilterChange?: (filenames: string[] | null) => void;
+  // Toggle the file-table filter. Owned by EmbeddingPanel so this tab and the
+  // Embeddings tab's cluster table share one active filter.
+  onBucketClick: (key: string, filenames: string[]) => void;
+  activeFilterKey: string | null;
 }
 
 const CORRELATION_FEATURE_LIMIT = 8;
 const OUTLIER_Z_THRESHOLD = 3;
 const OUTLIER_LIST_LIMIT = 10;
+// Datasets with a server-side metadata EDA endpoint, i.e. those that can be compared.
+const COMPARABLE_DATASETS = ["common-voice", "ravdess"];
 
-export const DatasetEdaView = ({ dataset, availableFiles, onFileSelect, onFilterChange }: DatasetEdaViewProps) => {
+async function fetchEdaFor(dataset: string, signal?: AbortSignal): Promise<MetadataEda> {
+  const res = await fetch(`${API_BASE}/${dataset}/eda`, { credentials: "include", signal });
+  if (!res.ok) throw new Error(`Failed to fetch EDA: ${res.status}`);
+  return (await res.json()) as MetadataEda;
+}
+
+export const DatasetEdaView = ({
+  dataset,
+  availableFiles,
+  selectedFile,
+  onFileSelect,
+  onBucketClick: handleBucketClick,
+  activeFilterKey,
+}: DatasetEdaViewProps) => {
   const [metadataEda, setMetadataEda] = useState<MetadataEda | null>(null);
   const [isLoadingMetadata, setIsLoadingMetadata] = useState(false);
   const [metadataError, setMetadataError] = useState<string | null>(null);
@@ -92,24 +84,32 @@ export const DatasetEdaView = ({ dataset, availableFiles, onFileSelect, onFilter
   const [isLoadingAcoustics, setIsLoadingAcoustics] = useState(false);
   const [acousticsError, setAcousticsError] = useState<string | null>(null);
   const [acousticsProgress, setAcousticsProgress] = useState<{ current: number; total: number } | null>(null);
+  // True when the acoustics on screen came from sessionStorage rather than a fresh
+  // run — surfaced as a badge so the numbers are never mistaken for a new result.
+  const [acousticsFromCache, setAcousticsFromCache] = useState(false);
 
-  // Which bucket (if any) is currently driving the file-table filter, e.g.
-  // "class:happy", "duration", "feature:rms_energy_mean". Clicking the same
-  // bucket again clears the filter.
-  const [activeFilterKey, setActiveFilterKey] = useState<string | null>(null);
+  // Optional second dataset overlaid on the metadata charts.
+  const [compareDataset, setCompareDataset] = useState<string>("");
+  const [compareEda, setCompareEda] = useState<MetadataEda | null>(null);
+  const [compareError, setCompareError] = useState<string | null>(null);
 
   const fetchMetadataEda = useCallback(async (signal?: AbortSignal) => {
     if (!dataset || dataset === "custom") {
       setMetadataEda(null);
       return;
     }
-    setIsLoadingMetadata(true);
+    // Radix unmounts the inactive tab, so this view remounts every time the user
+    // comes back. Paint the cached result immediately and only show the loading
+    // banner on a genuinely cold load; the refetch below still runs and replaces
+    // it, so nothing goes stale.
+    const cached = readEdaCache<MetadataEda>("metadata", dataset, []);
+    if (cached) setMetadataEda(cached);
+    setIsLoadingMetadata(!cached);
     setMetadataError(null);
     try {
-      const res = await fetch(`${API_BASE}/${dataset}/eda`, { credentials: "include", signal });
-      if (!res.ok) throw new Error(`Failed to fetch EDA: ${res.status}`);
-      const data: MetadataEda = await res.json();
-      setMetadataEda(data);
+      const fresh = await fetchEdaFor(dataset, signal);
+      setMetadataEda(fresh);
+      writeEdaCache("metadata", dataset, [], fresh);
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
       setMetadataError(err instanceof Error ? err.message : "Unknown error");
@@ -122,15 +122,52 @@ export const DatasetEdaView = ({ dataset, availableFiles, onFileSelect, onFilter
   useEffect(() => {
     const ac = new AbortController();
     fetchMetadataEda(ac.signal);
-    // Acoustic EDA and any active chart filter are dataset-scoped — clear
-    // both on dataset change rather than silently showing stale state.
-    setAcousticEda(null);
+    // Acoustic EDA is dataset-scoped — drop it rather than silently showing stale
+    // state. A cached result for this exact dataset + file list is restored
+    // instead of recomputed. (The chart filter is reset by EmbeddingPanel, which
+    // owns it.)
+    const cached = readEdaCache<AcousticEda>("acoustic", dataset, availableFiles);
+    setAcousticEda(cached);
+    setAcousticsFromCache(Boolean(cached));
     setAcousticsError(null);
-    setActiveFilterKey(null);
-    onFilterChange?.(null);
     return () => ac.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dataset, fetchMetadataEda]);
+  }, [dataset, fetchMetadataEda, availableFiles]);
+
+  // Fetch (or clear) the comparison dataset's metadata EDA.
+  useEffect(() => {
+    if (!compareDataset) {
+      setCompareEda(null);
+      setCompareError(null);
+      return;
+    }
+    const ac = new AbortController();
+    fetchEdaFor(compareDataset, ac.signal)
+      .then((data) => {
+        setCompareEda(data);
+        setCompareError(null);
+      })
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setCompareError(err instanceof Error ? err.message : "Unknown error");
+        setCompareEda(null);
+      });
+    return () => ac.abort();
+  }, [compareDataset]);
+
+  // Clear the comparison when the primary dataset becomes the compared one.
+  useEffect(() => {
+    if (compareDataset === dataset) setCompareDataset("");
+  }, [dataset, compareDataset]);
+
+  // Re-bin the comparison durations onto the primary dataset's edges so the two
+  // series sit on one shared axis.
+  const compareDurationHistogram = useMemo(() => {
+    if (!compareEda || !metadataEda?.duration_histogram.bins.length) return null;
+    const values = Object.values(compareEda.durations_by_file ?? {});
+    if (values.length === 0) return null;
+    return recomputeHistogram(values, metadataEda.duration_histogram.bins);
+  }, [compareEda, metadataEda]);
 
   const handleComputeAcoustics = async () => {
     if (availableFiles.length === 0) return;
@@ -144,6 +181,8 @@ export const DatasetEdaView = ({ dataset, availableFiles, onFileSelect, onFilter
         { onProgress: (status) => setAcousticsProgress({ current: status.progress?.current ?? 0, total: availableFiles.length }) },
       );
       setAcousticEda(analysis);
+      setAcousticsFromCache(false);
+      writeEdaCache("acoustic", dataset, availableFiles, analysis);
     } catch (err) {
       setAcousticsError(err instanceof Error ? err.message : "Unknown error");
       setAcousticEda(null);
@@ -152,18 +191,6 @@ export const DatasetEdaView = ({ dataset, availableFiles, onFileSelect, onFilter
       setAcousticsProgress(null);
     }
   };
-
-  // Toggle a chart-bucket filter: clicking the same bucket twice clears it.
-  const handleBucketClick = useCallback((key: string, filenames: string[]) => {
-    setActiveFilterKey((prev) => {
-      if (prev === key) {
-        onFilterChange?.(null);
-        return null;
-      }
-      onFilterChange?.(filenames);
-      return key;
-    });
-  }, [onFilterChange]);
 
   const featureKeys = useMemo(
     () => (acousticEda ? Object.keys(acousticEda.aggregate_statistics) : []),
@@ -272,6 +299,43 @@ export const DatasetEdaView = ({ dataset, availableFiles, onFileSelect, onFilter
         </div>
       ) : (
         <div className="space-y-3">
+          {/* Compare against a second dataset. Metadata only — acoustics and
+              clusters would each need their own job per dataset. */}
+          <div className="flex items-center gap-1.5 px-1">
+            <span className="text-[10px] text-muted-foreground">Compare with</span>
+            <select
+              value={compareDataset}
+              onChange={(event) => setCompareDataset(event.target.value)}
+              className="h-6 text-[10px] bg-background border border-border rounded px-1 flex-1 min-w-0"
+              aria-label="Comparison dataset"
+            >
+              <option value="">None</option>
+              {COMPARABLE_DATASETS.filter((name) => name !== dataset).map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+            <Tooltip>
+              <TooltipTrigger>
+                <HelpCircle className="h-3 w-3 text-muted-foreground" />
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs text-xs">
+                {EDA_CHART_EXPLANATIONS.dataset_comparison}
+              </TooltipContent>
+            </Tooltip>
+          </div>
+          {compareError && (
+            <div className="text-xs text-destructive p-2 bg-destructive/5 rounded-sm border border-destructive/20">
+              Comparison dataset failed to load: {compareError}
+            </div>
+          )}
+          {compareEda && (
+            <div className="text-[10px] text-muted-foreground px-1">
+              Chart filtering is disabled while comparing — the file table only holds {dataset}.
+            </div>
+          )}
+
           <SummaryTiles
             totalFiles={metadataEda.summary.total_files}
             totalHours={metadataEda.summary.total_hours}
@@ -280,13 +344,35 @@ export const DatasetEdaView = ({ dataset, availableFiles, onFileSelect, onFilter
             numClasses={metadataEda.summary.num_classes}
           />
 
-          <ChartCard title="Duration distribution" explanation={EDA_CHART_EXPLANATIONS.duration_histogram}>
+          {compareEda && (
+            <div className="text-[10px] text-muted-foreground px-1 grid grid-cols-2 gap-x-2 gap-y-0.5">
+              <span className="col-span-2 font-medium text-foreground">{compareDataset}</span>
+              <span>{compareEda.summary.total_files} files</span>
+              <span>{compareEda.summary.total_hours} h</span>
+              <span>mean {compareEda.summary.mean_duration}s</span>
+              <span>{compareEda.summary.num_classes} classes</span>
+            </div>
+          )}
+
+          <ChartCard
+            title={compareEda ? `Duration distribution — ${dataset} vs ${compareDataset}` : "Duration distribution"}
+            explanation={compareEda ? EDA_CHART_EXPLANATIONS.dataset_comparison : EDA_CHART_EXPLANATIONS.duration_histogram}
+          >
             <HistogramChart
               bins={metadataEda.duration_histogram.bins}
               histogram={metadataEda.duration_histogram.histogram}
-              label="Duration (s)"
-              customdata={durationBuckets ?? undefined}
-              onBarClick={durationBuckets ? (filenames) => handleBucketClick("duration", filenames) : undefined}
+              label={compareEda ? dataset : "Duration (s)"}
+              customdata={compareEda ? undefined : durationBuckets ?? undefined}
+              onBarClick={
+                !compareEda && durationBuckets
+                  ? (filenames) => handleBucketClick("duration", filenames)
+                  : undefined
+              }
+              series2={
+                compareDurationHistogram
+                  ? { histogram: compareDurationHistogram, label: compareDataset }
+                  : undefined
+              }
             />
           </ChartCard>
 
@@ -295,7 +381,18 @@ export const DatasetEdaView = ({ dataset, availableFiles, onFileSelect, onFilter
               <ClassBalanceBar
                 counts={metadataEda.class_balance}
                 filenamesByClass={classFilenames ?? undefined}
-                onBarClick={classFilenames ? (className, filenames) => handleBucketClick(`class:${className}`, filenames) : undefined}
+                onBarClick={
+                  !compareEda && classFilenames
+                    ? (className, filenames) => handleBucketClick(`class:${className}`, filenames)
+                    : undefined
+                }
+                counts2={
+                  compareEda && Object.keys(compareEda.class_balance).length > 0
+                    ? compareEda.class_balance
+                    : undefined
+                }
+                label={dataset}
+                label2={compareDataset}
               />
             </ChartCard>
           )}
@@ -311,6 +408,14 @@ export const DatasetEdaView = ({ dataset, availableFiles, onFileSelect, onFilter
           )}
         </div>
       )}
+
+      {/* Clusters vs ground-truth labels. The silhouette score, cluster table and
+          noise list live beside the scatter in the Embeddings tab. */}
+      <ClusteringSection labelsByFile={metadataEda?.labels_by_file} />
+
+      <div className="border-t border-border pt-3">
+        <NearestNeighborsPanel selectedFile={selectedFile ?? null} onFileSelect={onFileSelect} />
+      </div>
 
       {/* Acoustic EDA */}
       <div className="border-t border-border pt-3 space-y-3">
@@ -399,6 +504,16 @@ export const DatasetEdaView = ({ dataset, availableFiles, onFileSelect, onFilter
                 <Badge variant="outline" className="text-[10px] bg-primary/5">
                   {acousticEda.cache_info.cached_count}/{acousticEda.cache_info.cached_count + acousticEda.cache_info.missing_count} cached
                 </Badge>
+              )}
+              {acousticsFromCache && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Badge variant="outline" className="text-[10px] bg-muted">restored</Badge>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-xs text-xs">
+                    Loaded from this session's earlier run for the same files. Click "Compute acoustics" to recompute.
+                  </TooltipContent>
+                </Tooltip>
               )}
             </div>
 

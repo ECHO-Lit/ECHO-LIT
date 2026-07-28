@@ -38,6 +38,34 @@ export function exportAcousticFeaturesCsv(acousticEda: AcousticEdaForExport, dat
   downloadBlob([header, ...rows].join("\n"), `${dataset}-acoustic-features.csv`, "text/csv;charset=utf-8");
 }
 
+interface ClusteringForExport {
+  labels: number[];
+  probabilities: number[];
+  silhouette_samples: Array<number | null>;
+}
+
+export function exportClustersCsv(
+  clustering: ClusteringForExport,
+  filenames: string[],
+  dataset: string,
+): void {
+  if (!clustering.labels?.length) return;
+
+  const header = ["filename", "cluster", "silhouette", "membership_probability"].join(",");
+  const rows = clustering.labels.map((label, index) =>
+    [
+      filenames[index] ?? "",
+      label,
+      clustering.silhouette_samples?.[index] ?? "",
+      clustering.probabilities?.[index] ?? "",
+    ]
+      .map(csvEscape)
+      .join(","),
+  );
+
+  downloadBlob([header, ...rows].join("\n"), `${dataset}-clusters.csv`, "text/csv;charset=utf-8");
+}
+
 export function exportEdaJson(payload: unknown, dataset: string): void {
   downloadBlob(JSON.stringify(payload, null, 2), `${dataset}-eda-report.json`, "application/json");
 }

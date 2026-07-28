@@ -13,6 +13,14 @@ class Settings(BaseSettings):
     COOKIE_SAMESITE: str = "lax"  # use "none" on cross-site + https
     COOKIE_DOMAIN: str | None = None
     ML_DEVICE: str = "auto"
+    # Run eager-attention extraction on the CPU regardless of ML_DEVICE.
+    # `output_attentions=True` forces transformers onto its eager attention path,
+    # whose manual bmm torch dispatches to a Triton kernel; that kernel segfaults
+    # the worker during JIT compilation on some torch/Triton builds. Triton is
+    # GPU-only, so running this one model on the CPU avoids it. Prediction and
+    # embedding are unaffected -- they use fused SDPA and stay on the GPU.
+    # Set to false to retest the GPU path after a torch/Triton upgrade.
+    ATTENTION_FORCE_CPU: bool = True
     ENABLE_LEGACY_SYNC_INFERENCE: bool = False
 
     STORAGE_BACKEND: str = "local"

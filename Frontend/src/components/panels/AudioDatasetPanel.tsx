@@ -71,6 +71,10 @@ export const AudioDatasetPanel = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [datasetMetadata, setDatasetMetadata] = useState<Record<string, string | number>[]>([]);
+  // Which dataset `datasetMetadata` was fetched for. The batch-inference effect
+  // below is declared BEFORE the metadata-fetch effect, so on a dataset change it
+  // runs first and would otherwise see the previous dataset's rows.
+  const [metadataDataset, setMetadataDataset] = useState<string>("");
   // Use external predictionMap from parent
   const predictionMap = externalPredictionMap || {};
   const [inferenceStatus, setInferenceStatus] = useState<Record<string, 'idle' | 'loading' | 'done' | 'error'>>({});
@@ -193,8 +197,11 @@ export const AudioDatasetPanel = ({
     // Skip batch inference for legacy "custom" (uploaded files) but allow for custom datasets
     if (dataset === "custom" || !model) return;
     if (datasetMetadata.length === 0) return;
-    
+
     const datasetToUse = originalDataset || dataset;
+    // Rows still belong to the dataset we just navigated away from. Materialising
+    // them against the new dataset 404s on every file, so wait for the refetch.
+    if (metadataDataset !== datasetToUse) return;
     const modelDatasetKey = `${model}-${datasetToUse}`;
     
     // If we've already completed inference for this model+dataset combination, don't restart
@@ -294,7 +301,7 @@ export const AudioDatasetPanel = ({
     };
 
     runBatchInference();
-  }, [model, dataset, originalDataset, datasetMetadata, onBatchInferenceStart, onBatchInferenceComplete]);
+  }, [model, dataset, originalDataset, datasetMetadata, metadataDataset, onBatchInferenceStart, onBatchInferenceComplete]);
 
   // Cleanup on unmount or when dataset changes
   // Reload function to refresh dataset metadata
@@ -313,6 +320,7 @@ export const AudioDatasetPanel = ({
       if (Array.isArray(data)) {
         const rows = data as Record<string, string | number>[];
         setDatasetMetadata(rows);
+        setMetadataDataset(datasetToUse);
         onDatasetMetadataChange?.(rows);
 
         // Extract filenames for embeddings
@@ -365,6 +373,15 @@ export const AudioDatasetPanel = ({
       return;
     }
     
+    // Drop the previous dataset's rows BEFORE awaiting the new ones. The batch
+    // inference effect below depends on [dataset, datasetMetadata] and fires as
+    // soon as `dataset` changes; if the old rows are still here it materialises
+    // the previous dataset's filenames against the new dataset and every request
+    // 404s until this fetch resolves.
+    setDatasetMetadata([]);
+    onDatasetMetadataChange?.([]);
+    onAvailableFilesChange?.([]);
+
     const ac = new AbortController();
     (async () => {
       try {
@@ -374,6 +391,7 @@ export const AudioDatasetPanel = ({
         if (Array.isArray(data)) {
           const rows = data as Record<string, string | number>[];
           setDatasetMetadata(rows);
+          setMetadataDataset(datasetToUse);
           onDatasetMetadataChange?.(rows);
 
           // Extract filenames for embeddings

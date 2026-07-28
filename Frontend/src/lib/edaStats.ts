@@ -110,6 +110,26 @@ export function zScores(
   return outliers.sort((a, b) => Math.abs(b.z) - Math.abs(a.z));
 }
 
+/**
+ * Bin raw values onto an existing set of edges.
+ *
+ * Used to put a comparison dataset on the *same* axis as the primary one. Two
+ * histograms computed with their own edges cannot be read against each other, so
+ * overlaying them without this would be misleading rather than merely imprecise.
+ * Values outside the edge range are dropped, so the caller should say so when the
+ * two datasets have very different ranges.
+ */
+export function recomputeHistogram(values: number[], edges: number[]): number[] {
+  if (edges.length < 2) return [];
+  const counts = new Array(edges.length - 1).fill(0);
+  for (const value of values) {
+    if (value < edges[0]) continue;
+    const index = bucketize(value, edges);
+    if (index >= 0) counts[index] += 1;
+  }
+  return counts;
+}
+
 // Index of the histogram bin `value` falls into, given numpy.histogram-style
 // bin edges (n+1 edges for n bins). Values at the max edge land in the last bin.
 export function bucketize(value: number, edges: number[]): number {

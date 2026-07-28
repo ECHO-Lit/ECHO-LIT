@@ -3,6 +3,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Response
 from fastapi.responses import JSONResponse
 
 from .api.routes import (
@@ -62,7 +63,19 @@ async def legacy_api_gate(request: Request, call_next):
             allowed_roots = [Path("uploads").resolve(), Path("data").resolve()]
             if not any(candidate == root or root in candidate.parents for root in allowed_roots):
                 return JSONResponse(status_code=400, content={"detail": "Legacy file path is outside approved roots"})
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except RuntimeError as exc:
+        # BaseHTTPMiddleware raises this when the client goes away mid-request:
+        # the inner app never sends a response, so there is nothing to return.
+        # The browser cancels requests routinely (switching dataset aborts the
+        # in-flight metadata/materialize calls), and each one logged a full
+        # traceback. Only swallow it when the client really did disconnect --
+        # anything else is a genuine bug and must still surface.
+        if str(exc) == "No response returned." and await request.is_disconnected():
+            # 499 (client closed request); nothing is left to receive it.
+            return Response(status_code=499)
+        raise
     if legacy_sync_enabled and request.url.path.startswith(LEGACY_PREFIXES):
         response.headers["Deprecation"] = "true"
         response.headers["Sunset"] = "one release after the /jobs migration"
