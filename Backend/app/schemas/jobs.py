@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.core.model_catalog import MODEL_DEFINITIONS, is_supported_model
+
 
 class JobOperation(str, Enum):
     prediction = "prediction"
@@ -25,7 +27,7 @@ class JobStatus(str, Enum):
     cancelled = "cancelled"
 
 
-SUPPORTED_MODELS = {"whisper-base", "whisper-large", "wav2vec2"}
+SUPPORTED_MODELS = set(MODEL_DEFINITIONS)
 MODEL_REQUIRED_OPERATIONS = {
     JobOperation.prediction,
     JobOperation.saliency,
@@ -94,12 +96,12 @@ class JobCreateRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_operation(self) -> "JobCreateRequest":
-        if self.operation in MODEL_REQUIRED_OPERATIONS and self.model not in SUPPORTED_MODELS:
+        if self.operation in MODEL_REQUIRED_OPERATIONS and not is_supported_model(self.model):
             raise ValueError(f"model must be one of: {', '.join(sorted(SUPPORTED_MODELS))}")
         if self.operation in SINGLE_AUDIO_OPERATIONS and len(self.audio_ids) != 1:
             raise ValueError(f"{self.operation.value} requires exactly one audio_id")
-        if self.operation == JobOperation.attention and not (self.model or "").startswith("whisper"):
-            raise ValueError("attention currently supports Whisper models only")
+        if self.operation in MODEL_REQUIRED_OPERATIONS and self.model and not MODEL_DEFINITIONS[self.model].supports(self.operation.value):
+            raise ValueError(f"{self.model} does not support {self.operation.value}")
         if self.operation not in MODEL_REQUIRED_OPERATIONS and self.model is not None:
             raise ValueError(f"{self.operation.value} does not accept a model")
         parameter_model = PARAMETER_MODELS[self.operation].model_validate(self.parameters)

@@ -145,6 +145,19 @@ def test_job_contract_rejects_invalid_combinations():
         )
 
 
+def test_model_adapters_expose_architecture_capabilities():
+    from app.worker.model_adapters import get_model_adapter
+
+    whisper = get_model_adapter("whisper-base")
+    classifier = get_model_adapter("wav2vec2")
+
+    assert whisper.supports("attention")
+    assert whisper.supports("decoder_activations")
+    assert classifier.supports("embedding")
+    assert not classifier.supports("attention")
+    assert not classifier.supports("decoder_activations")
+
+
 def test_queue_routing_matches_worker_classes():
     from app.core.celery_app import queue_for
 

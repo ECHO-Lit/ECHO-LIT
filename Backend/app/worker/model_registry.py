@@ -6,6 +6,8 @@ import os
 import time
 from typing import Any
 
+from app.worker.model_adapters import get_model_adapter
+
 
 @dataclass
 class RegistryEntry:
@@ -26,22 +28,9 @@ class ModelRegistry:
         from app.core.device import INFERENCE_DEVICE
         from app.services import model_loader_service as models
 
-        revision = {
-            "whisper-base": "openai/whisper-base",
-            "whisper-large": "openai/whisper-large-v3",
-            "wav2vec2": "r-f/wav2vec-english-speech-emotion-recognition",
-        }[model]
-        if model == "wav2vec2":
-            variant = "eager"
-        elif purpose == "attention":
-            variant = "eager-attention"
-        elif purpose == "saliency":
-            variant = "gradient"
-        elif purpose == "embedding":
-            variant = "encoder"
-        else:
-            variant = "generation"
-        key = (model, variant, revision, str(INFERENCE_DEVICE))
+        adapter = get_model_adapter(model)
+        variant = adapter.resource_variant(purpose)
+        key = (adapter.model_id, variant, adapter.revision, str(INFERENCE_DEVICE))
         now = time.monotonic()
         self.evict_idle(now)
         if key in self._entries:
@@ -50,20 +39,7 @@ class ModelRegistry:
             self._entries[key] = entry
             return entry.resource
 
-        if model == "wav2vec2":
-            resource = models.get_emotion_models()
-        elif variant == "encoder":
-            resource = (
-                models.get_whisper_large_models()
-                if model == "whisper-large"
-                else models.get_whisper_base_models()
-            )
-        elif variant == "gradient":
-            resource = models.get_whisper_saliency_models(revision)
-        elif variant == "eager-attention":
-            resource = models.get_whisper_attention_models(revision)
-        else:
-            resource = models.get_whisper_gen_model(revision)
+        resource = adapter.load_resource(variant)
         self._entries[key] = RegistryEntry(key=key, resource=resource, last_used=now)
         while len(self._entries) > self.max_entries:
             old_key, _ = self._entries.popitem(last=False)

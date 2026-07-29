@@ -11,6 +11,7 @@ from typing import Any
 import uuid
 
 from app.core import redis as redis_module
+from app.core.model_catalog import MODEL_REVISIONS
 from app.core.settings import settings
 from app.core.storage import ObjectStorage, get_storage
 from app.core.storage import StorageError
@@ -20,11 +21,6 @@ from app.repositories.jobs import JobRepository
 from app.schemas.jobs import AudioAsset, JobError, JobProgress, JobStatus, TaskEnvelope
 
 
-MODEL_REVISIONS = {
-    "whisper-base": "openai/whisper-base",
-    "whisper-large": "openai/whisper-large-v3",
-    "wav2vec2": "r-f/wav2vec-english-speech-emotion-recognition",
-}
 logger = logging.getLogger(__name__)
 
 
@@ -247,64 +243,23 @@ def _execute_one(
     audio_path: Path,
     parameters: dict[str, Any],
 ) -> Any:
-    if model:
-        from app.worker.model_registry import model_registry
-
-        model_registry.prepare(model, operation)
-    if operation == "prediction":
-        from app.services.model_loader_service import (
-            predict_emotion_wave2vec,
-            transcribe_whisper_base,
-            transcribe_whisper_large,
-        )
-
-        if model == "whisper-base":
-            return transcribe_whisper_base(str(audio_path))
-        if model == "whisper-large":
-            return transcribe_whisper_large(str(audio_path))
-        if model == "wav2vec2":
-            return predict_emotion_wave2vec(str(audio_path))
-    elif operation == "saliency":
-        from app.services.saliency_service import generate_saliency
-
-        return generate_saliency(
-            str(audio_path), model or "", parameters.get("method", "gradcam")
-        )
-    elif operation == "attention":
-        from app.services.model_loader_service import extract_whisper_attention_pairs
-
-        result = extract_whisper_attention_pairs(
-            str(audio_path),
-            model_size="large" if model == "whisper-large" else "base",
-            layer_idx=int(parameters.get("layer_idx", 6)),
-            head_idx=int(parameters.get("head_idx", 0)),
-        )
-        # The extractor catches its own exceptions and reports them in-band. Without
-        # this the job would be marked successful with empty attention data — and
-        # that empty payload would be written to the per-file cache, so the failure
-        # would survive a fix to its root cause.
-        if result.get("error"):
-            raise RuntimeError(f"Attention extraction failed: {result['error']}")
-        return result
-    elif operation == "embedding":
-        from app.services.model_loader_service import (
-            extract_wav2vec2_embeddings,
-            extract_whisper_embeddings,
-        )
-
-        if model == "wav2vec2":
-            return extract_wav2vec2_embeddings(str(audio_path))
-        return extract_whisper_embeddings(
-            str(audio_path), "large" if model == "whisper-large" else "base"
-        )
-    elif operation == "audio_features":
+    if operation == "audio_features":
         # Import the librosa-only module directly, NOT via model_loader_service --
         # that would pull torch/transformers/umap into the forked CPU worker and
         # reintroduce the OpenMP/LLVM clash that segfaults it.
         from app.services.audio_features_service import extract_audio_frequency_features
 
         return extract_audio_frequency_features(str(audio_path))
-    raise ValueError(f"Unsupported operation/model combination: {operation}/{model}")
+    if not model:
+        raise ValueError(f"{operation} requires a model")
+    from app.worker.model_adapters import get_model_adapter
+    from app.worker.model_registry import model_registry
+
+    adapter = get_model_adapter(model)
+    if not adapter.supports(operation):
+        raise ValueError(f"{model} does not support {operation}")
+    model_registry.prepare(model, operation)
+    return adapter.execute(operation, str(audio_path), parameters)
 
 
 async def _execute_perturbation(
