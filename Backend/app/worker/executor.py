@@ -384,7 +384,7 @@ async def execute(envelope_data: dict[str, Any], celery_task_id: str) -> None:
                         local_path = temp_root / f"{asset.audio_id}{Path(asset.filename).suffix}"
                         storage.download_file(asset.object_key, local_path)
                         output = _jsonable(_execute_one(
-                            envelope.operation.value, envelope.model, local_path, envelope.parameters
+                            envelope.operation.value, envelope.model, local_path, envelope.parameters, envelope.model_spec
                         ))
                         await _store_item_result(envelope, asset.sha256, storage, output)
                 items.append({"audio_id": asset.audio_id, "result": _jsonable(output), "cache_hit": item_cache_hit})
@@ -498,7 +498,7 @@ async def execute_batch_item(
                 local_path = Path(temp_dir) / f"{asset.audio_id}{Path(asset.filename).suffix}"
                 storage.download_file(asset.object_key, local_path)
                 output = _jsonable(_execute_one(
-                    envelope.operation.value, envelope.model, local_path, envelope.parameters
+                    envelope.operation.value, envelope.model, local_path, envelope.parameters, envelope.model_spec
                 ))
             await _store_item_result(envelope, asset.sha256, storage, output)
         completed_key = f"job:{envelope.job_id}:completed-items"

@@ -13,6 +13,7 @@ import { Upload, HelpCircle } from "lucide-react";
 import { API_BASE } from '@/lib/api';
 import { CustomDatasetManager } from '@/components/dataset/CustomDatasetManager';
 import { CustomModelManager } from '@/components/model/CustomModelManager';
+import { listCustomModels, type CustomModel } from '@/lib/models';
 
 interface UploadedFile {
   audio_id?: string;
@@ -58,6 +59,7 @@ const defaultDatasetForModel: Record<string, string> = {
 
 export const Toolbar = ({apiData, setApiData, selectedFile, uploadedFiles, onFileSelect, model, setModel, dataset, setDataset, onBatchInference}: ToolbarProps) => {
   const [customDatasets, setCustomDatasets] = useState<CustomDataset[]>([]);
+  const [customModels, setCustomModels] = useState<CustomModel[]>([]);
 
   const fetchCustomDatasets = async () => {
     try {
@@ -76,6 +78,12 @@ export const Toolbar = ({apiData, setApiData, selectedFile, uploadedFiles, onFil
 
   useEffect(() => {
     fetchCustomDatasets();
+  }, []);
+
+  useEffect(() => {
+    listCustomModels().then(setCustomModels).catch((error) => {
+      console.error('Error fetching custom models:', error);
+    });
   }, []);
 
   const handleDatasetCreated = (datasetName: string) => {
@@ -155,6 +163,11 @@ const onModelChange = (value: string) => {
                 <SelectContent>
                   <SelectItem value="whisper-base">Whisper Base</SelectItem>
                   <SelectItem value="wav2vec2">Wav2Vec2</SelectItem>
+                  {customModels.filter((customModel) => customModel.status === 'ready').map((customModel) => (
+                    <SelectItem key={customModel.model_id} value={customModel.model_id}>
+                      {customModel.hf_repo}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -242,7 +255,7 @@ const onModelChange = (value: string) => {
           onDatasetCreated={handleDatasetCreated}
           onDatasetSelected={handleDatasetSelected}
         />
-        <CustomModelManager />
+        <CustomModelManager onModelsChanged={setCustomModels} />
 
         <Tooltip>
           <TooltipTrigger asChild>
