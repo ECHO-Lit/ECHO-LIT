@@ -14,6 +14,7 @@ from app.core.celery_app import celery_app, queue_for
 from app.core.storage import StorageError
 from app.core.settings import settings
 from app.repositories.jobs import JobRepository
+from app.worker.custom_model_validation import validate_custom_model
 from app.worker.executor import complete_batch_from_cache, execute, execute_batch_item, finalize_batch
 
 
@@ -62,6 +63,12 @@ def execute_job(self, envelope: dict) -> None:
             ))
             raise
         raise self.retry(exc=exc, countdown=min(2 ** self.request.retries, 30))
+
+
+@celery_app.task(bind=True, name="app.worker.tasks.validate_custom_model", acks_late=True)
+def validate_registered_custom_model(self, model_id: str) -> None:
+    del self
+    _run(validate_custom_model(model_id))
 
 
 @celery_app.task(bind=True, name="app.worker.tasks.orchestrate_batch")

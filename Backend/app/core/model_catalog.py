@@ -14,6 +14,7 @@ from enum import StrEnum
 
 class ModelKind(StrEnum):
     SEQ2SEQ_ASR = "seq2seq_asr"
+    CTC_ASR = "ctc_asr"
     AUDIO_CLASSIFICATION = "audio_classification"
 
 
@@ -85,4 +86,3 @@ def get_model_definition(model_id: str) -> ModelDefinition:
 
 def is_supported_model(model_id: str | None) -> bool:
     return model_id in MODEL_DEFINITIONS
-

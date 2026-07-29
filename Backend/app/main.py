@@ -12,6 +12,7 @@ from .api.routes import (
     debug as debug_routes,
     health as health_routes,
     jobs as jobs_routes,
+    models as models_routes,
     session as session_routes,
     upload as upload_routes,
 )
@@ -85,6 +86,7 @@ async def legacy_api_gate(request: Request, call_next):
 app.include_router(session_routes.router, tags=["Session"])
 app.include_router(upload_routes.router, tags=["Audio"])
 app.include_router(jobs_routes.router, tags=["Jobs"])
+app.include_router(models_routes.router, tags=["Custom Models"])
 app.include_router(dataset_management_routes.router, prefix="/upload", tags=["Dataset Management"])
 app.include_router(datasets_routes.router, tags=["Datasets"])
 app.include_router(health_routes.router, tags=["Health"])
