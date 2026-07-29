@@ -169,6 +169,21 @@ export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model, dataset, availableFiles, reductionMethod, fetchEmbeddings]);
 
+  // A dataset with no files cannot have a valid embedding result. Clear the
+  // previous dataset's state so switching to an unavailable or empty dataset
+  // cannot leave its PCA/UMAP plot on screen.
+  useEffect(() => {
+    if (availableFiles.length === 0) {
+      clearEmbeddings();
+      setAudioFrequencyAnalysis(null);
+      setBatchPrediction(null);
+      setWhisperAnalysis(null);
+      setAnalysisError(null);
+      setSelectedByAngle([]);
+      setSelectedPoints2D([]);
+    }
+  }, [availableFiles.length, clearEmbeddings]);
+
   // Never leave the toggle claiming "Clusters" when there are none to show.
   useEffect(() => {
     if (!embeddingData?.clusterByFilename && colorMode === 'cluster') {

@@ -51,24 +51,6 @@ const EmbeddingPlotContent = ({ selectedMethod, is3D, onPointSelect, onAngleRang
     }
   }, [is3D]);
 
-  // Generate mock data as fallback
-  const generateMockData = () => {
-    const n = 50;
-    const x = [];
-    const y = [];
-    const colors = [];
-    const text = [];
-    
-    for (let i = 0; i < n; i++) {
-      x.push(Math.random() * 20 - 10);
-      y.push(Math.random() * 20 - 10);
-      colors.push(['neutral', 'happy', 'sad', 'angry'][Math.floor(Math.random() * 4)]);
-      text.push(`Sample ${i + 1}`);
-    }
-    
-    return { x, y, colors, text };
-  };
-
   // Handle point selection
   const handlePointClick = useCallback((event: any) => {
     if (event.points && event.points.length > 0) {
@@ -99,7 +81,9 @@ const EmbeddingPlotContent = ({ selectedMethod, is3D, onPointSelect, onAngleRang
     }
   }, [is3D, onSelectionChange]);
 
-  // Use real embedding data if available, otherwise fall back to mock data
+  // The plot must only ever display coordinates returned by an embedding job.
+  // Showing generated points here made an empty or failed dataset look like a
+  // valid PCA/UMAP result, which is especially misleading in a diagnostic tool.
   const getPlotData = () => {
     if (embeddingData && embeddingData.reduced_embeddings && embeddingData.reduced_embeddings.length > 0) {
       const x = embeddingData.reduced_embeddings.map(point => point.coordinates[0]);
@@ -151,14 +135,8 @@ const EmbeddingPlotContent = ({ selectedMethod, is3D, onPointSelect, onAngleRang
       
       return { x, y, z, colors, text };
     }
-    
-    const mockData = generateMockData();
-    if (is3D) {
-      // Generate mock Z coordinates
-      const z = mockData.x.map(() => Math.random() * 20 - 10);
-      return { ...mockData, z };
-    }
-    return mockData;
+
+    return null;
   };
 
   // Create transparent plane surfaces for 3D visualization
@@ -274,17 +252,6 @@ const EmbeddingPlotContent = ({ selectedMethod, is3D, onPointSelect, onAngleRang
     }
   }, [selectedFiles, onAngleRangeSelect]); // Remove selectedByAngle from dependencies to prevent loops
 
-  const plotData = getPlotData();
-  const { x, y, colors, text } = plotData;
-  const z = 'z' in plotData ? plotData.z : undefined;
-
-  // Calculate bounds for plane creation
-  const bounds = x.length > 0 ? {
-    x: [Math.min(...x) * 1.1, Math.max(...x) * 1.1] as [number, number],
-    y: [Math.min(...y) * 1.1, Math.max(...y) * 1.1] as [number, number],
-    z: z && z.length > 0 ? [Math.min(...z) * 1.1, Math.max(...z) * 1.1] as [number, number] : [0, 0] as [number, number]
-  } : { x: [0, 0] as [number, number], y: [0, 0] as [number, number], z: [0, 0] as [number, number] };
-
   if (isLoading) {
     return (
       <div className="h-full flex items-center justify-center">
@@ -306,6 +273,32 @@ const EmbeddingPlotContent = ({ selectedMethod, is3D, onPointSelect, onAngleRang
       </div>
     );
   }
+
+  const plotData = getPlotData();
+  if (!plotData) {
+    return (
+      <div className="h-full flex items-center justify-center p-4">
+        <div className="text-xs text-muted-foreground text-center max-w-xs">
+          <div className="font-medium text-foreground">No embedding data available</div>
+          <div className="mt-1">
+            Load a dataset with audio files, then run an embedding analysis. This view never displays generated sample data.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const { x, y, colors, text } = plotData;
+  const z = plotData.z;
+
+  // Calculate bounds for plane creation.
+  const bounds = {
+    x: [Math.min(...x) * 1.1, Math.max(...x) * 1.1] as [number, number],
+    y: [Math.min(...y) * 1.1, Math.max(...y) * 1.1] as [number, number],
+    z: z && z.length > 0
+      ? [Math.min(...z) * 1.1, Math.max(...z) * 1.1] as [number, number]
+      : [0, 0] as [number, number],
+  };
 
   // Create marker sizes based on selection
   const markerSizes = text.map(filename => {
