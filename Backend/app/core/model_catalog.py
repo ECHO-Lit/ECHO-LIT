@@ -30,7 +30,7 @@ class ModelDefinition:
 
 
 CUSTOM_MODEL_CAPABILITIES: dict[ModelKind, frozenset[str]] = {
-    ModelKind.SEQ2SEQ_ASR: frozenset({"prediction", "embedding", "saliency", "hidden_states"}),
+    ModelKind.SEQ2SEQ_ASR: frozenset({"prediction", "embedding", "saliency", "attention", "hidden_states"}),
     ModelKind.CTC_ASR: frozenset({"prediction", "embedding", "saliency", "hidden_states"}),
     ModelKind.AUDIO_CLASSIFICATION: frozenset({"prediction", "embedding", "saliency", "hidden_states"}),
 }

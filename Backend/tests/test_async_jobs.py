@@ -163,11 +163,12 @@ def test_model_adapters_expose_architecture_capabilities():
         "custom-model",
         RuntimeModelSpec(
             hf_repo="org/model",
-            kind=ModelKind.CTC_ASR,
-            capabilities=["prediction", "embedding", "saliency"],
+            kind=ModelKind.SEQ2SEQ_ASR,
+            capabilities=["prediction", "embedding", "saliency", "attention"],
         ),
     )
     assert custom.supports("saliency")
+    assert custom.supports("attention")
 
 
 def test_queue_routing_matches_worker_classes():

@@ -146,15 +146,18 @@ class GenericHuggingFaceAdapter(AudioModelAdapter):
         self.hf_revision = spec.revision
 
     def resource_variant(self, operation: str) -> str:
-        return "generic"
+        return "eager-attention" if operation == "attention" else "generic"
 
     def load_resource(self, variant: str) -> Any:
-        del variant
         from transformers import AutoModelForAudioClassification, AutoModelForCTC, AutoModelForSpeechSeq2Seq, AutoProcessor
         from app.core.device import INFERENCE_DEVICE
         options = {"trust_remote_code": False, "low_cpu_mem_usage": True}
         if self.hf_revision:
             options["revision"] = self.hf_revision
+        if variant == "eager-attention":
+            # SDPA does not return attention weights; standard Transformers
+            # seq2seq models provide them with the eager implementation.
+            options["attn_implementation"] = "eager"
         cls = {
             ModelKind.SEQ2SEQ_ASR: AutoModelForSpeechSeq2Seq,
             ModelKind.CTC_ASR: AutoModelForCTC,
@@ -165,7 +168,7 @@ class GenericHuggingFaceAdapter(AudioModelAdapter):
         return processor, model
 
     def execute(self, operation: str, audio_path: str, parameters: dict[str, Any], resource: Any = None) -> Any:
-        if operation not in {"prediction", "embedding", "saliency"}:
+        if operation not in {"prediction", "embedding", "saliency", "attention"}:
             raise ValueError(f"{self.model_id} does not yet implement {operation}")
         if resource is None:
             resource = self.load_resource("generic")
@@ -183,6 +186,8 @@ class GenericHuggingFaceAdapter(AudioModelAdapter):
         inputs = {key: value.to(device) for key, value in inputs.items() if hasattr(value, "to")}
         if operation == "saliency":
             return self._generate_saliency(model, inputs, audio, sample_rate, parameters)
+        if operation == "attention":
+            return self._extract_attention(processor, model, inputs, audio, sample_rate, parameters)
         with torch.no_grad():
             if operation == "embedding":
                 output = model(**inputs, output_hidden_states=True, return_dict=True)
@@ -202,6 +207,91 @@ class GenericHuggingFaceAdapter(AudioModelAdapter):
             labels = getattr(model.config, "id2label", {})
             scores = {str(labels.get(i, i)): float(score) for i, score in enumerate(probabilities.cpu())}
             return {"predicted_label": str(labels.get(index, index)), "confidence": float(probabilities[index]), "scores": scores}
+
+    def _extract_attention(self, processor: Any, model: Any, inputs: dict[str, Any], audio: Any, sample_rate: int, parameters: dict[str, Any]) -> dict[str, Any]:
+        """Extract decoder self-attention for a standard seq2seq speech model."""
+        import numpy as np
+        import torch
+
+        if self.kind != ModelKind.SEQ2SEQ_ASR:
+            raise ValueError("Attention is available only for custom seq2seq speech models")
+        with torch.no_grad():
+            generated_ids = model.generate(**inputs, max_new_tokens=64)
+            outputs = model(
+                **inputs,
+                decoder_input_ids=generated_ids,
+                output_attentions=True,
+                use_cache=False,
+                return_dict=True,
+            )
+        layers = getattr(outputs, "decoder_attentions", None)
+        if not layers:
+            raise ValueError("Model did not return decoder attention weights")
+        layer_index = min(int(parameters.get("layer_idx", 0)), len(layers) - 1)
+        if layer_index < 0:
+            layer_index = 0
+        layer = layers[layer_index]
+        if layer is None or layer.ndim != 4:
+            raise ValueError("Model returned an unsupported decoder-attention shape")
+        head_index = min(int(parameters.get("head_idx", 0)), layer.shape[1] - 1)
+        if head_index < 0:
+            head_index = 0
+
+        matrix = layer[0, head_index].float().cpu().numpy()
+        token_ids = generated_ids[0].tolist()
+        tokenizer = getattr(processor, "tokenizer", processor)
+        convert_ids = getattr(tokenizer, "convert_ids_to_tokens", None)
+        raw_tokens = convert_ids(token_ids) if callable(convert_ids) else [str(token) for token in token_ids]
+        count = min(len(raw_tokens), matrix.shape[0], matrix.shape[1], 64)
+        if count == 0:
+            raise ValueError("Model generated no tokens for attention analysis")
+        matrix = matrix[:count, :count]
+        tokens = [self._display_token(token, index) for index, token in enumerate(raw_tokens[:count])]
+        total_duration = float(len(audio)) / float(sample_rate) if len(audio) else 0.0
+        token_duration = total_duration / count if count else 0.0
+        chunks = [
+            {"text": token, "timestamp": [index * token_duration, (index + 1) * token_duration]}
+            for index, token in enumerate(tokens)
+        ]
+        pairs = [
+            {
+                "from_word": tokens[row],
+                "to_word": tokens[column],
+                "from_time": chunks[row]["timestamp"],
+                "to_time": chunks[column]["timestamp"],
+                "attention_weight": float(matrix[row, column]),
+                "from_index": row,
+                "to_index": column,
+            }
+            for row in range(count)
+            for column in range(count)
+        ]
+        return {
+            "model": self.model_id,
+            "attention_type": "decoder_self",
+            "layer": layer_index,
+            "head": head_index,
+            "attention_pairs": pairs,
+            "timestamp_attention": [
+                {
+                    "time": (index + 0.5) * token_duration,
+                    "attention": float(np.max(matrix[index])),
+                    "frame_index": index,
+                    "max_outgoing": float(np.max(matrix[index])),
+                    "avg_incoming": float(np.mean(matrix[:, index])),
+                    "self_attention": float(matrix[index, index]),
+                }
+                for index in range(count)
+            ],
+            "total_duration": total_duration,
+            "sequence_length": count,
+            "word_chunks": chunks,
+        }
+
+    @staticmethod
+    def _display_token(token: Any, index: int) -> str:
+        text = str(token).replace("Ġ", " ").replace("▁", " ").strip()
+        return text if text else f"token_{index + 1}"
 
     def _generate_saliency(self, model: Any, inputs: dict[str, Any], audio: Any, sample_rate: int, parameters: dict[str, Any]) -> dict[str, Any]:
         """Produce input-gradient saliency for a standard Transformers audio model.

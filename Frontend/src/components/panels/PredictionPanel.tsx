@@ -7,6 +7,7 @@ import { AttentionVisualization } from "../visualization/AttentionVisualization"
 import { PerturbationTools } from "../analysis/PerturbationTools";
 import { useState, useEffect } from "react";
 import { firstJobResult, resolveAudioId, runJob } from '@/lib/jobs';
+import { listCustomModels } from '@/lib/models';
 
 interface UploadedFile {
   audio_id?: string;
@@ -74,6 +75,19 @@ export const PredictionPanel = ({ selectedFile, selectedEmbeddingFile, model, da
   const [originalFile, setOriginalFile] = useState<UploadedFile | null>(selectedFile || null);
   const [perturbedFile, setPerturbedFile] = useState<UploadedFile | null>(null);
   const [isLoadingPerturbed, setIsLoadingPerturbed] = useState(false);
+  const [customModelHasAttention, setCustomModelHasAttention] = useState(false);
+
+  useEffect(() => {
+    if (!model?.startsWith('custom-')) {
+      setCustomModelHasAttention(false);
+      return;
+    }
+    listCustomModels()
+      .then((models) => setCustomModelHasAttention(
+        models.some((customModel) => customModel.model_id === model && customModel.capabilities.includes('attention')),
+      ))
+      .catch(() => setCustomModelHasAttention(false));
+  }, [model]);
 
 
   // Handle perturbation completion
@@ -296,7 +310,7 @@ export const PredictionPanel = ({ selectedFile, selectedEmbeddingFile, model, da
     fetchWhisperPrediction();
   }, [selectedFile, selectedEmbeddingFile, model, dataset, originalDataset]);
 
-  const hasAttention = !!model && model.includes('whisper');
+  const hasAttention = !!model && (model.includes('whisper') || customModelHasAttention);
 
   return (
     <div className="h-full bg-panel-background border-t border-border">
