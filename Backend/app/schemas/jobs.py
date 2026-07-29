@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.core.model_catalog import MODEL_DEFINITIONS, is_supported_model
+from app.core.model_catalog import MODEL_DEFINITIONS, ModelKind, is_supported_model
 
 
 class JobOperation(str, Enum):
@@ -96,11 +96,11 @@ class JobCreateRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_operation(self) -> "JobCreateRequest":
-        if self.operation in MODEL_REQUIRED_OPERATIONS and not is_supported_model(self.model):
+        if self.operation in MODEL_REQUIRED_OPERATIONS and not self.model:
             raise ValueError(f"model must be one of: {', '.join(sorted(SUPPORTED_MODELS))}")
         if self.operation in SINGLE_AUDIO_OPERATIONS and len(self.audio_ids) != 1:
             raise ValueError(f"{self.operation.value} requires exactly one audio_id")
-        if self.operation in MODEL_REQUIRED_OPERATIONS and self.model and not MODEL_DEFINITIONS[self.model].supports(self.operation.value):
+        if self.model in MODEL_DEFINITIONS and not MODEL_DEFINITIONS[self.model].supports(self.operation.value):
             raise ValueError(f"{self.model} does not support {self.operation.value}")
         if self.operation not in MODEL_REQUIRED_OPERATIONS and self.model is not None:
             raise ValueError(f"{self.operation.value} does not accept a model")
@@ -131,11 +131,19 @@ class TaskAudio(BaseModel):
     sha256: str
 
 
+class RuntimeModelSpec(BaseModel):
+    hf_repo: str
+    revision: str | None = None
+    kind: ModelKind
+    capabilities: list[str]
+
+
 class TaskEnvelope(BaseModel):
     job_id: str
     session_id: str
     operation: JobOperation
     model: str | None = None
+    model_spec: RuntimeModelSpec | None = None
     audio: list[TaskAudio]
     parameters: dict[str, Any] = Field(default_factory=dict)
     result_schema_version: str

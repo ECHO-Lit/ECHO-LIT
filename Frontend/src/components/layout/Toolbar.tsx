@@ -12,6 +12,7 @@ import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/comp
 import { Upload, HelpCircle } from "lucide-react";
 import { API_BASE } from '@/lib/api';
 import { CustomDatasetManager } from '@/components/dataset/CustomDatasetManager';
+import { CustomModelManager } from '@/components/model/CustomModelManager';
 
 interface UploadedFile {
   audio_id?: string;
@@ -241,6 +242,7 @@ const onModelChange = (value: string) => {
           onDatasetCreated={handleDatasetCreated}
           onDatasetSelected={handleDatasetSelected}
         />
+        <CustomModelManager />
 
         <Tooltip>
           <TooltipTrigger asChild>

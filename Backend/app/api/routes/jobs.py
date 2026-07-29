@@ -11,6 +11,8 @@ from app.core.settings import settings
 from app.core.storage import get_storage
 from app.repositories.audio import AudioRepository
 from app.repositories.jobs import JobRepository, TERMINAL_STATES
+from app.repositories.models import CustomModelRepository
+from app.schemas.models import CustomModelStatus
 from app.schemas.jobs import (
     JobCreateRequest,
     JobCreateResponse,
@@ -21,6 +23,7 @@ from app.schemas.jobs import (
     JobStatusResponse,
     TaskAudio,
     TaskEnvelope,
+    RuntimeModelSpec,
 )
 
 
@@ -44,6 +47,21 @@ def _status_response(record: JobRecord) -> JobStatusResponse:
 
 @router.post("", response_model=JobCreateResponse, status_code=202)
 async def create_job(payload: JobCreateRequest, request: Request):
+    model_spec = None
+    if payload.model and payload.model not in {"whisper-base", "whisper-large", "wav2vec2"}:
+        custom = await CustomModelRepository().get_owned(payload.model, request.state.sid)
+        if not custom:
+            raise HTTPException(status_code=404, detail="Custom model not found")
+        if custom.status != CustomModelStatus.READY or not custom.kind:
+            raise HTTPException(status_code=409, detail="Custom model is not ready")
+        if payload.operation.value not in custom.capabilities:
+            raise HTTPException(status_code=400, detail=f"Custom model does not support {payload.operation.value}")
+        model_spec = RuntimeModelSpec(
+            hf_repo=custom.hf_repo,
+            revision=custom.revision,
+            kind=custom.kind,
+            capabilities=custom.capabilities,
+        )
     audio_repository = AudioRepository()
     assets = []
     for audio_id in payload.audio_ids:
@@ -59,6 +77,7 @@ async def create_job(payload: JobCreateRequest, request: Request):
         session_id=request.state.sid,
         operation=payload.operation,
         model=payload.model,
+        model_spec=model_spec,
         audio_ids=payload.audio_ids,
         parameters=payload.parameters,
         progress=JobProgress(current=0, total=len(assets), message="Queued"),

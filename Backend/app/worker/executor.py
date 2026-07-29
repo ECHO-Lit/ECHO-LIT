@@ -242,6 +242,7 @@ def _execute_one(
     model: str | None,
     audio_path: Path,
     parameters: dict[str, Any],
+    model_spec=None,
 ) -> Any:
     if operation == "audio_features":
         # Import the librosa-only module directly, NOT via model_loader_service --
@@ -255,11 +256,11 @@ def _execute_one(
     from app.worker.model_adapters import get_model_adapter
     from app.worker.model_registry import model_registry
 
-    adapter = get_model_adapter(model)
+    adapter = get_model_adapter(model, model_spec)
     if not adapter.supports(operation):
         raise ValueError(f"{model} does not support {operation}")
-    model_registry.prepare(model, operation)
-    return adapter.execute(operation, str(audio_path), parameters)
+    resource = model_registry.prepare(adapter, operation)
+    return adapter.execute(operation, str(audio_path), parameters, resource)
 
 
 async def _execute_perturbation(

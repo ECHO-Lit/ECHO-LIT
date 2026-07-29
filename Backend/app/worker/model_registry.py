@@ -6,7 +6,7 @@ import os
 import time
 from typing import Any
 
-from app.worker.model_adapters import get_model_adapter
+from app.worker.model_adapters import AudioModelAdapter, get_model_adapter
 
 
 @dataclass
@@ -24,11 +24,11 @@ class ModelRegistry:
         self.idle_seconds = int(os.getenv("MODEL_REGISTRY_IDLE_SECONDS", "1800"))
         self._entries: OrderedDict[tuple[str, str, str, str], RegistryEntry] = OrderedDict()
 
-    def prepare(self, model: str, purpose: str) -> Any:
+    def prepare(self, model: str | AudioModelAdapter, purpose: str) -> Any:
         from app.core.device import INFERENCE_DEVICE
         from app.services import model_loader_service as models
 
-        adapter = get_model_adapter(model)
+        adapter = model if isinstance(model, AudioModelAdapter) else get_model_adapter(model)
         variant = adapter.resource_variant(purpose)
         key = (adapter.model_id, variant, adapter.revision, str(INFERENCE_DEVICE))
         now = time.monotonic()
@@ -43,7 +43,8 @@ class ModelRegistry:
         self._entries[key] = RegistryEntry(key=key, resource=resource, last_used=now)
         while len(self._entries) > self.max_entries:
             old_key, _ = self._entries.popitem(last=False)
-            models.unload_model_resources(old_key[0], old_key[1])
+            if old_key[0] in {"whisper-base", "whisper-large", "wav2vec2"}:
+                models.unload_model_resources(old_key[0], old_key[1])
         return resource
 
     def evict_idle(self, now: float | None = None) -> None:
@@ -53,7 +54,8 @@ class ModelRegistry:
         stale = [key for key, entry in self._entries.items() if current - entry.last_used > self.idle_seconds]
         for key in stale:
             self._entries.pop(key, None)
-            models.unload_model_resources(key[0], key[1])
+            if key[0] in {"whisper-base", "whisper-large", "wav2vec2"}:
+                models.unload_model_resources(key[0], key[1])
 
 
 model_registry = ModelRegistry()

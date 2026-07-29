@@ -11,6 +11,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from app.core.model_catalog import ModelDefinition, ModelKind, get_model_definition
+from app.schemas.jobs import RuntimeModelSpec
 
 
 class AudioModelAdapter(ABC):
@@ -41,7 +42,7 @@ class AudioModelAdapter(ABC):
         """Load the requested model resource through the existing service."""
 
     @abstractmethod
-    def execute(self, operation: str, audio_path: str, parameters: dict[str, Any]) -> Any:
+    def execute(self, operation: str, audio_path: str, parameters: dict[str, Any], resource: Any = None) -> Any:
         """Run a supported generic operation for one local audio file."""
 
 
@@ -70,7 +71,8 @@ class WhisperAdapter(AudioModelAdapter):
             return models.get_whisper_attention_models(self.revision)
         return models.get_whisper_gen_model(self.revision)
 
-    def execute(self, operation: str, audio_path: str, parameters: dict[str, Any]) -> Any:
+    def execute(self, operation: str, audio_path: str, parameters: dict[str, Any], resource: Any = None) -> Any:
+        del resource
         if not self.supports(operation):
             raise ValueError(f"{self.model_id} does not support {operation}")
         if operation == "prediction":
@@ -116,7 +118,8 @@ class Wav2Vec2ClassificationAdapter(AudioModelAdapter):
 
         return models.get_emotion_models()
 
-    def execute(self, operation: str, audio_path: str, parameters: dict[str, Any]) -> Any:
+    def execute(self, operation: str, audio_path: str, parameters: dict[str, Any], resource: Any = None) -> Any:
+        del resource
         if not self.supports(operation):
             raise ValueError(f"{self.model_id} does not support {operation}")
         if operation == "prediction":
@@ -134,7 +137,72 @@ class Wav2Vec2ClassificationAdapter(AudioModelAdapter):
         raise ValueError(f"{self.model_id} does not yet implement {operation}")
 
 
-def get_model_adapter(model_id: str) -> AudioModelAdapter:
+class GenericHuggingFaceAdapter(AudioModelAdapter):
+    """Standard-transformers adapter for a worker-validated custom model."""
+
+    def __init__(self, model_id: str, spec: RuntimeModelSpec) -> None:
+        definition = ModelDefinition(model_id, spec.hf_repo, spec.kind, frozenset(spec.capabilities))
+        super().__init__(definition)
+        self.hf_revision = spec.revision
+
+    def resource_variant(self, operation: str) -> str:
+        return "generic"
+
+    def load_resource(self, variant: str) -> Any:
+        del variant
+        from transformers import AutoModelForAudioClassification, AutoModelForCTC, AutoModelForSpeechSeq2Seq, AutoProcessor
+        from app.core.device import INFERENCE_DEVICE
+        options = {"trust_remote_code": False, "low_cpu_mem_usage": True}
+        if self.hf_revision:
+            options["revision"] = self.hf_revision
+        cls = {
+            ModelKind.SEQ2SEQ_ASR: AutoModelForSpeechSeq2Seq,
+            ModelKind.CTC_ASR: AutoModelForCTC,
+            ModelKind.AUDIO_CLASSIFICATION: AutoModelForAudioClassification,
+        }[self.kind]
+        processor = AutoProcessor.from_pretrained(self.revision, **options)
+        model = cls.from_pretrained(self.revision, **options).to(INFERENCE_DEVICE).eval()
+        return processor, model
+
+    def execute(self, operation: str, audio_path: str, parameters: dict[str, Any], resource: Any = None) -> Any:
+        del parameters
+        if operation not in {"prediction", "embedding"}:
+            raise ValueError(f"{self.model_id} does not yet implement {operation}")
+        if resource is None:
+            resource = self.load_resource("generic")
+        processor, model = resource
+        import librosa
+        import torch
+
+        sample_rate = getattr(getattr(processor, "feature_extractor", None), "sampling_rate", 16000)
+        audio, _ = librosa.load(audio_path, sr=sample_rate)
+        inputs = processor(audio, sampling_rate=sample_rate, return_tensors="pt")
+        device = next(model.parameters()).device
+        inputs = {key: value.to(device) for key, value in inputs.items() if hasattr(value, "to")}
+        with torch.no_grad():
+            if operation == "embedding":
+                output = model(**inputs, output_hidden_states=True, return_dict=True)
+                states = output.hidden_states[-1] if output.hidden_states else None
+                if states is None:
+                    raise ValueError("Model did not return hidden states")
+                return states.mean(dim=1).squeeze().cpu().numpy()
+            if self.kind == ModelKind.SEQ2SEQ_ASR:
+                ids = model.generate(**inputs)
+                return {"text": processor.batch_decode(ids, skip_special_tokens=True)[0]}
+            output = model(**inputs, return_dict=True)
+            if self.kind == ModelKind.CTC_ASR:
+                ids = output.logits.argmax(dim=-1)
+                return {"text": processor.batch_decode(ids)[0]}
+            probabilities = torch.softmax(output.logits[0], dim=-1)
+            index = int(probabilities.argmax())
+            labels = getattr(model.config, "id2label", {})
+            scores = {str(labels.get(i, i)): float(score) for i, score in enumerate(probabilities.cpu())}
+            return {"predicted_label": str(labels.get(index, index)), "confidence": float(probabilities[index]), "scores": scores}
+
+
+def get_model_adapter(model_id: str, model_spec: RuntimeModelSpec | None = None) -> AudioModelAdapter:
+    if model_spec:
+        return GenericHuggingFaceAdapter(model_id, model_spec)
     definition = get_model_definition(model_id)
     if definition.kind == ModelKind.SEQ2SEQ_ASR:
         return WhisperAdapter(definition)
