@@ -1,0 +1,73 @@
+@startuml
+title ECHO Asynchronous Job Sequence
+autonumber
+skinparam shadowing false
+
+actor Researcher as user
+participant "React UI" as ui
+participant "FastAPI API" as api
+database "Redis\nDB 0 / DB 1" as metadata
+queue "Redis\nDB 2 broker" as broker
+participant "Celery worker" as worker
+collections "Object storage" as storage
+participant "Model registry\n& analysis services" as model
+
+user -> ui : Select/upload audio
+ui -> api : POST /upload
+api -> metadata : Create/ensure session and audio metadata
+api -> storage : Store audio under opaque key
+api --> ui : audio_id
+
+user -> ui : Request prediction or analysis
+ui -> api : POST /jobs {audio_ids, operation, model, parameters}
+api -> metadata : Validate session ownership
+api -> metadata : Create JobRecord(status=queued)
+api -> broker : Publish TaskEnvelope to routed queue
+api --> ui : 202 Accepted + job_id
+
+loop Until terminal status
+  ui -> api : GET /jobs/{job_id}
+  api -> metadata : Read session-owned JobRecord
+  api --> ui : status + progress + result_url when complete
+end
+
+broker -> worker : Deliver task
+worker -> metadata : Mark started / processing
+worker -> storage : Download audio into per-task temp directory
+
+alt Cached non-perturbation result exists
+  worker -> storage : Read cached result artifact
+else New analysis
+  worker -> model : Lazily load model and execute operation
+  model --> worker : prediction / embedding / attention / saliency / features
+  worker -> storage : Store per-item cache artifact (except perturbation)
+end
+
+opt Embedding batch with clustering requested
+  worker -> model : Project vectors and cluster
+end
+
+worker -> storage : Store session-owned job result
+worker -> metadata : Mark success + result_key
+
+ui -> api : GET /jobs/{job_id}/result
+api -> metadata : Authorize session + locate result key
+api -> storage : Read result JSON
+api --> ui : Completed result
+
+opt Cancellation requested before completion
+  ui -> api : DELETE /jobs/{job_id}
+  api -> metadata : Request cancellation
+  api -> broker : Revoke parent and child tasks
+end
+
+== Expiration ==
+participant "Celery Beat" as beat
+beat -> broker : Hourly local-storage cleanup task
+broker -> worker : Deliver cleanup task on cpu queue
+worker -> storage : Delete expired local objects
+note over metadata,storage
+Job/audio metadata and artifacts have a 24-hour TTL.
+S3 uses a matching lifecycle policy in production.
+end note
+@enduml
