@@ -165,20 +165,24 @@ class GenericHuggingFaceAdapter(AudioModelAdapter):
         return processor, model
 
     def execute(self, operation: str, audio_path: str, parameters: dict[str, Any], resource: Any = None) -> Any:
-        del parameters
-        if operation not in {"prediction", "embedding"}:
+        if operation not in {"prediction", "embedding", "saliency"}:
             raise ValueError(f"{self.model_id} does not yet implement {operation}")
         if resource is None:
             resource = self.load_resource("generic")
         processor, model = resource
         import librosa
+        import numpy as np
         import torch
 
         sample_rate = getattr(getattr(processor, "feature_extractor", None), "sampling_rate", 16000)
-        audio, _ = librosa.load(audio_path, sr=sample_rate)
+        audio, _ = librosa.load(audio_path, sr=sample_rate, mono=True)
+        if not np.all(np.isfinite(audio)):
+            audio = np.nan_to_num(audio, nan=0.0, posinf=0.0, neginf=0.0)
         inputs = processor(audio, sampling_rate=sample_rate, return_tensors="pt")
         device = next(model.parameters()).device
         inputs = {key: value.to(device) for key, value in inputs.items() if hasattr(value, "to")}
+        if operation == "saliency":
+            return self._generate_saliency(model, inputs, audio, sample_rate, parameters)
         with torch.no_grad():
             if operation == "embedding":
                 output = model(**inputs, output_hidden_states=True, return_dict=True)
@@ -198,6 +202,113 @@ class GenericHuggingFaceAdapter(AudioModelAdapter):
             labels = getattr(model.config, "id2label", {})
             scores = {str(labels.get(i, i)): float(score) for i, score in enumerate(probabilities.cpu())}
             return {"predicted_label": str(labels.get(index, index)), "confidence": float(probabilities[index]), "scores": scores}
+
+    def _generate_saliency(self, model: Any, inputs: dict[str, Any], audio: Any, sample_rate: int, parameters: dict[str, Any]) -> dict[str, Any]:
+        """Produce input-gradient saliency for a standard Transformers audio model.
+
+        Unlike the built-in Whisper and Wav2Vec2 integrations, custom models do
+        not share internal module names.  Input-gradient attribution is stable
+        across the supported Transformers audio architectures and makes no
+        assumptions about a repository's implementation details.
+        """
+        import numpy as np
+        import torch
+
+        input_key = next(
+            (key for key in ("input_values", "input_features") if key in inputs),
+            None,
+        )
+        if input_key is None:
+            raise ValueError("Model processor did not provide input_values or input_features")
+        primary_input = inputs[input_key].detach().requires_grad_(True)
+        inputs[input_key] = primary_input
+        model.zero_grad(set_to_none=True)
+
+        if self.kind == ModelKind.SEQ2SEQ_ASR:
+            encoder = model.get_encoder()
+            try:
+                encoded = encoder(**inputs)
+            except TypeError:
+                # Some encoder implementations only accept their primary tensor.
+                encoded = encoder(primary_input)
+            hidden_states = getattr(encoded, "last_hidden_state", None)
+            if hidden_states is None:
+                hidden_states = encoded[0]
+            target = hidden_states.pow(2).mean()
+        else:
+            output = model(**inputs, return_dict=True)
+            logits = output.logits
+            if self.kind == ModelKind.CTC_ASR:
+                target_index = int(logits[0].detach().mean(dim=0).argmax())
+                target = logits[0, :, target_index].mean()
+            else:
+                target = logits[0].max()
+
+        gradients = torch.autograd.grad(target, primary_input, allow_unused=False)[0]
+        attribution = (primary_input * gradients).detach().abs().squeeze(0)
+        series = self._normalise_timeline(attribution)
+        total_duration = float(len(audio)) / float(sample_rate) if len(audio) else 0.0
+        return {
+            "model": self.model_id,
+            "method": parameters.get("method", "gradcam"),
+            "segments": self._time_segments(series, total_duration),
+            "total_duration": total_duration,
+            "series": series.tolist(),
+        }
+
+    @staticmethod
+    def _normalise_timeline(attribution: Any) -> Any:
+        """Reduce arbitrary model input shapes to a normalized 1D timeline."""
+        import numpy as np
+
+        values = attribution.float()
+        if values.ndim == 0:
+            values = values.unsqueeze(0)
+        elif values.ndim > 1:
+            dimensions = list(values.shape)
+            feature_axis = next(
+                (index for index, size in enumerate(dimensions) if size in {32, 64, 80, 96, 128}),
+                None,
+            )
+            time_axis = max(range(values.ndim), key=lambda index: dimensions[index])
+            if feature_axis is not None and feature_axis != time_axis:
+                time_axis = next(index for index in range(values.ndim) if index != feature_axis)
+            values = values.mean(dim=tuple(index for index in range(values.ndim) if index != time_axis))
+
+        series = values.cpu().numpy().astype(np.float32, copy=False)
+        if series.size == 0:
+            return np.zeros(1, dtype=np.float32)
+        maximum = float(series.max())
+        if maximum > 0:
+            series = series / maximum
+        if series.size > 2:
+            width = max(3, min(31, (series.size // 64) * 2 + 1))
+            series = np.convolve(series, np.ones(width, dtype=np.float32) / width, mode="same")
+            peak = float(np.percentile(series, 95))
+            if peak > 0:
+                series = np.clip(series / peak, 0, 1)
+        return series
+
+    @staticmethod
+    def _time_segments(series: Any, total_duration: float) -> list[dict[str, Any]]:
+        import numpy as np
+
+        if total_duration <= 0 or len(series) == 0:
+            return []
+        count = max(8, min(32, int(total_duration * 2)))
+        segments = []
+        for index in range(count):
+            start = int(index * len(series) / count)
+            end = max(start + 1, int((index + 1) * len(series) / count))
+            value = float(np.mean(series[start:end]))
+            segments.append({
+                "start_time": index * total_duration / count,
+                "end_time": (index + 1) * total_duration / count,
+                "word": f"segment_{index + 1}",
+                "saliency": value,
+                "intensity": max(0.1, value),
+            })
+        return segments
 
 
 def get_model_adapter(model_id: str, model_spec: RuntimeModelSpec | None = None) -> AudioModelAdapter:

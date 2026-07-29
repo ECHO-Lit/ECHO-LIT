@@ -146,6 +146,8 @@ def test_job_contract_rejects_invalid_combinations():
 
 
 def test_model_adapters_expose_architecture_capabilities():
+    from app.schemas.jobs import RuntimeModelSpec
+    from app.core.model_catalog import ModelKind
     from app.worker.model_adapters import get_model_adapter
 
     whisper = get_model_adapter("whisper-base")
@@ -156,6 +158,16 @@ def test_model_adapters_expose_architecture_capabilities():
     assert classifier.supports("embedding")
     assert not classifier.supports("attention")
     assert not classifier.supports("decoder_activations")
+
+    custom = get_model_adapter(
+        "custom-model",
+        RuntimeModelSpec(
+            hf_repo="org/model",
+            kind=ModelKind.CTC_ASR,
+            capabilities=["prediction", "embedding", "saliency"],
+        ),
+    )
+    assert custom.supports("saliency")
 
 
 def test_queue_routing_matches_worker_classes():

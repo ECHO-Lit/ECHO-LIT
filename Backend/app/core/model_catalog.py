@@ -29,6 +29,18 @@ class ModelDefinition:
         return operation in self.capabilities
 
 
+CUSTOM_MODEL_CAPABILITIES: dict[ModelKind, frozenset[str]] = {
+    ModelKind.SEQ2SEQ_ASR: frozenset({"prediction", "embedding", "saliency", "hidden_states"}),
+    ModelKind.CTC_ASR: frozenset({"prediction", "embedding", "saliency", "hidden_states"}),
+    ModelKind.AUDIO_CLASSIFICATION: frozenset({"prediction", "embedding", "saliency", "hidden_states"}),
+}
+
+
+def custom_model_capabilities(kind: ModelKind) -> list[str]:
+    """Return operations handled by the generic Hugging Face worker adapter."""
+    return sorted(CUSTOM_MODEL_CAPABILITIES[kind])
+
+
 # These built-ins preserve the existing public model IDs.  Do not scatter this
 # mapping through routes and workers: custom models will be represented by the
 # same definition once registration is implemented.

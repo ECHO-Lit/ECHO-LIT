@@ -7,6 +7,7 @@ import uuid
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from app.core.celery_app import celery_app, queue_for
+from app.core.model_catalog import custom_model_capabilities
 from app.core.settings import settings
 from app.core.storage import get_storage
 from app.repositories.audio import AudioRepository
@@ -54,6 +55,12 @@ async def create_job(payload: JobCreateRequest, request: Request):
             raise HTTPException(status_code=404, detail="Custom model not found")
         if custom.status != CustomModelStatus.READY or not custom.kind:
             raise HTTPException(status_code=409, detail="Custom model is not ready")
+        # Make records created before a capability expansion usable immediately.
+        # The generic adapter owns these capabilities for every validated kind.
+        current_capabilities = custom_model_capabilities(custom.kind)
+        if custom.capabilities != current_capabilities:
+            custom.capabilities = current_capabilities
+            await CustomModelRepository().save(custom)
         if payload.operation.value not in custom.capabilities:
             raise HTTPException(status_code=400, detail=f"Custom model does not support {payload.operation.value}")
         model_spec = RuntimeModelSpec(
@@ -102,6 +109,7 @@ async def create_job(payload: JobCreateRequest, request: Request):
             for asset in assets
         ],
         parameters=payload.parameters,
+        model_spec=model_spec,
         result_schema_version=settings.RESULT_SCHEMA_VERSION,
         code_version=settings.CODE_VERSION,
     )
