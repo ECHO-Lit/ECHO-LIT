@@ -6,6 +6,7 @@ import uuid
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from app.core.celery_app import celery_app
+from app.core.model_catalog import custom_model_capabilities
 from app.repositories.models import CustomModelRepository
 from app.schemas.models import (
     CustomModelCreateRequest,
@@ -16,6 +17,16 @@ from app.schemas.models import (
 
 
 router = APIRouter(prefix="/models")
+
+
+async def _refresh_capabilities(record: CustomModelRecord, repository: CustomModelRepository) -> CustomModelRecord:
+    """Keep records created before a capability expansion current for the UI."""
+    if record.status == CustomModelStatus.READY and record.kind:
+        capabilities = custom_model_capabilities(record.kind)
+        if record.capabilities != capabilities:
+            record.capabilities = capabilities
+            await repository.save(record)
+    return record
 
 
 @router.post("", response_model=CustomModelCreateResponse, status_code=202)
@@ -58,15 +69,18 @@ async def register_custom_model(payload: CustomModelCreateRequest, request: Requ
 
 @router.get("", response_model=list[CustomModelRecord])
 async def list_custom_models(request: Request):
-    return await CustomModelRepository().list_owned(request.state.sid)
+    repository = CustomModelRepository()
+    records = await repository.list_owned(request.state.sid)
+    return [await _refresh_capabilities(record, repository) for record in records]
 
 
 @router.get("/{model_id}", response_model=CustomModelRecord)
 async def get_custom_model(model_id: str, request: Request):
-    record = await CustomModelRepository().get_owned(model_id, request.state.sid)
+    repository = CustomModelRepository()
+    record = await repository.get_owned(model_id, request.state.sid)
     if not record:
         raise HTTPException(status_code=404, detail="Custom model not found")
-    return record
+    return await _refresh_capabilities(record, repository)
 
 
 @router.delete("/{model_id}", status_code=204)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.core.model_catalog import ModelKind
+from app.core.model_catalog import ModelKind, custom_model_capabilities
 from app.repositories.models import CustomModelRepository
 from app.schemas.models import CustomModelStatus
 
@@ -10,11 +10,11 @@ from app.schemas.models import CustomModelStatus
 def _kind_and_capabilities(config) -> tuple[ModelKind, list[str]]:
     architectures = " ".join(getattr(config, "architectures", None) or [])
     if bool(getattr(config, "is_encoder_decoder", False)):
-        return ModelKind.SEQ2SEQ_ASR, ["prediction", "embedding", "hidden_states"]
+        return ModelKind.SEQ2SEQ_ASR, custom_model_capabilities(ModelKind.SEQ2SEQ_ASR)
     if "ForCTC" in architectures:
-        return ModelKind.CTC_ASR, ["prediction", "embedding", "hidden_states"]
+        return ModelKind.CTC_ASR, custom_model_capabilities(ModelKind.CTC_ASR)
     if "ForAudioClassification" in architectures or int(getattr(config, "num_labels", 0) or 0) > 1:
-        return ModelKind.AUDIO_CLASSIFICATION, ["prediction", "embedding", "hidden_states"]
+        return ModelKind.AUDIO_CLASSIFICATION, custom_model_capabilities(ModelKind.AUDIO_CLASSIFICATION)
     raise ValueError(
         "Model must be a standard speech Seq2Seq, CTC, or audio-classification architecture"
     )

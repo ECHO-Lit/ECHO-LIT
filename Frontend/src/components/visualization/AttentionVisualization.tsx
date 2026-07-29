@@ -40,6 +40,7 @@ export const AttentionVisualization = ({ selectedFile, model, dataset }: Attenti
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const attentionJob = useJob<any>();
+  const isAttentionModel = Boolean(model?.includes('whisper') || model?.startsWith('custom-'));
 
   const fetchAttentionData = async () => {
     console.log("AttentionVisualization - fetchAttentionData called:", {
@@ -49,7 +50,7 @@ export const AttentionVisualization = ({ selectedFile, model, dataset }: Attenti
       hasWhisper: model?.includes('whisper')
     });
 
-    if (!selectedFile || !model || !model.includes('whisper')) {
+    if (!selectedFile || !model || !isAttentionModel) {
       console.log("AttentionVisualization - Skipping fetch due to conditions");
       return;
     }
@@ -444,7 +445,7 @@ export const AttentionVisualization = ({ selectedFile, model, dataset }: Attenti
     );
   }
 
-  if (!selectedFile || !model?.includes('whisper')) {
+  if (!selectedFile || !isAttentionModel) {
     return (
       <Card>
         <CardHeader>
@@ -452,7 +453,7 @@ export const AttentionVisualization = ({ selectedFile, model, dataset }: Attenti
         </CardHeader>
         <CardContent>
           <div className="text-center text-xs text-muted-foreground py-8">
-            Select a Whisper model and audio file to analyze attention patterns
+            Select an attention-capable model and audio file to analyze attention patterns
           </div>
         </CardContent>
       </Card>
