@@ -1,0 +1,90 @@
+@startuml
+title ECHO Application Component Diagram
+left to right direction
+skinparam componentStyle rectangle
+skinparam shadowing false
+
+package "Frontend — React / TypeScript" {
+  [MainLayout] as layout
+  [Audio & dataset panels] as audioPanels
+  [Prediction & analysis panels] as analysisPanels
+  [Visualization components\nwaveform, embedding, attention, saliency, EDA] as visualizations
+  [EmbeddingContext] as embeddingContext
+  [API client\nlib/api.ts] as apiClient
+  [Job client\nlib/jobs.ts] as jobClient
+  [TanStack Query] as query
+
+  layout --> audioPanels
+  layout --> analysisPanels
+  layout --> embeddingContext
+  analysisPanels --> visualizations
+  audioPanels --> apiClient
+  analysisPanels --> jobClient
+  apiClient --> query
+  jobClient --> apiClient
+}
+
+package "Backend — FastAPI control plane" {
+  [SessionMiddleware] as sessionMiddleware
+  [Upload & materialize routes] as uploadRoutes
+  [Jobs routes] as jobsRoutes
+  [Dataset routes] as datasetRoutes
+  [Health & debug routes] as observabilityRoutes
+  [AudioRepository] as audioRepository
+  [JobRepository] as jobRepository
+  [Storage adapter\nlocal filesystem | S3] as storageAdapter
+  [Celery dispatcher\nqueue_for()] as dispatcher
+  [Dataset services] as datasetServices
+
+  sessionMiddleware --> uploadRoutes
+  sessionMiddleware --> jobsRoutes
+  sessionMiddleware --> datasetRoutes
+  uploadRoutes --> audioRepository
+  uploadRoutes --> storageAdapter
+  jobsRoutes --> audioRepository : authorize audio ownership
+  jobsRoutes --> jobRepository
+  jobsRoutes --> dispatcher
+  jobsRoutes --> storageAdapter : proxy completed result
+  datasetRoutes --> datasetServices
+  observabilityRoutes --> jobRepository
+}
+
+package "Backend — Celery execution plane" {
+  [Task entry points\nexecute_job / batch chord] as taskEntries
+  [Job executor] as executor
+  [Model registry] as modelRegistry
+  [Model loader service\nWhisper / Wav2Vec2 / embeddings] as modelService
+  [Interpretability services\nsaliency / perturbation] as interpretServices
+  [Audio feature service] as featureService
+  [Clustering service] as clusteringService
+  [Cleanup task] as cleanupTask
+
+  taskEntries --> executor
+  taskEntries --> cleanupTask
+  executor --> modelRegistry
+  executor --> modelService
+  executor --> interpretServices
+  executor --> featureService
+  executor --> clusteringService : optional embedding clustering
+}
+
+database "Redis\nsessions, metadata, broker, results" as redis
+cloud "Object storage\naudio, artifacts, cached results" as objectStorage
+database "ML model cache" as modelCache
+
+apiClient --> sessionMiddleware : HTTP + session cookie
+jobClient --> jobsRoutes : POST /jobs\nGET /jobs/{id}\nGET /jobs/{id}/result
+dispatcher --> redis : task envelope
+audioRepository --> redis
+jobRepository --> redis
+taskEntries --> redis : consume task / update status
+executor --> objectStorage : input, results, cache artifacts
+storageAdapter --> objectStorage
+modelRegistry --> modelCache
+
+note bottom of dispatcher
+cpu: perturbation, audio features, batch coordination
+gpu-fast: prediction, embeddings
+gpu-large: Whisper Large, attention, saliency
+end note
+@enduml

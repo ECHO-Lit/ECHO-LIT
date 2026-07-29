@@ -1,0 +1,96 @@
+@startuml
+title ECHO System Deployment Diagram
+left to right direction
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam defaultTextAlignment center
+
+actor Researcher as user
+
+node "Browser" as browser {
+  component "ECHO Web UI\nReact + TypeScript + Vite" as frontend
+}
+
+node "Docker Compose / deployment host" {
+  node "frontend" as frontendContainer {
+    component "Vite web server" as vite
+  }
+
+  node "api" as apiContainer {
+    component "FastAPI control plane" as api
+    component "Session middleware\nCORS + validation" as middleware
+  }
+
+  node "worker-cpu" as cpuWorker {
+    component "Celery worker\nqueue: cpu\nconcurrency: 2" as cpu
+  }
+
+  node "worker-model-local" as localModelWorker {
+    component "Celery model worker\nqueues: gpu-fast, gpu-large\nconcurrency: 1" as localModel
+  }
+
+  node "scheduler" as schedulerContainer {
+    component "Celery Beat\nhourly cleanup" as scheduler
+  }
+
+  database "Redis 7\nappend-only / noeviction" as redis {
+    collections "DB 0\nSessions + analysis-cache" as redisCache
+    collections "DB 1\nJob metadata + health" as redisJobs
+    queue "DB 2\nCelery broker" as redisBroker
+    database "DB 3\nCelery task results" as redisResults
+  }
+
+  folder "Object storage" as storage {
+    file "Local shared-storage\n(development)" as localStorage
+    cloud "S3-compatible bucket\n(production)" as s3
+  }
+
+  database "Hugging Face cache\nmodel weights" as modelCache
+}
+
+node "Optional accelerator profile" {
+  node "worker-gpu" as gpuWorker {
+    component "Celery worker\nCUDA\nqueues: gpu-fast, gpu-large\nconcurrency: 1" as gpu
+  }
+  node "worker-amd" as amdWorker {
+    component "Celery worker\nROCm\nqueues: gpu-fast, gpu-large\nconcurrency: 1" as amd
+  }
+}
+
+user --> browser
+browser --> vite
+vite --> api : HTTPS / REST\n(port 8000)
+api --> middleware
+api --> redisCache : sessions / cache pointers
+api --> redisJobs : job + audio metadata
+api --> redisBroker : task envelope
+api --> storage : upload / result proxy
+
+cpu --> redisBroker : consume cpu
+cpu --> redisJobs : progress / status
+cpu --> storage : download / store results
+
+localModel --> redisBroker : consume gpu-fast, gpu-large
+localModel --> redisJobs : progress / status
+localModel --> storage : download / store results
+localModel --> modelCache : lazy model load
+
+scheduler --> redisBroker : send cleanup task
+cpu --> localStorage : remove expired objects
+gpu --> redisBroker : consume when gpu profile enabled
+gpu --> storage
+gpu --> modelCache
+amd --> redisBroker : consume when amd profile enabled
+amd --> storage
+amd --> modelCache
+
+note bottom of localModelWorker
+In GPU/AMD deployments, scale this
+local development worker to zero.
+end note
+
+note right of storage
+Objects and metadata expire after 24 hours.
+Production buckets use Backend/s3-lifecycle.json.
+end note
+@enduml
