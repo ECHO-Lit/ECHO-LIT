@@ -20,6 +20,8 @@ import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 import umap
+from app.core.device import INFERENCE_DEVICE, inference_dtype
+from app.core.settings import settings
 
 
 class _Wav2Vec2ClassificationHead(nn.Module):
@@ -84,7 +86,7 @@ def _safe_to_device(model, device):
             raise
         logger.warning(f"Meta tensor detected moving to {device}; reloading {name_or_path} with device_map")
         cls = type(model)
-        load_kwargs = {"device_map": {"": device}}
+        load_kwargs = {"device_map": {"": str(device)}}
         dtype = getattr(model, "dtype", None)
         if dtype is not None:
             load_kwargs["torch_dtype"] = dtype
@@ -92,8 +94,7 @@ def _safe_to_device(model, device):
 
 
 def transcribe_whisper(model_id, audio_file, chunk_length_s=30, batch_size=8, return_timestamps=False, return_attention=False):
-    device = 0 if torch.cuda.is_available() else -1
-    torch_dtype = torch.float32
+    device = INFERENCE_DEVICE
     # Load audio
     audio, sample_rate = librosa.load(audio_file, sr=16000)
     audio = audio.astype(np.float32)
@@ -147,22 +148,7 @@ def transcribe_whisper(model_id, audio_file, chunk_length_s=30, batch_size=8, re
 
     # For attention extraction, we need to use the raw model, not the pipeline
     if return_attention:
-        
-        processor = WhisperProcessor.from_pretrained(model_id)
-        # CRITICAL FIX: Use eager attention to support output_attentions=True.
-        # `low_cpu_mem_usage=False` disables the meta-device init path that in
-        # some transformers versions leaves `proj_out.weight` (the LM head,
-        # tied to `decoder.embed_tokens`) uninitialized -> random logits ->
-        # `.generate()` emits garbage token indices -> downstream tensor
-        # shape / index-out-of-bounds crashes.
-        model = WhisperForConditionalGeneration.from_pretrained(
-            model_id, attn_implementation="eager", low_cpu_mem_usage=False
-        )
-        # Explicitly re-tie weights in case the loader skipped the standard
-        # `_tie_weights` hook (safe no-op when already tied).
-        if hasattr(model, "tie_weights"):
-            model.tie_weights()
-        model = _safe_to_device(model, "cuda:0" if torch.cuda.is_available() else "cpu")
+        processor, model = get_whisper_attention_models(model_id)
         
         # Process audio to input features
         input_features = processor(audio, sampling_rate=sample_rate, return_tensors="pt").input_features
@@ -332,14 +318,14 @@ def transcribe_whisper(model_id, audio_file, chunk_length_s=30, batch_size=8, re
                         # CRITICAL FIX: Use eager attention for output_attentions=True
                         model_for_attention = WhisperModel.from_pretrained(model_id, attn_implementation="eager")
                     
-                    if device and device != "cpu":
+                    if device.type != "cpu":
                         model_for_attention = _safe_to_device(model_for_attention, device)
                     
                     # Process audio properly
                     inputs = processor(audio, sampling_rate=sample_rate, return_tensors="pt")
                     input_features = inputs.input_features
                     
-                    if device and device != "cpu":
+                    if device.type != "cpu":
                         input_features = input_features.to(device)
                     
                     # Extract attention with proper error handling
@@ -540,13 +526,26 @@ def predict_emotion_wave2vec_with_attention(audio_path):
 
 
 _EMO_MODEL_ID = "r-f/wav2vec-english-speech-emotion-recognition"
-feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(_EMO_MODEL_ID)
-emo_model = _Wav2Vec2ForSpeechClassification.from_pretrained(_EMO_MODEL_ID, attn_implementation="eager")
-emo_device = "cuda:0" if torch.cuda.is_available() else "cpu"
-emo_model = _safe_to_device(emo_model, emo_device)
-emo_model.eval()
+emo_device = INFERENCE_DEVICE
+feature_extractor = None
+emo_model = None
+
+
+def get_emotion_models():
+    """Lazily load the emotion model inside a worker process."""
+    global feature_extractor, emo_model
+    if feature_extractor is None:
+        feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(_EMO_MODEL_ID)
+    if emo_model is None:
+        emo_model = _Wav2Vec2ForSpeechClassification.from_pretrained(
+            _EMO_MODEL_ID, attn_implementation="eager"
+        )
+        emo_model = _safe_to_device(emo_model, emo_device)
+        emo_model.eval()
+    return feature_extractor, emo_model
 
 def predict_emotion_wave2vec(audio_path, return_attention=False):
+    feature_extractor, emo_model = get_emotion_models()
     audio, rate = librosa.load(audio_path, sr=16000)
     inputs = feature_extractor(audio, sampling_rate=rate, return_tensors="pt", padding=True)
 
@@ -953,12 +952,20 @@ _whisper_model_large = None
 # different weight shapes.
 _whisper_gen_model_base = None
 _whisper_gen_model_large = None
+_whisper_attention_processor_base = None
+_whisper_attention_model_base = None
+_whisper_attention_processor_large = None
+_whisper_attention_model_large = None
+_whisper_saliency_processor_base = None
+_whisper_saliency_model_base = None
+_whisper_saliency_processor_large = None
+_whisper_saliency_model_large = None
 
 
 def get_whisper_base_models():
     global _whisper_processor_base, _whisper_model_base
     if _whisper_processor_base is None:
-        device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        device = INFERENCE_DEVICE
         _whisper_processor_base = WhisperProcessor.from_pretrained("openai/whisper-base")
         _whisper_model_base = WhisperModel.from_pretrained("openai/whisper-base")
         _whisper_model_base = _safe_to_device(_whisper_model_base, device)
@@ -968,11 +975,11 @@ def get_whisper_base_models():
 def get_whisper_large_models():
     global _whisper_processor_large, _whisper_model_large
     if _whisper_processor_large is None:
-        device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        device = INFERENCE_DEVICE
         _whisper_processor_large = WhisperProcessor.from_pretrained("openai/whisper-large-v3")
         _whisper_model_large = WhisperModel.from_pretrained(
             "openai/whisper-large-v3",
-            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+            torch_dtype=inference_dtype(allow_half=True),
         )
         _whisper_model_large = _safe_to_device(_whisper_model_large, device)
     return _whisper_processor_large, _whisper_model_large
@@ -999,14 +1006,130 @@ def get_whisper_gen_model(model_id: str):
     )
     if hasattr(model, "tie_weights"):
         model.tie_weights()
-    device = "cuda:0" if torch.cuda.is_available() else "cpu"
-    model = _safe_to_device(model, device)
+    model = _safe_to_device(model, INFERENCE_DEVICE)
     model.eval()
     if model_id == "openai/whisper-base":
         _whisper_gen_model_base = model
     elif model_id == "openai/whisper-large-v3":
         _whisper_gen_model_large = model
     return model
+
+
+def get_whisper_attention_models(model_id: str):
+    """Return a cached eager-attention Whisper generation variant."""
+    global _whisper_attention_processor_base, _whisper_attention_model_base
+    global _whisper_attention_processor_large, _whisper_attention_model_large
+    if model_id == "openai/whisper-base":
+        processor, model = _whisper_attention_processor_base, _whisper_attention_model_base
+    else:
+        processor, model = _whisper_attention_processor_large, _whisper_attention_model_large
+    if processor is None:
+        processor = WhisperProcessor.from_pretrained(model_id)
+    if model is None:
+        model = WhisperForConditionalGeneration.from_pretrained(
+            model_id, attn_implementation="eager", low_cpu_mem_usage=False
+        )
+        if hasattr(model, "tie_weights"):
+            model.tie_weights()
+        # See settings.ATTENTION_FORCE_CPU: the eager attention path segfaults on
+        # the GPU via torch's Triton-backed bmm kernel. Callers move their inputs
+        # with `.to(model.device)`, so pinning the model here is sufficient.
+        if settings.ATTENTION_FORCE_CPU:
+            logger.info("attention model pinned to CPU (ATTENTION_FORCE_CPU)")
+            model = _safe_to_device(model, "cpu")
+        else:
+            model = _safe_to_device(model, INFERENCE_DEVICE)
+        model.eval()
+    if model_id == "openai/whisper-base":
+        _whisper_attention_processor_base, _whisper_attention_model_base = processor, model
+    else:
+        _whisper_attention_processor_large, _whisper_attention_model_large = processor, model
+    return processor, model
+
+
+def get_whisper_saliency_models(model_id: str):
+    """Return a cached encoder reserved for gradient-enabled analysis."""
+    global _whisper_saliency_processor_base, _whisper_saliency_model_base
+    global _whisper_saliency_processor_large, _whisper_saliency_model_large
+    if model_id == "openai/whisper-base":
+        processor, model = _whisper_saliency_processor_base, _whisper_saliency_model_base
+    else:
+        processor, model = _whisper_saliency_processor_large, _whisper_saliency_model_large
+    if processor is None:
+        processor = WhisperProcessor.from_pretrained(model_id)
+    if model is None:
+        kwargs = (
+            {"torch_dtype": inference_dtype(allow_half=True)}
+            if model_id.endswith("large-v3")
+            else {}
+        )
+        model = WhisperModel.from_pretrained(model_id, **kwargs)
+        model = _safe_to_device(model, INFERENCE_DEVICE)
+    if model_id == "openai/whisper-base":
+        _whisper_saliency_processor_base, _whisper_saliency_model_base = processor, model
+    else:
+        _whisper_saliency_processor_large, _whisper_saliency_model_large = processor, model
+    return processor, model
+
+
+def unload_model_resources(model: str, purpose: str) -> None:
+    """Release a registry entry and its accelerator memory."""
+    global feature_extractor, emo_model
+    global _whisper_processor_base, _whisper_model_base
+    global _whisper_processor_large, _whisper_model_large
+    global _whisper_gen_model_base, _whisper_gen_model_large
+    global _whisper_attention_processor_base, _whisper_attention_model_base
+    global _whisper_attention_processor_large, _whisper_attention_model_large
+    global _whisper_saliency_processor_base, _whisper_saliency_model_base
+    global _whisper_saliency_processor_large, _whisper_saliency_model_large
+    from app.core.device import clear_accelerator_cache
+
+    if model == "wav2vec2":
+        if emo_model is not None:
+            emo_model.to("cpu")
+        feature_extractor = None
+        emo_model = None
+    elif model == "whisper-base":
+        if purpose == "encoder":
+            if _whisper_model_base is not None:
+                _whisper_model_base.to("cpu")
+            _whisper_processor_base = None
+            _whisper_model_base = None
+        elif purpose == "gradient":
+            if _whisper_saliency_model_base is not None:
+                _whisper_saliency_model_base.to("cpu")
+            _whisper_saliency_processor_base = None
+            _whisper_saliency_model_base = None
+        elif purpose == "eager-attention":
+            if _whisper_attention_model_base is not None:
+                _whisper_attention_model_base.to("cpu")
+            _whisper_attention_processor_base = None
+            _whisper_attention_model_base = None
+        else:
+            if _whisper_gen_model_base is not None:
+                _whisper_gen_model_base.to("cpu")
+            _whisper_gen_model_base = None
+    elif model == "whisper-large":
+        if purpose == "encoder":
+            if _whisper_model_large is not None:
+                _whisper_model_large.to("cpu")
+            _whisper_processor_large = None
+            _whisper_model_large = None
+        elif purpose == "gradient":
+            if _whisper_saliency_model_large is not None:
+                _whisper_saliency_model_large.to("cpu")
+            _whisper_saliency_processor_large = None
+            _whisper_saliency_model_large = None
+        elif purpose == "eager-attention":
+            if _whisper_attention_model_large is not None:
+                _whisper_attention_model_large.to("cpu")
+            _whisper_attention_processor_large = None
+            _whisper_attention_model_large = None
+        else:
+            if _whisper_gen_model_large is not None:
+                _whisper_gen_model_large.to("cpu")
+            _whisper_gen_model_large = None
+    clear_accelerator_cache()
 
 def extract_whisper_embeddings(audio_file_path: str, model_size: str = "base") -> np.ndarray:
     """
@@ -1062,6 +1185,7 @@ def extract_wav2vec2_embeddings(audio_file_path: str) -> np.ndarray:
     Returns:
         numpy array of embeddings
     """
+    feature_extractor, emo_model = get_emotion_models()
     # Load audio
     audio, rate = librosa.load(audio_file_path, sr=16000)
     
@@ -1117,99 +1241,11 @@ def reduce_dimensions(embeddings_list: list, method: str = "pca", n_components: 
     return reduced
 
 
-def extract_audio_frequency_features(audio_file_path: str) -> dict:
-    """
-    Extract comprehensive frequency-domain audio features using librosa.
-    
-    Args:
-        audio_file_path: Path to audio file
-    
-    Returns:
-        Dictionary containing various audio frequency features
-    """
-    # Load audio with standard sample rate
-    audio, sr = librosa.load(audio_file_path, sr=22050)
-    
-    # Extract various frequency features
-    features = {}
-    
-    # Basic spectral features
-    spectral_centroids = librosa.feature.spectral_centroid(y=audio, sr=sr)[0]
-    spectral_rolloff = librosa.feature.spectral_rolloff(y=audio, sr=sr, roll_percent=0.85)[0]
-    spectral_bandwidth = librosa.feature.spectral_bandwidth(y=audio, sr=sr)[0]
-    zero_crossing_rate = librosa.feature.zero_crossing_rate(audio)[0]
-    
-    # MFCC features (first 13 coefficients)
-    mfccs = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=13)
-    
-    # Chroma features (pitch class profiles)
-    chroma = librosa.feature.chroma_stft(y=audio, sr=sr)
-    
-    # Tonnetz (tonal centroid features)
-    tonnetz = librosa.feature.tonnetz(y=librosa.effects.harmonic(audio), sr=sr)
-    
-    # Tempo and beat tracking
-    tempo, beats = librosa.beat.beat_track(y=audio, sr=sr)
-    
-    # RMS Energy
-    rms = librosa.feature.rms(y=audio)[0]
-    
-    # Calculate statistics for each feature
-    features = {
-        "spectral_centroid": {
-            "mean": float(np.mean(spectral_centroids)),
-            "std": float(np.std(spectral_centroids)),
-            "min": float(np.min(spectral_centroids)),
-            "max": float(np.max(spectral_centroids))
-        },
-        "spectral_rolloff": {
-            "mean": float(np.mean(spectral_rolloff)),
-            "std": float(np.std(spectral_rolloff)),
-            "min": float(np.min(spectral_rolloff)),
-            "max": float(np.max(spectral_rolloff))
-        },
-        "spectral_bandwidth": {
-            "mean": float(np.mean(spectral_bandwidth)),
-            "std": float(np.std(spectral_bandwidth)),
-            "min": float(np.min(spectral_bandwidth)),
-            "max": float(np.max(spectral_bandwidth))
-        },
-        "zero_crossing_rate": {
-            "mean": float(np.mean(zero_crossing_rate)),
-            "std": float(np.std(zero_crossing_rate)),
-            "min": float(np.min(zero_crossing_rate)),
-            "max": float(np.max(zero_crossing_rate))
-        },
-        "rms_energy": {
-            "mean": float(np.mean(rms)),
-            "std": float(np.std(rms)),
-            "min": float(np.min(rms)),
-            "max": float(np.max(rms))
-        },
-        "mfcc": {
-            f"mfcc_{i+1}_mean": float(np.mean(mfccs[i])) for i in range(13)
-        },
-        "chroma": {
-            f"chroma_{i+1}_mean": float(np.mean(chroma[i])) for i in range(12)
-        },
-        "tonnetz": {
-            f"tonnetz_{i+1}_mean": float(np.mean(tonnetz[i])) for i in range(6)
-        },
-        "tempo": float(tempo),
-        "duration": float(len(audio) / sr),
-        "sample_rate": int(sr)
-    }
-    
-    # Flatten the nested structure for easier processing
-    flattened_features = {}
-    for key, value in features.items():
-        if isinstance(value, dict):
-            for subkey, subvalue in value.items():
-                flattened_features[f"{key}_{subkey}"] = subvalue
-        else:
-            flattened_features[key] = value
-    
-    return flattened_features
+# Moved to app.services.audio_features_service so the CPU worker can extract
+# features without importing torch/transformers/umap. Re-exported here for
+# existing callers.
+from app.services.audio_features_service import extract_audio_frequency_features
+
 
 
 def process_attention_into_pairs(attention_result, audio_file_path, model_size, layer_idx, head_idx):

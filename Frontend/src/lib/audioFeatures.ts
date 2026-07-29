@@ -123,3 +123,19 @@ export const getFeatureExplanation = (featureName: string): string => {
   
   return 'Audio feature - extracting characteristics from the audio signal for analysis.';
 };
+
+// Plain-English explanations for dataset-level EDA charts (not per-feature).
+export const EDA_CHART_EXPLANATIONS: Record<string, string> = {
+  duration_histogram: 'Distribution of clip lengths. Very short or very long clips relative to the rest of the dataset may be padded or truncated differently by the model.',
+  class_balance: 'Count of files per class label. Uneven counts can bias a model toward predicting the majority class, inflating accuracy without real skill.',
+  transcript_length_histogram: 'Distribution of word counts per transcript. Short vs. long utterances stress a speech-to-text model differently and affect how word error rate should be read.',
+  sample_rate_breakdown: 'Sample rates present in the dataset. Mixed sample rates mean some files are resampled before model input, which can introduce artifacts.',
+  correlation_heatmap: 'Pairwise correlation between acoustic features. Strongly correlated (near +1 or -1) features carry redundant information.',
+  feature_box_plot: 'Spread of a feature across the dataset: box = 25th-75th percentile, line = median, whiskers = min/max. Wide boxes mean high variability.',
+  clustering_scatter: 'HDBSCAN groups files whose embeddings sit close together — recordings the model "hears" as similar. It infers the number of groups from the data rather than being told, and leaves genuinely isolated files unassigned as noise.',
+  silhouette_score: 'How well separated the clusters are, from -1 to 1. Above 0.5 means tight, distinct groups; near 0 means clusters overlap so heavily the boundaries are arbitrary; below 0 means points sit closer to a neighbouring cluster than their own.',
+  cluster_noise: 'Files too isolated to join any cluster. These are the first place to look for corrupt audio, mislabelled data, or genuine outliers — but being unusual is not proof of being broken, so inspect before discarding.',
+  cluster_label_crosstab: 'How clusters line up against ground-truth labels. A cluster confined to one label means the acoustics separate that class cleanly; a cluster spread across several labels means the model has little to distinguish them by.',
+  nearest_neighbors: 'The clips whose embeddings are mathematically closest to the selected file. Useful for spotting near-duplicates, confirming a label, or understanding why a file was clustered where it was.',
+  dataset_comparison: 'Two datasets overlaid on the same axes. Differences in duration spread or class balance predict how well a model trained on one will transfer to the other.',
+};

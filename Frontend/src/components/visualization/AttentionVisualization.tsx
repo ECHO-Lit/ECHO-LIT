@@ -1,9 +1,11 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useState, useEffect } from "react";
-import { API_BASE } from "@/lib/api";
+import { firstJobResult, resolveAudioId } from '@/lib/jobs';
+import { useJob } from '@/hooks/use-job';
 
 interface AttentionPair {
   from_word: string;
@@ -37,6 +39,7 @@ export const AttentionVisualization = ({ selectedFile, model, dataset }: Attenti
   const [attentionData, setAttentionData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const attentionJob = useJob<any>();
 
   const fetchAttentionData = async () => {
     console.log("AttentionVisualization - fetchAttentionData called:", {
@@ -55,58 +58,13 @@ export const AttentionVisualization = ({ selectedFile, model, dataset }: Attenti
     setError(null);
 
     try {
-      const requestBody: any = {
-        model: model,
-        layer: selectedLayer,
-        head: selectedHead
-      };
-
-      // Detect uploaded/perturbed files (same logic as SaliencyVisualization)
-      const isUploadedFile = typeof selectedFile === 'object' && selectedFile?.file_path && (
-        selectedFile.file_path.includes('uploads/') ||
-        selectedFile.file_path.startsWith('uploads/') ||
-        selectedFile.message === "Perturbed file" ||
-        selectedFile.message === "File uploaded successfully" ||
-        selectedFile.message === "File uploaded and processed successfully"
-      ) && selectedFile.message !== "Selected from embeddings" && selectedFile.message !== "Selected from dataset";
-
-      // Handle file path resolution following your patterns
-      if (isUploadedFile) {
-        requestBody.file_path = selectedFile.file_path;
-      } else if (typeof selectedFile === 'string') {
-        // String dataset file reference
-        if (dataset && dataset !== 'custom') {
-          requestBody.dataset = dataset;
-          requestBody.dataset_file = selectedFile;
-        } else {
-          throw new Error("Dataset required for dataset file selection");
-        }
-      } else if (selectedFile?.file_path && dataset && dataset !== 'custom') {
-        // Dataset file object with a real dataset name
-        requestBody.dataset = dataset;
-        requestBody.dataset_file = selectedFile.file_path;
-      } else if (selectedFile?.file_path) {
-        // Fallback: treat as uploaded file
-        requestBody.file_path = selectedFile.file_path;
-      } else {
-        throw new Error("No valid file selected");
-      }
-
-      const response = await fetch(`${API_BASE}/inferences/attention-pairs`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        credentials: 'include',
-        body: JSON.stringify(requestBody),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`${response.status} - ${errorText}`);
-      }
-
-      const data = await response.json();
+      const audioId = await resolveAudioId(selectedFile, dataset);
+      const data = firstJobResult(await attentionJob.start({
+        operation: 'attention',
+        model,
+        audio_ids: [audioId],
+        parameters: { layer_idx: selectedLayer, head_idx: selectedHead },
+      }));
       setAttentionData(data);
 
     } catch (err: any) {
@@ -457,11 +415,14 @@ export const AttentionVisualization = ({ selectedFile, model, dataset }: Attenti
           <CardTitle className="text-xs">Attention Analysis</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="flex items-center justify-center py-8">
+          <div className="flex flex-col items-center justify-center gap-3 py-8">
             <div className="flex items-center space-x-2">
               <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary"></div>
-              <span className="text-xs text-muted-foreground">Extracting attention patterns...</span>
+              <span className="text-xs text-muted-foreground">
+                {attentionJob.status?.progress.message || 'Extracting attention patterns...'}
+              </span>
             </div>
+            <Button size="sm" variant="outline" onClick={() => void attentionJob.cancel()}>Cancel</Button>
           </div>
         </CardContent>
       </Card>

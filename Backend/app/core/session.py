@@ -5,6 +5,8 @@ from .redis import ensure_session
 
 class SessionMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        if request.url.path == "/health":
+            return await call_next(request)
         sid = await ensure_session(request.cookies.get(settings.SESSION_COOKIE_NAME))
         request.state.sid = sid
         resp: Response = await call_next(request)

@@ -12,9 +12,10 @@ import WaveSurfer from "wavesurfer.js";
 import { API_BASE } from '@/lib/api';
 
 interface UploadedFile {
+  audio_id?: string;
   file_id: string;
   filename: string;
-  file_path: string;
+  playback_url?: string;
   message: string;
   size?: number;
   duration?: number;
@@ -42,7 +43,8 @@ interface WhisperPrediction {
 }
 
 interface PerturbationResult {
-  perturbed_file: string;
+  audio_id: string;
+  playback_url: string;
   filename: string;
   duration_ms: number;
   sample_rate: number;
@@ -97,48 +99,15 @@ export const DatapointEditorPanel = ({
   const audioUrl = (() => {
     // If showing perturbed audio and it's available
     if (showPerturbed && perturbationResult?.success) {
-      const filename = perturbationResult.filename;
-      return `${API_BASE}/upload/file/${filename}`;
+      return `${API_BASE}${perturbationResult.playback_url}`;
     }
     
     // Otherwise show original audio
     if (!selectedFile) return undefined;
+    if (selectedFile.playback_url) return `${API_BASE}${selectedFile.playback_url}`;
+    if (selectedFile.audio_id) return `${API_BASE}/audio/${selectedFile.audio_id}`;
     
-    // Check if this is an uploaded file - more precise detection
-    const isUploadedFile = selectedFile.file_path && (
-      selectedFile.file_path.includes('uploads/') || 
-      selectedFile.file_path.startsWith('uploads/') ||
-      selectedFile.message === "Perturbed file" ||
-      selectedFile.message === "File uploaded successfully" ||
-      selectedFile.message === "File uploaded and processed successfully"
-    ) && selectedFile.message !== "Selected from embeddings" && selectedFile.message !== "Selected from dataset";
-    
-    if (isUploadedFile) {
-      // This is an uploaded file, use the upload endpoint
-      return `${API_BASE}/upload/file/${selectedFile.file_id}`;
-    }
-    
-    // For dataset files (including files selected from embeddings)
-    // Use original dataset if available and it's a real dataset
-    const datasetToUse = originalDataset && originalDataset !== "custom" ? originalDataset : dataset;
-    
-    if (datasetToUse && datasetToUse !== "custom") {
-      // This is a dataset file from built-in or custom datasets
-      const filename = encodeURIComponent(selectedFile.filename);
-      
-      // Handle custom datasets vs built-in datasets
-      if (datasetToUse.startsWith('custom:')) {
-        // Custom dataset: use the original route /{dataset}/file/{filename}
-        // The backend handles the custom dataset format properly
-        return `${API_BASE}/${encodeURIComponent(datasetToUse)}/file/${filename}`;
-      } else {
-        // Built-in dataset: use /{dataset}/file/{filename}
-        return `${API_BASE}/${encodeURIComponent(datasetToUse)}/file/${filename}`;
-      }
-    } else {
-      // Fallback to upload endpoint when dataset is "custom" (generic case)
-      return `${API_BASE}/upload/file/${selectedFile.file_id}`;
-    }
+    return undefined;
   })();
 
   // Get current file info (original or perturbed) with better data handling

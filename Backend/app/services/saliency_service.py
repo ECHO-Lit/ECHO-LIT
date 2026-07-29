@@ -8,16 +8,14 @@ from pathlib import Path
 from captum.attr import IntegratedGradients, GradientShap, Lime
 from captum.attr._utils.lrp_rules import EpsilonRule
 from captum.attr._core.lrp import LRP
+from app.core.device import accelerator_memory_allocated_mb, clear_accelerator_cache
 from app.services.model_loader_service import (
     transcribe_whisper_base,
     transcribe_whisper_large,
     transcribe_whisper_with_timestamps,
     predict_emotion_wave2vec,
-    get_whisper_base_models,
-    get_whisper_large_models,
-    feature_extractor,
-    emo_model,
-    emo_device
+    get_whisper_saliency_models,
+    get_emotion_models,
 )
 
 logger = logging.getLogger(__name__)
@@ -67,9 +65,9 @@ def generate_whisper_saliency(audio_file_path: str, model_size: str = "base", me
             chunks = [c for c in chunks if c.get("timestamp", [0, 0])[0] < max_seconds]
     
     if model_size == "base":
-        processor, model = get_whisper_base_models()
+        processor, model = get_whisper_saliency_models("openai/whisper-base")
     else:
-        processor, model = get_whisper_large_models()
+        processor, model = get_whisper_saliency_models("openai/whisper-large-v3")
 
     # Defensive reset: previous saliency runs enable gradient checkpointing.
     # A finally block restores it, but if the process was interrupted or hit an
@@ -93,8 +91,7 @@ def generate_whisper_saliency(audio_file_path: str, model_size: str = "base", me
         return enc.pow(2).mean(dim=(1, 2))             # [B]
     
     if method == "gradcam":
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        clear_accelerator_cache(device)
 
         # NOTE: gradient checkpointing intentionally NOT enabled here.
         # With Captum IG's interpolated inputs (n_steps forward+backward passes)
@@ -105,8 +102,9 @@ def generate_whisper_saliency(audio_file_path: str, model_size: str = "base", me
         n_steps = 16
         internal_batch_size = 1
 
-        if torch.cuda.is_available():
-            logger.info(f"GPU memory before saliency: {torch.cuda.memory_allocated()/1024**2:.2f} MB")
+        allocated_mb = accelerator_memory_allocated_mb(device)
+        if allocated_mb is not None:
+            logger.info(f"GPU memory before saliency: {allocated_mb:.2f} MB")
 
         attributions = None
         try:
@@ -119,8 +117,7 @@ def generate_whisper_saliency(audio_file_path: str, model_size: str = "base", me
         except RuntimeError as e:
             msg = str(e)
             if "CUDA out of memory" in msg or "out of memory" in msg.lower():
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                clear_accelerator_cache(device)
                 logger.warning("Whisper IG OOM; retrying with fewer steps")
                 try:
                     ig = IntegratedGradients(model_forward)
@@ -147,8 +144,7 @@ def generate_whisper_saliency(audio_file_path: str, model_size: str = "base", me
         gs = GradientShap(model_forward)
         baseline = torch.zeros_like(input_features)
         try:
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            clear_accelerator_cache(device)
             attributions = gs.attribute(
                 input_features,
                 baselines=baseline,
@@ -156,10 +152,9 @@ def generate_whisper_saliency(audio_file_path: str, model_size: str = "base", me
                 stdevs=0.09,
             )
         except RuntimeError as e:
-            if "CUDA out of memory" in str(e):
+            if "out of memory" in str(e).lower():
                 logger.warning("Whisper SHAP OOM; retrying with fewer samples")
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                clear_accelerator_cache(device)
                 attributions = gs.attribute(
                     input_features,
                     baselines=baseline,
@@ -333,10 +328,8 @@ def generate_whisper_saliency(audio_file_path: str, model_size: str = "base", me
 ################################################################################################################
 
 def generate_wav2vec2_saliency(audio_file_path: str, method: str = "gradcam", existing_prediction: Dict = None) -> Dict:
-    # Derive device from actual model params, not the import-time global.
-    # A previous CUDA OOM fallback (or reload) may have relocated the model, and
-    # `emo_device` (a string captured at import) can otherwise diverge from
-    # `next(emo_model.parameters()).device`, producing device-mismatch errors.
+    feature_extractor, emo_model = get_emotion_models()
+    # Derive the device from the model because an OOM fallback may relocate it.
     runtime_device = next(emo_model.parameters()).device
     # Defensive reset: prior attention-extraction paths may have flipped
     # `output_attentions` on the base config; ensure model is in eval mode.
@@ -399,10 +392,9 @@ def generate_wav2vec2_saliency(audio_file_path: str, method: str = "gradcam", ex
                 internal_batch_size=1,
             )
         except RuntimeError as e:
-            if "CUDA out of memory" in str(e):
-                logger.warning("CUDA OOM during Wav2Vec2 saliency. Falling back to CPU with fewer steps.")
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+            if "out of memory" in str(e).lower():
+                logger.warning("Accelerator OOM during Wav2Vec2 saliency. Falling back to CPU with fewer steps.")
+                clear_accelerator_cache(runtime_device)
                 cpu_device = torch.device("cpu")
                 # Move inputs to CPU and temporarily move model — restore in finally to avoid global corruption
                 input_values_cpu = input_values.detach().to(cpu_device)
@@ -433,8 +425,7 @@ def generate_wav2vec2_saliency(audio_file_path: str, method: str = "gradcam", ex
         gs = GradientShap(model_forward)
         baseline = torch.zeros_like(input_values)
         try:
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            clear_accelerator_cache(runtime_device)
             attributions = gs.attribute(
                 input_values,
                 baselines=baseline,
@@ -443,10 +434,9 @@ def generate_wav2vec2_saliency(audio_file_path: str, method: str = "gradcam", ex
                 stdevs=0.09,
             )
         except RuntimeError as e:
-            if "CUDA out of memory" in str(e):
+            if "out of memory" in str(e).lower():
                 logger.warning("Wav2Vec2 SHAP OOM; retrying with fewer samples")
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                clear_accelerator_cache(runtime_device)
                 attributions = gs.attribute(
                     input_values,
                     baselines=baseline,

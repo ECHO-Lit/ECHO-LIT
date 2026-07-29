@@ -10,11 +10,14 @@ import { RangeSlider } from "@/components/ui/range-slider"
 import { Volume2, Scissors, Plus, Play, Zap, Loader2, CheckCircle, XCircle } from "lucide-react"
 import { WaveformViewer } from "../audio/WaveformViewer"
 import { API_BASE } from '@/lib/api'
+import { firstJobResult, resolveAudioId, runJob } from '@/lib/jobs'
+import { useJob } from '@/hooks/use-job'
 
 interface UploadedFile {
+  audio_id?: string;
   file_id: string;
   filename: string;
-  file_path: string;
+  playback_url?: string;
   message: string;
   size?: number;
   duration?: number;
@@ -22,7 +25,8 @@ interface UploadedFile {
 }
 
 interface PerturbationResult {
-  perturbed_file: string;
+  audio_id: string;
+  playback_url: string;
   filename: string;
   duration_ms: number;
   sample_rate: number;
@@ -45,54 +49,11 @@ interface PerturbationToolsProps {
   originalDataset?: string;
 }
 
-// Helper function to generate correct audio URL for original files
-const getAudioUrl = (selectedFile: UploadedFile, dataset?: string, originalDataset?: string): string => {
-  
-  // Check if this is an uploaded file
-  const isUploadedFile = selectedFile.file_path && (
-    selectedFile.file_path.includes('uploads/') || 
-    selectedFile.file_path.includes('uploads\\') ||
-    selectedFile.message === "Perturbed file" ||
-    selectedFile.message === "File uploaded successfully" ||
-    selectedFile.message === "File uploaded and processed successfully"
-  ) && selectedFile.message !== "Selected from dataset";
-  
-  if (isUploadedFile) {
-    // For uploaded files, use the file_id (unique filename) with upload endpoint
-    const url = `${API_BASE}/upload/file/${selectedFile.file_id}`;
-    return url;
-  } else {
-    // For dataset files, use the filename with dataset endpoint
-    // Use original dataset if available and it's a real dataset
-    const datasetToUse = originalDataset && originalDataset !== "custom" ? originalDataset : dataset;
-    
-    if (datasetToUse && datasetToUse !== "custom") {
-      // This is a dataset file from built-in or custom datasets
-      const filename = encodeURIComponent(selectedFile.filename);
-      
-      // Handle custom datasets vs built-in datasets
-      if (datasetToUse.startsWith('custom:')) {
-        // Custom dataset: use the original route /{dataset}/file/{filename}
-        const url = `${API_BASE}/${encodeURIComponent(datasetToUse)}/file/${filename}`;
-        return url;
-      } else {
-        // Built-in dataset: use /{dataset}/file/{filename}
-        const url = `${API_BASE}/${encodeURIComponent(datasetToUse)}/file/${filename}`;
-        return url;
-      }
-    } else {
-      // Fallback to upload endpoint when dataset is "custom" (generic case)
-      const url = `${API_BASE}/upload/file/${selectedFile.file_id}`;
-      return url;
-    }
-  }
-};
-
-// Helper function to generate correct audio URL for perturbed files
-const getPerturbedAudioUrl = (perturbedFilePath: string): string => {
-  // Extract filename from path (handle both forward and backward slashes)
-  const filename = perturbedFilePath.split('/').pop() || perturbedFilePath.split('\\').pop();
-  return `${API_BASE}/upload/file/${filename}`;
+// Audio selections are registered assets; the UI never constructs a local path URL.
+const getAudioUrl = (selectedFile: UploadedFile): string => {
+  if (selectedFile.playback_url) return `${API_BASE}${selectedFile.playback_url}`;
+  if (selectedFile.audio_id) return `${API_BASE}/audio/${selectedFile.audio_id}`;
+  return '';
 };
 
 export const PerturbationTools: React.FC<PerturbationToolsProps> = ({
@@ -121,6 +82,7 @@ export const PerturbationTools: React.FC<PerturbationToolsProps> = ({
   const [isLoading, setIsLoading] = useState(false)
   const [perturbationResult, setPerturbationResult] = useState<PerturbationResult | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const perturbationJob = useJob<any>()
 
   // Clear perturbation results when selected file changes
   useEffect(() => {
@@ -192,37 +154,12 @@ export const PerturbationTools: React.FC<PerturbationToolsProps> = ({
         });
       }
 
-      // Determine if this is an uploaded file or dataset file
-      const isUploadedFile = selectedFile.file_path && (
-        selectedFile.file_path.includes('uploads/') || 
-        selectedFile.file_path.startsWith('uploads/') ||
-        selectedFile.message === "Perturbed file" ||
-        selectedFile.message === "File uploaded successfully" ||
-        selectedFile.message === "File uploaded and processed successfully"
-      ) && selectedFile.message !== "Selected from dataset";
-
-      const reqBody = {
-        perturbations: perturbations,
-        file_path: isUploadedFile ? selectedFile.file_path : selectedFile.filename,
-        ...(isUploadedFile ? {} : {
-          dataset: originalDataset || dataset
-        })
-      };
-
-      const response = await fetch(`${API_BASE}/perturb`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(reqBody),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || `Server error: ${response.status}`);
-      }
-
-      const result = await response.json();
+      const audioId = await resolveAudioId(selectedFile, originalDataset || dataset);
+      const result = firstJobResult<PerturbationResult>(await perturbationJob.start({
+        operation: 'perturbation',
+        audio_ids: [audioId],
+        parameters: { perturbations },
+      }));
       setPerturbationResult(result);
       
       // Notify parent component
@@ -236,9 +173,10 @@ export const PerturbationTools: React.FC<PerturbationToolsProps> = ({
           
           // Create a file object for the perturbed file
           const perturbedFile: UploadedFile = {
-            file_id: result.filename,
+            audio_id: result.audio_id,
+            file_id: result.audio_id,
             filename: result.filename,
-            file_path: result.perturbed_file,
+            playback_url: result.playback_url,
             message: "Perturbed file",
             duration: result.duration_ms / 1000,
             sample_rate: result.sample_rate
@@ -247,25 +185,13 @@ export const PerturbationTools: React.FC<PerturbationToolsProps> = ({
           
           // Run inference on the perturbed file
 
-          const inferenceResponse = await fetch(`${API_BASE}/inferences/run`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              model: model,
-              file_path: result.perturbed_file
-            }),
-          });
-          
-          if (inferenceResponse.ok) {
-            const prediction = await inferenceResponse.json();
-            const predictionText = typeof prediction === 'string' ? prediction : prediction?.text || JSON.stringify(prediction);
-            onPredictionRefresh(perturbedFile, predictionText);
-          } else {
-            const errorText = await inferenceResponse.text();
-            console.error("Error during auto-prediction:", errorText);
-          }
+          const prediction = firstJobResult<any>(await runJob({
+            operation: 'prediction', model, audio_ids: [result.audio_id],
+          }));
+          const predictionText = typeof prediction === 'string'
+            ? prediction
+            : prediction?.text || prediction?.predicted_emotion || JSON.stringify(prediction);
+          onPredictionRefresh(perturbedFile, predictionText);
         } catch (error) {
           console.error("DEBUG: Error running auto-prediction:", error);
         }
@@ -507,6 +433,16 @@ export const PerturbationTools: React.FC<PerturbationToolsProps> = ({
             )}
             {isLoading ? "Applying Perturbations..." : "Apply Perturbations"}
           </Button>
+          {isLoading && perturbationJob.status && (
+            <div className="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+              <span>
+                {perturbationJob.status.progress.message} ({perturbationJob.status.progress.current}/{perturbationJob.status.progress.total})
+              </span>
+              <Button type="button" variant="outline" size="sm" onClick={() => void perturbationJob.cancel()}>
+                Cancel
+              </Button>
+            </div>
+          )}
           <p className="text-xs text-muted-foreground mt-2 text-center">
             {!selectedFile 
               ? "Select a file to apply perturbations"
@@ -533,7 +469,7 @@ export const PerturbationTools: React.FC<PerturbationToolsProps> = ({
                   <Badge variant="outline" className="text-[10px]">O</Badge>
                 </div>
                 <WaveformViewer 
-                  audioUrl={getAudioUrl(selectedFile, dataset, originalDataset)}
+                  audioUrl={getAudioUrl(selectedFile)}
                 />
               </div>
             )}
@@ -546,7 +482,7 @@ export const PerturbationTools: React.FC<PerturbationToolsProps> = ({
                   <Badge variant="secondary" className="text-[10px]">P</Badge>
                 </div>
                 <WaveformViewer 
-                  audioUrl={getPerturbedAudioUrl(perturbationResult.perturbed_file)}
+                  audioUrl={`${API_BASE}${perturbationResult.playback_url}`}
                 />
               </div>
             )}

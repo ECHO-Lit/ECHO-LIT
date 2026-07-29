@@ -1,10 +1,8 @@
 # syntax=docker/dockerfile:1.7
 ARG VARIANT=cpu
 
-# ── CPU base ──────────────────────────────────────────────────
 FROM python:3.11-slim AS base-cpu
-
-# ── GPU base ──────────────────────────────────────────────────
+FROM python:3.11-slim AS base-rocm
 FROM nvidia/cuda:12.6.0-runtime-ubuntu22.04 AS base-gpu
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.11 python3.11-dev python3-pip && \
@@ -13,41 +11,46 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.11 -m pip install --upgrade pip && \
     rm -rf /var/lib/apt/lists/*
 
-# ── Final (branches on VARIANT arg) ───────────────────────────
 FROM base-${VARIANT} AS final
 ARG VARIANT=cpu
+ARG ROLE=worker
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# ffmpeg: audio decode. libsndfile1: librosa/soundfile.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg libsndfile1 && \
+# gcc is a runtime requirement, not a build-time one: Triton (shipped with torch)
+# JIT-compiles CUDA/ROCm kernels on first use and shells out to a host C compiler
+# to build the launcher stub. The nvidia/cuda *runtime* base has no toolchain, so
+# without this any Triton-backed op fails with "Failed to find C compiler".
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libsndfile1 gcc && \
     rm -rf /var/lib/apt/lists/*
+
+# Triton checks $CC first, then searches for cc/gcc/clang on PATH.
+ENV CC=gcc
 
 RUN useradd -m -u 1000 appuser && \
     mkdir -p /home/appuser/.cache/huggingface && \
     chown -R appuser:appuser /home/appuser
 
 WORKDIR /app
+COPY requirements-api.txt requirements-worker.txt ./
 
-# Copy requirements first so pip layer is cached across code-only changes.
-COPY requirements.txt ./
-
-# CPU: strip the cu126 extra-index line, install from CPU wheel index.
-# GPU: install as-is (cu126 line already in requirements.txt).
-RUN if [ "${VARIANT}" = "cpu" ]; then \
-      tail -n +2 requirements.txt > /tmp/req.txt && \
-      python3 -m pip install --extra-index-url https://download.pytorch.org/whl/cpu -r /tmp/req.txt; \
+# Cache mount persists downloaded wheels across builds — only new/changed
+# packages hit the network on subsequent requirements file edits.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    if [ "${ROLE}" = "api" ]; then \
+      python3 -m pip install -r requirements-api.txt; \
     else \
-      python3 -m pip install -r requirements.txt; \
+      if [ "${VARIANT}" = "gpu" ]; then TORCH_INDEX=https://download.pytorch.org/whl/cu126; \
+      elif [ "${VARIANT}" = "rocm" ]; then TORCH_INDEX=https://download.pytorch.org/whl/rocm6.4; \
+      else TORCH_INDEX=https://download.pytorch.org/whl/cpu; fi && \
+      python3 -m pip install torch torchaudio --index-url "${TORCH_INDEX}" && \
+      python3 -m pip install -r requirements-worker.txt; \
     fi
 
 COPY app ./app
-
-RUN mkdir -p /app/uploads /app/data && chown -R appuser:appuser /app
+RUN mkdir -p /app/shared-storage /app/data && chown -R appuser:appuser /app
 USER appuser
 
 EXPOSE 8000

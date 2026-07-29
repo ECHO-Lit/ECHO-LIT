@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -8,12 +8,16 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
-import { EmbeddingPlot } from "../visualization/EmbeddingPlot";
+import { EmbeddingPlot, type EmbeddingColorMode } from "../visualization/EmbeddingPlot";
 import { ScalarPlot } from "../visualization/ScalarPlot";
+import { DatasetEdaView } from "../eda/DatasetEdaView";
+import { ClusterSizeControl } from "../eda/ClusterSizeControl";
+import { ClusterInsights } from "../eda/ClusterInsights";
 import { useEmbedding } from "../../contexts/EmbeddingContext";
 import { RefreshCw, Eye, Box, Square, BarChart3, HelpCircle } from "lucide-react";
 import { getFeatureExplanation } from "@/lib/audioFeatures";
 import { API_BASE } from "@/lib/api";
+import { materializeAudio, runJob } from '@/lib/jobs';
 
 interface EmbeddingPanelProps {
   model?: string;
@@ -21,6 +25,8 @@ interface EmbeddingPanelProps {
   availableFiles?: string[];
   selectedFile?: string | null;
   onFileSelect?: (filename: string) => void;
+  // Pass-through for the Dataset EDA tab's click-to-filter charts.
+  onEdaFilterChange?: (filenames: string[] | null) => void;
 }
 
 // Audio Frequency Analysis interface (reusing from ScalersVisualization)
@@ -111,10 +117,17 @@ interface WhisperAnalysis {
   };
 }
 
-export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice", availableFiles = [], selectedFile, onFileSelect }: EmbeddingPanelProps) => {
+export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice", availableFiles = [], selectedFile, onFileSelect, onEdaFilterChange }: EmbeddingPanelProps) => {
   const [reductionMethod, setReductionMethod] = useState("pca");
   const [is3D, setIs3D] = useState(false);
   const [selectionMode, setSelectionMode] = useState<'box' | 'lasso'>('box');
+  // Normal view vs HDBSCAN-cluster view for the scatter.
+  const [colorMode, setColorMode] = useState<EmbeddingColorMode>('default');
+  const [minClusterSize, setMinClusterSize] = useState(5);
+  // Which chart bucket currently drives the file-table filter, e.g. "cluster:2" or
+  // "class:happy". Owned here rather than in either tab, because both the cluster
+  // table (Embeddings) and the EDA charts can set it — two copies would desync.
+  const [activeFilterKey, setActiveFilterKey] = useState<string | null>(null);
   const [analysisType, setAnalysisType] = useState<'predictions' | 'common-terms' | 'audio-features'>('audio-features');
   const [selectedByAngle, setSelectedByAngle] = useState<string[]>([]);
   const [selectedPoints2D, setSelectedPoints2D] = useState<string[]>([]);
@@ -151,9 +164,37 @@ export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice
     if (availableFiles.length > 0 && model && dataset) {
       const filesToProcess = availableFiles;
       const nComponents = is3D ? 3 : 2;
-      fetchEmbeddings(model, dataset, filesToProcess, reductionMethod, nComponents);
+      fetchEmbeddings(model, dataset, filesToProcess, reductionMethod, nComponents, minClusterSize);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model, dataset, availableFiles, reductionMethod, fetchEmbeddings]);
+
+  // Never leave the toggle claiming "Clusters" when there are none to show.
+  useEffect(() => {
+    if (!embeddingData?.clusterByFilename && colorMode === 'cluster') {
+      setColorMode('default');
+    }
+  }, [embeddingData, colorMode]);
+
+  // Buckets are dataset-scoped — a filter from the previous dataset would point at
+  // files the table no longer holds.
+  useEffect(() => {
+    setActiveFilterKey(null);
+    onEdaFilterChange?.(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dataset]);
+
+  // Toggle a chart-bucket filter: clicking the same bucket twice clears it.
+  const handleBucketClick = useCallback((key: string, filenames: string[]) => {
+    setActiveFilterKey((prev) => {
+      if (prev === key) {
+        onEdaFilterChange?.(null);
+        return null;
+      }
+      onEdaFilterChange?.(filenames);
+      return key;
+    });
+  }, [onEdaFilterChange]);
 
   // Cleanup debounce timer on unmount
   useEffect(() => {
@@ -169,7 +210,7 @@ export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice
       // Use entire dataset for better visualization
       const filesToProcess = availableFiles;
       const nComponents = is3D ? 3 : 2;
-      fetchEmbeddings(model, dataset, filesToProcess, reductionMethod, nComponents);
+      fetchEmbeddings(model, dataset, filesToProcess, reductionMethod, nComponents, minClusterSize);
     }
   };
 
@@ -184,7 +225,7 @@ export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice
     if (embeddingData && availableFiles.length > 0) {
       const filesToProcess = availableFiles;
       const nComponents = checked ? 3 : 2;
-      fetchEmbeddings(model, dataset, filesToProcess, reductionMethod, nComponents);
+      fetchEmbeddings(model, dataset, filesToProcess, reductionMethod, nComponents, minClusterSize);
     }
   };
 
@@ -192,6 +233,14 @@ export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice
     if (onFileSelect) {
       onFileSelect(filename);
     }
+  };
+
+  // Re-run the embedding job with a new HDBSCAN setting. Per-file embeddings are
+  // cached server-side, so this re-groups without re-running the encoder.
+  const handleRecluster = (nextMinClusterSize: number) => {
+    setMinClusterSize(nextMinClusterSize);
+    if (availableFiles.length === 0) return;
+    fetchEmbeddings(model, dataset, availableFiles, reductionMethod, is3D ? 3 : 2, nextMinClusterSize);
   };
 
   const handleAngleRangeSelect = (selectedFiles: string[]) => {
@@ -281,20 +330,10 @@ export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice
         requestBody.dataset = dataset;
       }
 
-      const response = await fetch(`${API_BASE}/inferences/audio-frequency-batch`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(requestBody),
+      const assets = await Promise.all(filenames.map((filename) => materializeAudio(dataset, filename)));
+      const analysis = await runJob<AudioFrequencyAnalysis>({
+        operation: 'audio_features', audio_ids: assets.map((asset) => asset.audio_id),
       });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Failed to fetch audio frequency analysis: ${response.status} - ${errorText}`);
-      }
-
-      const analysis = await response.json();
       setAudioFrequencyAnalysis(analysis);
       setBatchPrediction(null);
       setWhisperAnalysis(null);
@@ -323,21 +362,10 @@ export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice
         requestBody.dataset = dataset;
       }
 
-      const response = await fetch(`${API_BASE}/inferences/wav2vec2-batch`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        credentials: 'include',
-        body: JSON.stringify(requestBody),
+      const assets = await Promise.all(filenames.map((filename) => materializeAudio(dataset, filename)));
+      const prediction = await runJob<BatchPredictionAnalysis>({
+        operation: 'prediction', model: 'wav2vec2', audio_ids: assets.map((asset) => asset.audio_id),
       });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Failed to fetch batch predictions: ${response.status} - ${errorText}`);
-      }
-
-      const prediction = await response.json();
       setBatchPrediction(prediction);
       setAudioFrequencyAnalysis(null);
       setWhisperAnalysis(null);
@@ -367,21 +395,10 @@ export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice
         requestBody.dataset = dataset;
       }
 
-      const response = await fetch(`${API_BASE}/inferences/whisper-batch`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        credentials: 'include',
-        body: JSON.stringify(requestBody),
+      const assets = await Promise.all(filenames.map((filename) => materializeAudio(dataset, filename)));
+      const analysis = await runJob<WhisperAnalysis>({
+        operation: 'prediction', model, audio_ids: assets.map((asset) => asset.audio_id),
       });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Failed to fetch whisper analysis: ${response.status} - ${errorText}`);
-      }
-
-      const analysis = await response.json();
       setWhisperAnalysis(analysis);
       setAudioFrequencyAnalysis(null);
       setBatchPrediction(null);
@@ -410,8 +427,16 @@ export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice
         </Tooltip>
           </h3>
         </div>
-      
-      <div className="flex-1 p-3 bg-panel-background overflow-auto">
+
+      <Tabs defaultValue="embeddings" className="flex-1 flex flex-col overflow-hidden">
+        <div className="px-3 pt-2 border-b border-gray-200">
+          <TabsList className="h-8">
+            <TabsTrigger value="embeddings" className="text-xs">Embeddings</TabsTrigger>
+            <TabsTrigger value="eda" className="text-xs">Dataset EDA</TabsTrigger>
+          </TabsList>
+        </div>
+
+      <TabsContent value="embeddings" className="flex-1 p-3 bg-panel-background overflow-auto m-0">
         <div className="space-y-3">
           {/* Controls Section */}
           <div className="flex-shrink-0 space-y-2.5">
@@ -549,18 +574,86 @@ export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice
             )}
           </div>
 
+          {/* Normal vs clustered view. Disabled until an embedding run has produced
+              cluster labels — the toggle explains why rather than silently doing nothing. */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] text-muted-foreground">View</span>
+            <div className="inline-flex rounded-md border border-border overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setColorMode('default')}
+                className={`px-2 py-1 text-[10px] transition-colors ${
+                  colorMode === 'default'
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-background text-muted-foreground hover:bg-muted'
+                }`}
+              >
+                Normal
+              </button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => setColorMode('cluster')}
+                    disabled={!embeddingData?.clusterByFilename}
+                    className={`px-2 py-1 text-[10px] border-l border-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                      colorMode === 'cluster'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'bg-background text-muted-foreground hover:bg-muted'
+                    }`}
+                  >
+                    Clusters
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs text-xs">
+                  {embeddingData?.clusterByFilename
+                    ? 'Colour points by HDBSCAN cluster. Click a legend entry to isolate or hide a cluster.'
+                    : 'Generate embeddings first — clusters are computed as part of that run.'}
+                </TooltipContent>
+              </Tooltip>
+            </div>
+            {colorMode === 'cluster' && embeddingData?.clustering && (
+              <Badge variant="outline" className="text-[10px]">
+                {embeddingData.clustering.n_clusters} clusters &middot; {embeddingData.clustering.n_noise} noise
+              </Badge>
+            )}
+          </div>
+
+          {/* Clustering settings sit with the toggle they affect — only meaningful
+              while the cluster view is on, so hidden otherwise. */}
+          {colorMode === 'cluster' && (
+            <ClusterSizeControl
+              value={minClusterSize}
+              onChange={setMinClusterSize}
+              appliedValue={embeddingData?.clustering?.params?.min_cluster_size}
+              onApply={handleRecluster}
+              isBusy={isLoading}
+            />
+          )}
+
           {/* Embedding Plot */}
           <div className="h-[450px] border border-border rounded-lg bg-card p-1.5 overflow-hidden">
-            <EmbeddingPlot 
-              selectedMethod={reductionMethod} 
+            <EmbeddingPlot
+              selectedMethod={reductionMethod}
               is3D={is3D}
               onPointSelect={handlePointSelect}
               onAngleRangeSelect={handleAngleRangeSelect}
               selectedFile={selectedFile}
               selectionMode={selectionMode}
               onSelectionChange={handle2DSelectionChange}
+              colorMode={colorMode}
             />
           </div>
+
+          {/* Numbers behind the colours — only while the cluster view is on. */}
+          {colorMode === 'cluster' && (
+            <ClusterInsights
+              dataset={dataset}
+              onFileSelect={onFileSelect}
+              onBucketClick={handleBucketClick}
+              activeFilterKey={activeFilterKey}
+            />
+          )}
 
           {/* Analysis Panel - Show when files are selected (2D or 3D) */}
           {(selectedByAngle.length > 0 || selectedPoints2D.length > 0) && (
@@ -904,7 +997,19 @@ export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice
           )}
 
         </div>
-      </div>
+      </TabsContent>
+
+      <TabsContent value="eda" className="flex-1 p-3 bg-panel-background overflow-auto m-0">
+        <DatasetEdaView
+          dataset={dataset}
+          availableFiles={availableFiles}
+          selectedFile={selectedFile}
+          onFileSelect={onFileSelect}
+          onBucketClick={handleBucketClick}
+          activeFilterKey={activeFilterKey}
+        />
+      </TabsContent>
+      </Tabs>
     </div>
     </TooltipProvider>
   );

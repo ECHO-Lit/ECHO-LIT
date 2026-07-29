@@ -3,8 +3,8 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 from datetime import datetime
-import librosa
 import hashlib
+from app.core.audio_probe import probe_audio
 
 logger = logging.getLogger(__name__)
 
@@ -76,8 +76,7 @@ class CustomDatasetManager:
         
         # Calculate audio metadata
         try:
-            duration = librosa.get_duration(path=str(file_path))
-            audio_data, sample_rate = librosa.load(file_path, sr=None)
+            duration, sample_rate, _ = probe_audio(file_path)
         except Exception as e:
             logger.warning(f"Could not extract audio metadata for {filename}: {e}")
             duration = 0.0

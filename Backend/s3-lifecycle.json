@@ -1,0 +1,11 @@
+{
+  "Rules": [
+    {
+      "ID": "echo-transient-artifacts-24h",
+      "Status": "Enabled",
+      "Filter": {},
+      "Expiration": { "Days": 1 },
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 1 }
+    }
+  ]
+}

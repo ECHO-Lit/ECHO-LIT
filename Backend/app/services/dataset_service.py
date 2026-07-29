@@ -1,8 +1,9 @@
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, List, Optional
 import csv
-import librosa
 import logging
+from app.core.audio_probe import probe_audio
 from .custom_dataset_service import (
     get_custom_dataset_manager, 
     is_custom_dataset, 
@@ -10,6 +11,17 @@ from .custom_dataset_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Parsed rows for the bundled datasets, keyed by dataset name -> (csv mtime, rows).
+#
+# RAVDESS's CSV has no `duration` column, so every row triggers a probe_audio()
+# call that opens the audio file. That is ~144 file reads per request, paid again
+# by /{dataset}/metadata and /{dataset}/eda. The bundled datasets are read-only,
+# so parse once and reuse; the mtime key means editing a CSV still invalidates.
+# Custom datasets are per-session and mutable, and are deliberately NOT cached.
+#
+# Callers get the cached list itself, so they must treat it as read-only.
+_metadata_cache: Dict[str, tuple[float, List[Dict[str, str]]]] = {}
 
 
 # Resolve paths relative to repo structure: Backend/data/
@@ -33,8 +45,7 @@ DATASET_BASE_DIRS: Dict[str, Path] = {
 def calculate_audio_duration(audio_path: Path) -> float:
     """Calculate duration of audio file in seconds"""
     try:
-        # Use librosa to get duration without loading the entire audio
-        duration = librosa.get_duration(path=str(audio_path))
+        duration, _, _ = probe_audio(audio_path)
         return round(duration, 2)
     except Exception as e:
         logger.warning(f"Could not calculate duration for {audio_path}: {e}")
@@ -68,6 +79,11 @@ def load_metadata(dataset: str, session_id: Optional[str] = None) -> List[Dict[s
     if not csv_path.exists():
         raise FileNotFoundError(f"Dataset metadata not found for: {dataset}")
 
+    csv_mtime = csv_path.stat().st_mtime
+    cached = _metadata_cache.get(ds)
+    if cached and cached[0] == csv_mtime:
+        return cached[1]
+
     rows: List[Dict[str, str]] = []
     try:
         with csv_path.open("r", encoding="utf-8") as f:
@@ -76,29 +92,33 @@ def load_metadata(dataset: str, session_id: Optional[str] = None) -> List[Dict[s
                 # normalize keys to lowercase; strip whitespace
                 normalized = {str(k).strip().lower(): (v.strip() if isinstance(v, str) else v) for k, v in row.items()}
                 
-                # Add duration for datasets that don't have it (like RAVDESS)
-                if ds == "ravdess" and "duration" not in normalized:
-                    try:
-                        # Try to find the audio file and calculate duration
-                        filename = normalized.get("filename", "")
-                        if filename:
-                            audio_path = DATASET_BASE_DIRS[ds] / filename
-                            if audio_path.exists():
-                                duration = calculate_audio_duration(audio_path)
-                                normalized["duration"] = str(duration)
-                            else:
-                                normalized["duration"] = "0.0"
-                        else:
-                            normalized["duration"] = "0.0"
-                    except Exception as e:
-                        logger.warning(f"Error calculating duration for {filename}: {e}")
-                        normalized["duration"] = "0.0"
-                
                 rows.append(normalized)
     except Exception:
         # Re-raise to let the route map to a 500
         raise
 
+    # Datasets whose CSV lacks a duration column (RAVDESS) need every file probed.
+    # Serially that is ~13s for 144 files; probe_audio is I/O-bound, so run the
+    # batch on a thread pool instead.
+    needs_duration = [r for r in rows if not r.get("duration")]
+    if needs_duration:
+        base_dir = DATASET_BASE_DIRS.get(ds)
+
+        def _duration_for(row: Dict[str, str]) -> str:
+            filename = row.get("filename", "")
+            if not filename or base_dir is None:
+                return "0.0"
+            audio_path = base_dir / filename
+            if not audio_path.exists():
+                return "0.0"
+            # calculate_audio_duration already swallows and logs probe failures.
+            return str(calculate_audio_duration(audio_path))
+
+        with ThreadPoolExecutor(max_workers=min(16, len(needs_duration))) as pool:
+            for row, duration in zip(needs_duration, pool.map(_duration_for, needs_duration)):
+                row["duration"] = duration
+
+    _metadata_cache[ds] = (csv_mtime, rows)
     return rows
 
 
