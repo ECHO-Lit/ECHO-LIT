@@ -33,6 +33,7 @@ class Settings(BaseSettings):
 
     MAX_UPLOAD_BYTES: int = 100 * 1024 * 1024
     MAX_AUDIO_DURATION_SECONDS: float = 10 * 60
+    API_V1_PREFIX: str = "/api/v1"
     RESULT_SCHEMA_VERSION: str = "v1"
     CODE_VERSION: str = "development"
     TASK_SOFT_TIME_LIMIT_SECONDS: int = 55 * 60

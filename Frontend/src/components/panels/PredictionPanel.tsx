@@ -5,6 +5,7 @@ import { Progress } from "@/components/ui/progress";
 import { SaliencyVisualization } from "../visualization/SaliencyVisualization";
 import { AttentionVisualization } from "../visualization/AttentionVisualization";
 import { PerturbationTools } from "../analysis/PerturbationTools";
+import { PerturbationDiagnosticsPanel } from "../analysis/PerturbationDiagnosticsPanel";
 import { useState, useEffect } from "react";
 import { firstJobResult, resolveAudioId, runJob } from '@/lib/jobs';
 import { listCustomModels } from '@/lib/models';
@@ -316,10 +317,11 @@ export const PredictionPanel = ({ selectedFile, selectedEmbeddingFile, model, da
     <div className="h-full bg-panel-background border-t border-border">
       <Tabs defaultValue="saliency" className="h-full">
         <div className="bg-panel-header border-b border-border px-3 py-2">
-          <TabsList className={`h-7 grid w-full ${hasAttention ? 'grid-cols-3' : 'grid-cols-2'} bg-muted`}>
+          <TabsList className={`h-7 grid w-full ${hasAttention ? 'grid-cols-4' : 'grid-cols-3'} bg-muted`}>
             <TabsTrigger value="saliency" className="text-xs">Saliency</TabsTrigger>
             {hasAttention && <TabsTrigger value="attention" className="text-xs">Attention</TabsTrigger>}
             <TabsTrigger value="perturbation" className="text-xs">Perturbation</TabsTrigger>
+            <TabsTrigger value="diagnostics" className="text-xs">Diagnostics</TabsTrigger>
           </TabsList>
         </div>
 
@@ -358,6 +360,15 @@ export const PredictionPanel = ({ selectedFile, selectedEmbeddingFile, model, da
                 originalDataset={originalDataset}
               />
             </div>
+          </TabsContent>
+
+          <TabsContent value="diagnostics" className="m-0 h-full">
+            <PerturbationDiagnosticsPanel
+              selectedFile={selectedFile}
+              model={model}
+              dataset={dataset}
+              originalDataset={originalDataset}
+            />
           </TabsContent>
         </div>
       </Tabs>

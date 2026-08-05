@@ -7,6 +7,7 @@ from fastapi import Response
 from fastapi.responses import JSONResponse
 
 from .api.routes import (
+    analyses as analyses_routes,
     dataset_management as dataset_management_routes,
     datasets as datasets_routes,
     debug as debug_routes,
@@ -87,6 +88,10 @@ app.include_router(session_routes.router, tags=["Session"])
 app.include_router(upload_routes.router, tags=["Audio"])
 app.include_router(jobs_routes.router, tags=["Jobs"])
 app.include_router(models_routes.router, tags=["Custom Models"])
+app.include_router(analyses_routes.router, prefix=settings.API_V1_PREFIX, tags=["Analyses"])
+app.include_router(
+    analyses_routes.router, tags=["Analyses (unversioned alias)"], include_in_schema=False
+)
 app.include_router(dataset_management_routes.router, prefix="/upload", tags=["Dataset Management"])
 app.include_router(datasets_routes.router, tags=["Datasets"])
 app.include_router(health_routes.router, tags=["Health"])
