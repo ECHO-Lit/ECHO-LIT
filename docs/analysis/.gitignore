@@ -1,0 +1,6 @@
+# Activation caches written by scripts/run_layer_probe_analysis.py.
+#
+# These are a regenerable intermediate, not a result: ~2-4 MB per run, and one
+# `--dataset`/`--model`/`--noise-snr-db` combination each. The probe results
+# themselves (*.json, ~25 KB) ARE the findings and are committed.
+*.activations.npz
