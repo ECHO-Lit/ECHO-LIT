@@ -9,7 +9,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
-import { Upload, HelpCircle } from "lucide-react";
+import { Upload, HelpCircle, PanelLeft, PanelBottom, PanelRight } from "lucide-react";
 import { API_BASE } from '@/lib/api';
 import { CustomDatasetManager } from '@/components/dataset/CustomDatasetManager';
 import { CustomModelManager } from '@/components/model/CustomModelManager';
@@ -37,6 +37,12 @@ interface ToolbarProps {
   dataset: string;
   setDataset: (dataset: string) => void;
   onBatchInference?: (model: string, dataset: string) => void; // New callback for batch inference
+  leftPanelOpen?: boolean;
+  rightPanelOpen?: boolean;
+  bottomPanelOpen?: boolean;
+  onToggleLeftPanel?: () => void;
+  onToggleRightPanel?: () => void;
+  onToggleBottomPanel?: () => void;
 }
 
 interface CustomDataset {
@@ -57,7 +63,7 @@ const defaultDatasetForModel: Record<string, string> = {
   "wav2vec2": "ravdess",
 };
 
-export const Toolbar = ({apiData, setApiData, selectedFile, uploadedFiles, onFileSelect, model, setModel, dataset, setDataset, onBatchInference}: ToolbarProps) => {
+export const Toolbar = ({apiData, setApiData, selectedFile, uploadedFiles, onFileSelect, model, setModel, dataset, setDataset, onBatchInference, leftPanelOpen, rightPanelOpen, bottomPanelOpen, onToggleLeftPanel, onToggleRightPanel, onToggleBottomPanel}: ToolbarProps) => {
   const [customDatasets, setCustomDatasets] = useState<CustomDataset[]>([]);
   const [customModels, setCustomModels] = useState<CustomModel[]>([]);
 
@@ -251,6 +257,56 @@ const onModelChange = (value: string) => {
 
       {/* Right side: Action buttons */}
       <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-1">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={leftPanelOpen ? "secondary" : "ghost"}
+                size="icon"
+                className="h-7 w-7"
+                onClick={onToggleLeftPanel}
+              >
+                <PanelLeft className="h-3.5 w-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>Toggle left panel</p>
+            </TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={bottomPanelOpen ? "secondary" : "ghost"}
+                size="icon"
+                className="h-7 w-7"
+                onClick={onToggleBottomPanel}
+              >
+                <PanelBottom className="h-3.5 w-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>Toggle bottom panel</p>
+            </TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={rightPanelOpen ? "secondary" : "ghost"}
+                size="icon"
+                className="h-7 w-7"
+                onClick={onToggleRightPanel}
+              >
+                <PanelRight className="h-3.5 w-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>Toggle right panel</p>
+            </TooltipContent>
+          </Tooltip>
+        </div>
+
         <CustomDatasetManager
           onDatasetCreated={handleDatasetCreated}
           onDatasetSelected={handleDatasetSelected}
