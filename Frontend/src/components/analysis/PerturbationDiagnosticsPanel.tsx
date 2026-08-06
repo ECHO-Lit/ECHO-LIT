@@ -13,9 +13,12 @@ import {
   type SweepStateMap,
 } from "./PropertySweepControls";
 import { SensitivityProfileChart } from "@/components/visualization/SensitivityProfileChart";
+import { SensitivityRankingChart } from "./SensitivityRankingChart";
 import { FailureBoundaryCallout } from "./FailureBoundaryCallout";
 import { VariantInspector } from "./VariantInspector";
+import { InfoTooltip } from "./InfoTooltip";
 import { useAnalysisJob } from "@/hooks/use-job-query";
+import { FR7_GLOSSARY } from "@/lib/fr7Glossary";
 import {
   estimateVariants,
   isGridOverLimit,
@@ -104,6 +107,7 @@ export function PerturbationDiagnosticsPanel({
                 disabled={job.isRunning}
               />
               Lexical-destruction control
+              <InfoTooltip text={FR7_GLOSSARY.lexicalControl} />
             </label>
             <span className="text-xs text-muted-foreground">masks ~30% of words as a reference ceiling</span>
           </div>
@@ -113,7 +117,7 @@ export function PerturbationDiagnosticsPanel({
               ~{estimatedVariants} variant{estimatedVariants === 1 ? "" : "s"}
               {overLimit && (
                 <span className="text-destructive font-medium">
-                  {" "}— exceeds the {MAX_GRID_VARIANTS}-variant limit, reduce steps/repeats
+                  {" "}, exceeds the {MAX_GRID_VARIANTS}-variant limit, reduce steps or repeats
                 </span>
               )}
             </span>
@@ -162,6 +166,10 @@ export function PerturbationDiagnosticsPanel({
                 <SensitivityProfileChart
                   profiles={job.result.properties}
                   onPointClick={(property, theta) => setSelected({ property, theta })}
+                />
+                <SensitivityRankingChart
+                  profile={job.result.profile}
+                  lexicalDestructionDegradation={job.result.controls.lexical_destruction?.degradation ?? null}
                 />
                 <FailureBoundaryCallout profile={job.result.profile} />
               </>

@@ -1,5 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { AlertTriangle, TrendingDown, HelpCircle, Waves } from "lucide-react";
+import { InfoTooltip } from "./InfoTooltip";
+import { FR7_GLOSSARY } from "@/lib/fr7Glossary";
 import type { SensitivityProfile } from "@/lib/linguisticAcoustic";
 
 const VERDICT_META: Record<
@@ -41,6 +43,7 @@ export function FailureBoundaryCallout({ profile }: FailureBoundaryCalloutProps)
       <div className="flex items-center gap-2">
         <Icon className="h-4 w-4 shrink-0" />
         <span className="font-semibold text-sm">{meta.label}</span>
+        <InfoTooltip text={FR7_GLOSSARY.verdict} />
         {profile.dominant_property && (
           <Badge variant="outline" className="text-xs">
             dominant: {profile.dominant_property}
@@ -49,12 +52,15 @@ export function FailureBoundaryCallout({ profile }: FailureBoundaryCalloutProps)
       </div>
 
       {profile.verdict !== "inconclusive" ? (
-        <div className="text-xs grid grid-cols-2 gap-x-4 gap-y-1">
+        <div className="text-xs grid grid-cols-[1fr_auto_auto] items-center gap-x-2 gap-y-1">
           <span>Acoustic influence</span>
+          <InfoTooltip text={FR7_GLOSSARY.acousticInfluence} />
           <span className="font-mono text-right">{profile.acoustic_influence.toFixed(2)}</span>
           <span>Linguistic robustness</span>
+          <InfoTooltip text={FR7_GLOSSARY.linguisticRobustness} />
           <span className="font-mono text-right">{profile.linguistic_robustness.toFixed(2)}</span>
-          <span>Relative to word-removal</span>
+          <span>Relative to word removal</span>
+          <InfoTooltip text={FR7_GLOSSARY.relativeToWordRemoval} />
           <span className="font-mono text-right">{profile.relative_to_lexical_destruction.toFixed(2)}</span>
         </div>
       ) : (
