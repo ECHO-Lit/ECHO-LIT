@@ -6,7 +6,9 @@ export type JobOperation =
   | 'attention'
   | 'embedding'
   | 'perturbation'
-  | 'audio_features';
+  | 'audio_features'
+  | 'jacobian_lens_fit'
+  | 'jacobian_lens_apply';
 
 export type JobState = 'queued' | 'started' | 'processing' | 'success' | 'failure' | 'cancelled';
 

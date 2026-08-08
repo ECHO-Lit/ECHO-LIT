@@ -16,6 +16,8 @@ class JobOperation(str, Enum):
     embedding = "embedding"
     perturbation = "perturbation"
     audio_features = "audio_features"
+    jacobian_lens_fit = "jacobian_lens_fit"
+    jacobian_lens_apply = "jacobian_lens_apply"
 
 
 class JobStatus(str, Enum):
@@ -33,11 +35,14 @@ MODEL_REQUIRED_OPERATIONS = {
     JobOperation.saliency,
     JobOperation.attention,
     JobOperation.embedding,
+    JobOperation.jacobian_lens_fit,
+    JobOperation.jacobian_lens_apply,
 }
 SINGLE_AUDIO_OPERATIONS = {
     JobOperation.saliency,
     JobOperation.attention,
     JobOperation.perturbation,
+    JobOperation.jacobian_lens_apply,
 }
 
 
@@ -78,6 +83,25 @@ class AudioFeatureParameters(OperationParameters):
     pass
 
 
+class JacobianLensTrainingSample(BaseModel):
+    """One owned audio asset paired with its reference transcript for fitting."""
+
+    audio_id: str = Field(min_length=1, max_length=128)
+    transcript: str = Field(min_length=1, max_length=4096)
+
+
+class JacobianLensFitParameters(OperationParameters):
+    samples: list[JacobianLensTrainingSample] = Field(min_length=2, max_length=200)
+    probe_count: int = Field(default=4, ge=1, le=32)
+    max_audio_seconds: float = Field(default=30.0, gt=0, le=60)
+
+
+class JacobianLensApplyParameters(OperationParameters):
+    lens_id: str = Field(min_length=1, max_length=128)
+    top_k: int = Field(default=5, ge=1, le=20)
+    max_frames: int = Field(default=96, ge=8, le=256)
+
+
 PARAMETER_MODELS: dict[JobOperation, type[OperationParameters]] = {
     JobOperation.prediction: PredictionParameters,
     JobOperation.saliency: SaliencyParameters,
@@ -85,6 +109,8 @@ PARAMETER_MODELS: dict[JobOperation, type[OperationParameters]] = {
     JobOperation.embedding: EmbeddingParameters,
     JobOperation.perturbation: PerturbationParameters,
     JobOperation.audio_features: AudioFeatureParameters,
+    JobOperation.jacobian_lens_fit: JacobianLensFitParameters,
+    JobOperation.jacobian_lens_apply: JacobianLensApplyParameters,
 }
 
 
@@ -106,6 +132,12 @@ class JobCreateRequest(BaseModel):
             raise ValueError(f"{self.operation.value} does not accept a model")
         parameter_model = PARAMETER_MODELS[self.operation].model_validate(self.parameters)
         self.parameters = parameter_model.model_dump(mode="json", exclude_none=True)
+        if self.operation == JobOperation.jacobian_lens_fit:
+            sample_ids = [sample["audio_id"] for sample in self.parameters["samples"]]
+            if len(set(sample_ids)) != len(sample_ids):
+                raise ValueError("jacobian_lens_fit samples must use unique audio IDs")
+            if set(sample_ids) != set(self.audio_ids) or len(sample_ids) != len(self.audio_ids):
+                raise ValueError("jacobian_lens_fit audio_ids must exactly match parameters.samples")
         return self
 
 

@@ -30,8 +30,8 @@ class ModelDefinition:
 
 
 CUSTOM_MODEL_CAPABILITIES: dict[ModelKind, frozenset[str]] = {
-    ModelKind.SEQ2SEQ_ASR: frozenset({"prediction", "embedding", "saliency", "attention", "hidden_states"}),
-    ModelKind.CTC_ASR: frozenset({"prediction", "embedding", "saliency", "hidden_states"}),
+    ModelKind.SEQ2SEQ_ASR: frozenset({"prediction", "embedding", "saliency", "attention", "hidden_states", "jacobian_lens_fit", "jacobian_lens_apply"}),
+    ModelKind.CTC_ASR: frozenset({"prediction", "embedding", "saliency", "hidden_states", "jacobian_lens_fit", "jacobian_lens_apply"}),
     ModelKind.AUDIO_CLASSIFICATION: frozenset({"prediction", "embedding", "saliency", "hidden_states"}),
 }
 
@@ -56,6 +56,8 @@ MODEL_DEFINITIONS: dict[str, ModelDefinition] = {
             "saliency",
             "hidden_states",
             "decoder_activations",
+            "jacobian_lens_fit",
+            "jacobian_lens_apply",
         }),
     ),
     "whisper-large": ModelDefinition(
@@ -69,6 +71,8 @@ MODEL_DEFINITIONS: dict[str, ModelDefinition] = {
             "saliency",
             "hidden_states",
             "decoder_activations",
+            "jacobian_lens_fit",
+            "jacobian_lens_apply",
         }),
     ),
     "wav2vec2": ModelDefinition(
