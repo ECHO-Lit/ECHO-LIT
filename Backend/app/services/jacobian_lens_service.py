@@ -145,7 +145,14 @@ def fit_encoder_jacobian_lens(
             architecture, model, inputs, transcript, processor
         )
         target = target_states.mean(dim=1).squeeze(0)
-        sources = [state.mean(dim=1).squeeze(0) for state in encoder_states]
+        # ``target`` is computed *from* the raw encoder activations during the
+        # model forward pass.  Do not ask autograd for a derivative with
+        # respect to a pooled tensor created after that forward pass: it is a
+        # child of the activation, rather than an ancestor of ``target``.  We
+        # differentiate with respect to each raw layer activation, then pool
+        # the VJP across frames below.
+        raw_sources = list(encoder_states)
+        sources = [state.mean(dim=1).squeeze(0) for state in raw_sources]
         if matrices is None:
             matrices = [torch.zeros((target.numel(), source.numel()), dtype=torch.float32, device="cpu") for source in sources]
             baselines = [torch.zeros(source.numel(), dtype=torch.float32, device="cpu") for source in sources]
@@ -160,14 +167,19 @@ def fit_encoder_jacobian_lens(
             scalar = torch.dot(target, probe)
             gradients = torch.autograd.grad(
                 scalar,
-                sources,
+                raw_sources,
                 retain_graph=probe_index < probe_count - 1,
                 allow_unused=True,
             )
             for layer, gradient in enumerate(gradients):
                 if gradient is None:
                     raise JacobianLensError(f"Encoder layer {layer} is disconnected from the verbal output")
-                matrices[layer].add_(torch.outer(probe.detach().float().cpu(), gradient.detach().float().cpu()))
+                # A perturbation of the pooled activation is broadcast to all
+                # encoder frames, so its VJP is the sum over frame gradients.
+                pooled_gradient = gradient.sum(dim=1).squeeze(0)
+                matrices[layer].add_(
+                    torch.outer(probe.detach().float().cpu(), pooled_gradient.detach().float().cpu())
+                )
 
         for layer, source in enumerate(sources):
             baselines[layer].add_(source.detach().float().cpu())

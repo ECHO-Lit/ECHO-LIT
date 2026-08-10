@@ -21,6 +21,7 @@ interface DatasetRow {
   sentence?: string;
   transcript?: string;
   text?: string;
+  statement?: string;
   [key: string]: unknown;
 }
 
@@ -55,7 +56,7 @@ const baseFilename = (row: DatasetRow) => {
 };
 
 const transcriptFor = (row: DatasetRow) => {
-  const raw = row.sentence ?? row.transcript ?? row.text;
+  const raw = row.sentence ?? row.transcript ?? row.text ?? row.statement;
   return typeof raw === "string" ? raw.trim() : "";
 };
 
@@ -197,11 +198,11 @@ export default function JacobianLensLab() {
           <Card>
             <CardHeader>
               <CardTitle className="text-base">1. Choose a model and dataset</CardTitle>
-              <CardDescription>The dataset must contain an audio filename plus a transcript field (`sentence`, `transcript`, or `text`).</CardDescription>
+              <CardDescription>The dataset must contain an audio filename plus a transcript field (`sentence`, `transcript`, `text`, or RAVDESS `statement`).</CardDescription>
             </CardHeader>
             <CardContent className="grid gap-4 md:grid-cols-2">
               <div className="space-y-2"><Label>Speech-to-text model</Label><Select value={model} onValueChange={setModel}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{modelOptions.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectContent></Select></div>
-              <div className="space-y-2"><Label>Transcript dataset</Label><Select value={dataset} onValueChange={setDataset}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="common-voice">Common Voice</SelectItem>{customDatasets.map((item) => <SelectItem key={item.formatted_name} value={item.formatted_name}>{item.dataset_name}</SelectItem>)}</SelectContent></Select></div>
+              <div className="space-y-2"><Label>Transcript dataset</Label><Select value={dataset} onValueChange={setDataset}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="common-voice">Common Voice</SelectItem><SelectItem value="ravdess">RAVDESS</SelectItem>{customDatasets.map((item) => <SelectItem key={item.formatted_name} value={item.formatted_name}>{item.dataset_name}</SelectItem>)}</SelectContent></Select></div>
             </CardContent>
           </Card>
 
