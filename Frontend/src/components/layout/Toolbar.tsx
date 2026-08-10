@@ -52,9 +52,9 @@ interface CustomDataset {
 }
 
 const modelDatasetMap: Record<string, string[]> = {
-  "whisper-base": ["common-voice", "ravdess", "custom"],
-  "whisper-large": ["common-voice", "ravdess", "custom"],
-  "wav2vec2": ["common-voice", "ravdess", "custom"],
+  "whisper-base": ["common-voice", "ravdess", "l2-arctic", "saa", "custom"],
+  "whisper-large": ["common-voice", "ravdess", "l2-arctic", "saa", "custom"],
+  "wav2vec2": ["common-voice", "ravdess", "l2-arctic", "saa", "custom"],
 };
 
 const defaultDatasetForModel: Record<string, string> = {
@@ -189,6 +189,8 @@ const onModelChange = (value: string) => {
                     <p className="text-xs">Select the audio dataset to analyze:</p>
                     <p className="text-xs">• Common Voice: Speech recognition dataset</p>
                     <p className="text-xs">• RAVDESS: Emotion recognition dataset</p>
+                    <p className="text-xs">• L2-ARCTIC: L2 speech error dataset</p>
+                    <p className="text-xs">• SAA: Speaker accent dataset</p>
                     <p className="text-xs">• Custom: Your uploaded datasets</p>
                   </TooltipContent>
                 </Tooltip>
@@ -203,6 +205,8 @@ const onModelChange = (value: string) => {
                   let label = ds;
                   if (ds === "common-voice") label = "Common Voice";
                   else if (ds === "ravdess") label = "RAVDESS";
+                  else if (ds === "l2-arctic") label = "L2-ARCTIC";
+                  else if (ds === "saa") label = "SAA";
                   return (
                     <SelectItem key={ds} value={ds}>
                       {label}

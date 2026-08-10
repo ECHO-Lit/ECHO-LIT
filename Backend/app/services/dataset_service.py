@@ -32,13 +32,23 @@ DATASET_PATHS: Dict[str, Path] = {
     "common-voice": DATA_DIR / "common_voice_valid_dev" / "common_voice_valid_data_metadata.csv",
     "cv-valid-dev": DATA_DIR / "common_voice_valid_dev" / "common_voice_valid_data_metadata.csv",
     "ravdess": DATA_DIR / "ravdess_subset" / "ravdess_subset_metadata.csv",
+    "l2-arctic": DATA_DIR / "L2_ARCTIC_dataset" / "l2_metadata.csv",
+    "saa": DATA_DIR / "SAA_dataset" / "saa_metadata.csv",
 }
 
 # Base directories for dataset audio files
 DATASET_BASE_DIRS: Dict[str, Path] = {
     "common-voice": DATA_DIR / "common_voice_valid_dev",
-    "cv-valid-dev": DATA_DIR / "common_voice_valid_dev", 
+    "cv-valid-dev": DATA_DIR / "common_voice_valid_dev",
     "ravdess": DATA_DIR / "ravdess_subset",
+    "l2-arctic": DATA_DIR / "L2_ARCTIC_dataset" / "audio",
+    "saa": DATA_DIR / "SAA_dataset" / "audio",
+}
+
+# SAA's `filename` column has no extension (e.g. "arabic1"); the audio files on
+# disk are .mp3. Datasets needing this normalization go here.
+DATASETS_WITH_EXTENSIONLESS_FILENAMES: Dict[str, str] = {
+    "saa": ".mp3",
 }
 
 
@@ -91,7 +101,11 @@ def load_metadata(dataset: str, session_id: Optional[str] = None) -> List[Dict[s
             for row in reader:
                 # normalize keys to lowercase; strip whitespace
                 normalized = {str(k).strip().lower(): (v.strip() if isinstance(v, str) else v) for k, v in row.items()}
-                
+
+                ext = DATASETS_WITH_EXTENSIONLESS_FILENAMES.get(ds)
+                if ext and normalized.get("filename") and "." not in normalized["filename"]:
+                    normalized["filename"] += ext
+
                 rows.append(normalized)
     except Exception:
         # Re-raise to let the route map to a 500

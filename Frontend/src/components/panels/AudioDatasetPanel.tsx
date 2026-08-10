@@ -151,7 +151,7 @@ export const AudioDatasetPanel = ({
     // Ground truth lives in the dataset metadata row; attach it here so the
     // prediction panels can display it and compute accuracy metrics.
     const groundTruth = String(
-      match["sentence"] ?? match["transcript"] ?? match["text"] ?? match["emotion"] ?? match["label"] ?? "",
+      match["sentence"] ?? match["transcript"] ?? match["text"] ?? match["reading_passage"] ?? match["emotion"] ?? match["label"] ?? "",
     );
 
     try {
@@ -306,7 +306,7 @@ export const AudioDatasetPanel = ({
   // Cleanup on unmount or when dataset changes
   // Reload function to refresh dataset metadata
   const handleReloadDataset = useCallback(async () => {
-    const allowed = ["common-voice", "ravdess"];
+    const allowed = ["common-voice", "ravdess", "l2-arctic", "saa"];
     const datasetToUse = originalDataset || dataset;
     if (!allowed.includes(datasetToUse)) {
       setDatasetMetadata([]);
@@ -365,7 +365,7 @@ export const AudioDatasetPanel = ({
     }
     
     // Handle both global datasets and custom datasets
-    const allowed = ["common-voice", "ravdess"];
+    const allowed = ["common-voice", "ravdess", "l2-arctic", "saa"];
     const isCustomDataset = datasetToUse.startsWith('custom:');
     
     if (!allowed.includes(datasetToUse) && !isCustomDataset) {
