@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -301,12 +302,31 @@ async def _execute_jacobian_lens_fit(
         samples.append((str(local_path), transcript))
     adapter = get_model_adapter(envelope.model or "", envelope.model_spec)
     resource = model_registry.prepare(adapter, "jacobian_lens_fit")
-    artifact = fit_encoder_jacobian_lens(
+    job_repository = JobRepository()
+    event_loop = asyncio.get_running_loop()
+
+    def on_sample(completed: int, total: int) -> None:
+        """Persist sample progress from the CPU-bound fitting thread."""
+        update = job_repository.update(
+            envelope.job_id,
+            progress=JobProgress(
+                current=completed,
+                total=total,
+                message=f"Fitting encoder Jacobian lenses ({completed}/{total})",
+            ),
+        )
+        asyncio.run_coroutine_threadsafe(update, event_loop).result()
+
+    # Fitting contains repeated backward passes.  Keeping it in a worker
+    # thread lets the event loop publish progress after each fitted sample.
+    artifact = await asyncio.to_thread(
+        fit_encoder_jacobian_lens,
         adapter,
         resource,
         samples,
         probe_count=int(envelope.parameters["probe_count"]),
         max_audio_seconds=float(envelope.parameters["max_audio_seconds"]),
+        on_sample=on_sample,
     )
     artifact_key = f"jacobian-lenses/{envelope.session_id}/{lens_id}/lens.pt"
     metadata_key = f"jacobian-lenses/{envelope.session_id}/{lens_id}/metadata.json"
