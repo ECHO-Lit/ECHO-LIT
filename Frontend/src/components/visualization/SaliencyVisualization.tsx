@@ -189,12 +189,12 @@ export const SaliencyVisualization = ({ selectedFile, model, dataset, originalDa
     return '';
   }, [selectedFile]);
 
-  const fetchSaliencyData = async () => {
+  const fetchSaliencyData = async (fullAudio = false) => {
     if (!selectedFile || !model) return;
-    
+
     setLoading(true);
     setError(null);
-    
+
     try {
       // Send through the selected model so backend can infer base vs large
       // Determine which dataset to use for request
@@ -206,7 +206,7 @@ export const SaliencyVisualization = ({ selectedFile, model, dataset, originalDa
         operation: 'saliency',
         model,
         audio_ids: [audioId],
-        parameters: { method: selectedMethod },
+        parameters: { method: selectedMethod, full_audio: fullAudio },
       }));
       setSaliencyData(data);
     } catch (err) {
@@ -379,10 +379,21 @@ export const SaliencyVisualization = ({ selectedFile, model, dataset, originalDa
                 size="sm"
                 variant="outline"
                 className="h-6"
-                onClick={loading ? () => void saliencyJob.cancel() : fetchSaliencyData}
+                onClick={loading ? () => void saliencyJob.cancel() : () => fetchSaliencyData(false)}
               >
                 {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
                 <span className="ml-1">{loading ? 'Cancel' : 'Refresh'}</span>
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-6"
+                disabled={loading}
+                title="Run saliency over the full clip, ignoring the default duration cap"
+                onClick={() => fetchSaliencyData(true)}
+              >
+                <Eye className="h-3 w-3" />
+                <span className="ml-1">Full Audio</span>
               </Button>
             </div>
           </div>

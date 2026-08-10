@@ -86,7 +86,12 @@ class WhisperAdapter(AudioModelAdapter):
         if operation == "saliency":
             from app.services.saliency_service import generate_saliency
 
-            return generate_saliency(audio_path, self.model_id, parameters.get("method", "gradcam"))
+            return generate_saliency(
+                audio_path,
+                self.model_id,
+                parameters.get("method", "gradcam"),
+                full_audio=parameters.get("full_audio", False),
+            )
         if operation == "attention":
             from app.services.model_loader_service import extract_whisper_attention_pairs
 
@@ -129,7 +134,12 @@ class Wav2Vec2ClassificationAdapter(AudioModelAdapter):
         if operation == "saliency":
             from app.services.saliency_service import generate_saliency
 
-            return generate_saliency(audio_path, self.model_id, parameters.get("method", "gradcam"))
+            return generate_saliency(
+                audio_path,
+                self.model_id,
+                parameters.get("method", "gradcam"),
+                full_audio=parameters.get("full_audio", False),
+            )
         if operation == "embedding":
             from app.services.model_loader_service import extract_wav2vec2_embeddings
 

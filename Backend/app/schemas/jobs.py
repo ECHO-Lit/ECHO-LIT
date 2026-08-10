@@ -53,6 +53,9 @@ class PredictionParameters(OperationParameters):
 
 class SaliencyParameters(OperationParameters):
     method: Literal["gradcam", "lime", "shap"] = "gradcam"
+    # Bypasses MAX_SALIENCY_SECONDS(_SHAP) cropping to analyze the full clip.
+    # Opt-in only — memory/runtime scale with duration, so the default stays capped.
+    full_audio: bool = False
 
 
 class AttentionParameters(OperationParameters):
