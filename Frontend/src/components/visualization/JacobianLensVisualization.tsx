@@ -17,6 +17,7 @@ interface LensToken {
   token_id: number;
   token: string;
   score: number;
+  probability?: number;
 }
 
 interface LensFrame {
@@ -27,13 +28,23 @@ interface LensFrame {
 
 interface LensLayer {
   layer: number;
+  quality?: LensLayerQuality;
   frames: LensFrame[];
+}
+
+interface LensLayerQuality {
+  layer: number;
+  validation_frames: number;
+  cosine_similarity: number | null;
+  top1_agreement: number | null;
 }
 
 interface JacobianLensResult {
   lens_id: string;
   architecture: "seq2seq" | "ctc";
   duration_seconds: number;
+  method: string;
+  quality?: { layers?: LensLayerQuality[] };
   layers: LensLayer[];
 }
 
@@ -58,7 +69,11 @@ export const JacobianLensVisualization = ({
   const lensJob = useJob<unknown>();
 
   const readyLenses = useMemo(
-    () => lenses.filter((lens) => lens.status === "ready"),
+    () => lenses.filter((lens) => lens.status === "ready" && lens.format_version === 2),
+    [lenses],
+  );
+  const hasLegacyLenses = useMemo(
+    () => lenses.some((lens) => lens.status === "ready" && lens.format_version !== 2),
     [lenses],
   );
 
@@ -115,7 +130,7 @@ export const JacobianLensVisualization = ({
         <CardHeader className="pb-2">
           <CardTitle className="text-xs">Encoder Jacobian Lens</CardTitle>
           <p className="text-[11px] text-muted-foreground">
-            Experimental readout of each encoder layer through the model’s vocabulary head.
+            Calibrated, teacher-aligned vocabulary evidence from each encoder layer. It is not a transcript.
           </p>
         </CardHeader>
         <CardContent className="space-y-2">
@@ -140,8 +155,9 @@ export const JacobianLensVisualization = ({
             </Button>
           </div>
           {!readyLenses.length && !loadError && (
-            <p className="text-xs text-muted-foreground">No fitted lens is available for this model in this session.</p>
+            <p className="text-xs text-muted-foreground">No calibrated lens is available for this model in this session.</p>
           )}
+          {hasLegacyLenses && <p className="text-xs text-amber-700">An earlier uncalibrated lens is saved in this session. Refit it in J-Lens Lab before using its readout.</p>}
           {lensJob.isRunning && <p className="text-xs text-muted-foreground">{lensJob.status?.progress.message || "Reading encoder states…"}</p>}
           {(loadError || lensJob.error) && <p className="text-xs text-destructive">{loadError || lensJob.error}</p>}
         </CardContent>
@@ -156,13 +172,19 @@ export const JacobianLensVisualization = ({
             </div>
           </CardHeader>
           <CardContent className="space-y-2">
-            <p className="text-[11px] text-muted-foreground">Each cell is the top token for one pooled audio interval. Select a cell to inspect alternatives.</p>
+            <p className="text-[11px] text-muted-foreground">Each cell is the strongest vocabulary evidence for one pooled audio interval. Select a cell to inspect alternatives and calibration.</p>
+            {result.quality?.layers?.some((item) => item.validation_frames > 0) ? (
+              <p className="text-[11px] text-muted-foreground">Held-out calibration is shown per layer: cosine similarity compares the readout with the frozen teacher representation; token agreement compares their top vocabulary token.</p>
+            ) : (
+              <p className="text-[11px] text-amber-700">This lens has no held-out calibration because it was fitted with fewer than 10 samples. Treat the readout as exploratory.</p>
+            )}
             <div className="space-y-1 overflow-x-auto pb-1">
               {result.layers.map((layer) => (
                 <div key={layer.layer} className="flex min-w-max gap-1 items-stretch">
                   <span className="w-12 shrink-0 text-[10px] text-muted-foreground pt-1">Layer {layer.layer + 1}</span>
                   {layer.frames.map((frame, index) => {
                     const top = frame.tokens[0];
+                    const quality = layer.quality;
                     const active = selectedCell?.layer === layer.layer && selectedCell.frame === frame;
                     return (
                       <button
@@ -171,7 +193,7 @@ export const JacobianLensVisualization = ({
                         className={`w-12 min-h-10 rounded border px-1 text-[9px] leading-tight break-all transition-colors ${
                           active ? "border-primary bg-primary/15" : "border-border bg-muted/40 hover:bg-muted"
                         }`}
-                        title={`${frame.start_time.toFixed(2)}–${frame.end_time.toFixed(2)} s: ${top?.token || "—"}`}
+                        title={`${frame.start_time.toFixed(2)}–${frame.end_time.toFixed(2)} s: ${top?.token || "—"}${quality?.cosine_similarity != null ? ` · held-out cosine ${quality.cosine_similarity.toFixed(2)}` : " · unvalidated"}`}
                         onClick={() => setSelectedCell({ layer: layer.layer, frame })}
                       >
                         {top?.token || "—"}
@@ -185,10 +207,13 @@ export const JacobianLensVisualization = ({
             {selectedCell && (
               <div className="rounded border border-border bg-muted/30 p-2 text-xs">
                 <p className="mb-1 font-medium">Layer {selectedCell.layer + 1}, {selectedCell.frame.start_time.toFixed(2)}–{selectedCell.frame.end_time.toFixed(2)} s</p>
+                {result.layers.find((layer) => layer.layer === selectedCell.layer)?.quality?.cosine_similarity != null && (
+                  <p className="mb-1 text-muted-foreground">Held-out calibration: cosine {result.layers.find((layer) => layer.layer === selectedCell.layer)?.quality?.cosine_similarity?.toFixed(2)} · top-token agreement {((result.layers.find((layer) => layer.layer === selectedCell.layer)?.quality?.top1_agreement || 0) * 100).toFixed(0)}%</p>
+                )}
                 <div className="flex flex-wrap gap-1">
                   {selectedCell.frame.tokens.map((token) => (
                     <Badge key={token.token_id} variant="secondary" className="text-[10px] font-mono">
-                      {token.token} <span className="ml-1 text-muted-foreground">{token.score.toFixed(2)}</span>
+                      {token.token} <span className="ml-1 text-muted-foreground">{token.probability != null ? `${(token.probability * 100).toFixed(1)}%` : token.score.toFixed(2)}</span>
                     </Badge>
                   ))}
                 </div>

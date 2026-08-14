@@ -18,7 +18,8 @@ def test_jacobian_lens_job_contract_requires_paired_owned_audio():
             ],
         },
     )
-    assert request.parameters["probe_count"] == 4
+    assert request.parameters["frame_samples"] == 32
+    assert request.parameters["ridge_regularization"] == 1e-3
     assert request.parameters["samples"][0]["transcript"] == "first sample"
 
     with pytest.raises(ValidationError):
@@ -52,6 +53,13 @@ def test_speech_adapters_expose_jacobian_lens_architecture():
     )
     assert ctc.jacobian_lens_architecture() == "ctc"
     assert ctc.jacobian_lens_revision() == "org/ctc-model@main"
+
+
+def test_legacy_uncalibrated_lens_is_rejected_before_analysis():
+    from app.services.jacobian_lens_service import JacobianLensError, apply_encoder_jacobian_lens
+
+    with pytest.raises(JacobianLensError, match="legacy uncalibrated"):
+        apply_encoder_jacobian_lens(None, None, {"format_version": 1}, "unused.wav", top_k=5, max_frames=96)
 
 
 @pytest.mark.asyncio

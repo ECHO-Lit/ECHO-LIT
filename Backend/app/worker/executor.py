@@ -317,15 +317,16 @@ async def _execute_jacobian_lens_fit(
         )
         asyncio.run_coroutine_threadsafe(update, event_loop).result()
 
-    # Fitting contains repeated backward passes.  Keeping it in a worker
-    # thread lets the event loop publish progress after each fitted sample.
+    # Fitting is CPU-bound. Keeping it in a worker thread lets the event loop
+    # publish progress after each fitted or held-out sample.
     artifact = await asyncio.to_thread(
         fit_encoder_jacobian_lens,
         adapter,
         resource,
         samples,
-        probe_count=int(envelope.parameters["probe_count"]),
         max_audio_seconds=float(envelope.parameters["max_audio_seconds"]),
+        frame_samples=int(envelope.parameters["frame_samples"]),
+        ridge_regularization=float(envelope.parameters["ridge_regularization"]),
         on_sample=on_sample,
     )
     artifact_key = f"jacobian-lenses/{envelope.session_id}/{lens_id}/lens.pt"
@@ -333,14 +334,20 @@ async def _execute_jacobian_lens_fit(
     artifact_path = temp_root / "lens.pt"
     torch.save(artifact, artifact_path)
     storage.put_file(artifact_key, artifact_path, "application/octet-stream")
-    metadata = {key: value for key, value in artifact.items() if key not in {"matrices", "baselines"}}
-    metadata.update({"lens_id": lens_id, "layer_count": len(artifact["matrices"])})
+    metadata = {
+        key: value
+        for key, value in artifact.items()
+        if key not in {"weights", "source_means", "target_means"}
+    }
+    metadata.update({"lens_id": lens_id, "layer_count": len(artifact["weights"])})
     storage.put_json(metadata_key, metadata)
     record.status = JacobianLensStatus.READY
     record.architecture = artifact["architecture"]
     record.artifact_key = artifact_key
     record.metadata_key = metadata_key
-    record.layer_count = len(artifact["matrices"])
+    record.format_version = int(artifact["format_version"])
+    record.method = str(artifact["method"])
+    record.layer_count = len(artifact["weights"])
     record.error = None
     await repository.save(record)
     return metadata

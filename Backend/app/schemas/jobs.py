@@ -92,8 +92,9 @@ class JacobianLensTrainingSample(BaseModel):
 
 class JacobianLensFitParameters(OperationParameters):
     samples: list[JacobianLensTrainingSample] = Field(min_length=2, max_length=200)
-    probe_count: int = Field(default=4, ge=1, le=32)
     max_audio_seconds: float = Field(default=30.0, gt=0, le=60)
+    frame_samples: int = Field(default=32, ge=8, le=128)
+    ridge_regularization: float = Field(default=1e-3, gt=0, le=1.0)
 
 
 class JacobianLensApplyParameters(OperationParameters):

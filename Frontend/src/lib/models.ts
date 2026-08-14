@@ -20,6 +20,8 @@ export interface JacobianLens {
   model_revision: string;
   architecture?: 'seq2seq' | 'ctc';
   status: 'fitting' | 'ready' | 'failed';
+  format_version?: number | null;
+  method?: string | null;
   layer_count?: number;
   error?: string;
   sample_count: number;

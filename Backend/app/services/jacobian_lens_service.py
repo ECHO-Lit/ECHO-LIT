@@ -1,8 +1,11 @@
-"""Adapter-native fitting and application of encoder Jacobian lenses.
+"""Adapter-native, calibrated encoder readouts for speech Jacobian lenses.
 
-The implementation deliberately has no model-family imports.  Architecture
-differences are limited to the standard Hugging Face seq2seq and CTC output
-contracts, selected by ``AudioModelAdapter.jacobian_lens_architecture``.
+The original stochastic-Jacobian readout could surface vocabulary tokens with
+no evidence that they reflected the model's final representation.  This
+implementation instead distils a frozen model's final verbal state into a
+regularised linear readout for every encoder layer, then reports held-out
+calibration.  Seq2seq targets are aligned to encoder time with the model's own
+cross-attention; CTC targets already share an encoder-time axis.
 """
 
 from __future__ import annotations
@@ -58,18 +61,25 @@ def _seq2seq_states(model: Any, inputs: dict[str, Any], transcript: str, process
         **inputs,
         labels=labels,
         output_hidden_states=True,
+        output_attentions=True,
         use_cache=False,
         return_dict=True,
     )
     encoder_states = getattr(outputs, "encoder_hidden_states", None)
     decoder_states = getattr(outputs, "decoder_hidden_states", None)
-    if not encoder_states or not decoder_states:
-        raise JacobianLensError("Seq2seq model did not return encoder and decoder hidden states")
+    cross_attentions = getattr(outputs, "cross_attentions", None)
+    if not encoder_states or not decoder_states or not cross_attentions or cross_attentions[-1] is None:
+        raise JacobianLensError(
+            "Seq2seq model did not return encoder/decoder states and cross-attention needed for a calibrated lens"
+        )
     # Hugging Face includes the pre-transformer embedding state at index zero.
     # A lens is fitted for each actual encoder block, not that input embedding.
     if len(encoder_states) < 2:
         raise JacobianLensError("Seq2seq encoder did not expose transformer-layer states")
-    return tuple(encoder_states[1:]), decoder_states[-1]
+    # [batch, heads, decoder tokens, encoder frames].  The last decoder layer
+    # is the closest available alignment to the vocabulary projection.
+    alignment = cross_attentions[-1].mean(dim=1)
+    return tuple(encoder_states[1:]), decoder_states[-1], alignment
 
 
 def _ctc_states(model: Any, inputs: dict[str, Any]):
@@ -82,11 +92,43 @@ def _ctc_states(model: Any, inputs: dict[str, Any]):
     return tuple(hidden_states[1:]), hidden_states[-1]
 
 
-def _states_for_fit(architecture: str, model: Any, inputs: dict[str, Any], transcript: str, processor: Any):
+def _frame_indices(frame_count: int, maximum: int, device: Any):
+    import torch
+
+    count = min(frame_count, maximum)
+    if count < 1:
+        raise JacobianLensError("Encoder returned no audio frames")
+    if count == frame_count:
+        return torch.arange(frame_count, device=device)
+    return torch.linspace(0, frame_count - 1, steps=count, device=device).round().long()
+
+
+def _aligned_fit_pairs(
+    architecture: str,
+    model: Any,
+    inputs: dict[str, Any],
+    transcript: str,
+    processor: Any,
+    frame_samples: int,
+) -> tuple[list[Any], Any]:
+    """Return equally timed encoder representations and frozen verbal targets."""
     if architecture == "seq2seq":
-        return _seq2seq_states(model, inputs, transcript, processor)
+        encoder_states, decoder_states, alignment = _seq2seq_states(model, inputs, transcript, processor)
+        indices = _frame_indices(encoder_states[0].shape[1], frame_samples, encoder_states[0].device)
+        sources = [state.index_select(1, indices).squeeze(0) for state in encoder_states]
+        # Distribute each teacher-forced decoder state over the encoder frames
+        # it attended to, then renormalise each selected frame.
+        selected_attention = alignment.index_select(2, indices).transpose(1, 2)
+        targets = selected_attention @ decoder_states
+        targets = targets / selected_attention.sum(dim=-1, keepdim=True).clamp_min(1e-6)
+        return sources, targets.squeeze(0)
     if architecture == "ctc":
-        return _ctc_states(model, inputs)
+        encoder_states, final_states = _ctc_states(model, inputs)
+        indices = _frame_indices(encoder_states[0].shape[1], frame_samples, encoder_states[0].device)
+        return (
+            [state.index_select(1, indices).squeeze(0) for state in encoder_states],
+            final_states.index_select(1, indices).squeeze(0),
+        )
     raise JacobianLensError(f"Unsupported Jacobian-lens architecture: {architecture}")
 
 
@@ -116,16 +158,16 @@ def fit_encoder_jacobian_lens(
     adapter: Any,
     resource: Any,
     samples: list[tuple[str, str]],
-    probe_count: int,
     max_audio_seconds: float,
+    frame_samples: int = 32,
+    ridge_regularization: float = 1e-3,
     on_sample: Callable[[int, int], None] | None = None,
 ) -> dict[str, Any]:
-    """Fit average encoder-to-verbal-state Jacobians with Hutchinson VJPs.
+    """Fit calibrated, teacher-aligned linear encoder readouts.
 
-    For a pooled encoder state ``h_l`` and pooled final verbal state ``z``, a
-    Rademacher probe ``r`` gives ``grad(z·r, h_l) = J_l.T @ r``.  Averaging
-    ``outer(r, grad)`` estimates the transport matrix ``J_l`` without forming
-    an exact Jacobian for every audio clip.
+    The model remains frozen.  A ridge decoder is fitted from every layer's
+    encoder frames to the final verbal representation.  Twenty percent of a
+    sufficiently large set is held out and never contributes to the weights.
     """
     import torch
 
@@ -134,71 +176,123 @@ def fit_encoder_jacobian_lens(
         raise JacobianLensError(f"{adapter.model_id} does not support a speech Jacobian lens")
     processor, model = adapter.jacobian_lens_components(resource)
     model.eval()
-    matrices: list[Any] | None = None
-    baselines: list[Any] | None = None
-    counts: list[int] | None = None
+    if len(samples) >= 10:
+        validation_indices = set(range(0, len(samples), 5))
+        train_samples = [sample for index, sample in enumerate(samples) if index not in validation_indices]
+        validation_samples = [sample for index, sample in enumerate(samples) if index in validation_indices]
+    else:
+        train_samples, validation_samples = samples, []
+    if len(train_samples) < 2:
+        raise JacobianLensError("At least two training samples are required after validation split")
 
-    for index, (audio_path, transcript) in enumerate(samples, start=1):
+    statistics: list[dict[str, Any]] | None = None
+    projection = _output_projection(model)
+
+    def fit_pairs(audio_path: str, transcript: str) -> tuple[list[Any], Any]:
         inputs, _ = _prepare_audio(processor, audio_path, max_audio_seconds)
         inputs = _move_to_device(inputs, _device_of(model))
-        encoder_states, target_states = _states_for_fit(
-            architecture, model, inputs, transcript, processor
-        )
-        target = target_states.mean(dim=1).squeeze(0)
-        # ``target`` is computed *from* the raw encoder activations during the
-        # model forward pass.  Do not ask autograd for a derivative with
-        # respect to a pooled tensor created after that forward pass: it is a
-        # child of the activation, rather than an ancestor of ``target``.  We
-        # differentiate with respect to each raw layer activation, then pool
-        # the VJP across frames below.
-        raw_sources = list(encoder_states)
-        sources = [state.mean(dim=1).squeeze(0) for state in raw_sources]
-        if matrices is None:
-            matrices = [torch.zeros((target.numel(), source.numel()), dtype=torch.float32, device="cpu") for source in sources]
-            baselines = [torch.zeros(source.numel(), dtype=torch.float32, device="cpu") for source in sources]
-            counts = [0 for _ in sources]
-        if len(sources) != len(matrices):
-            raise JacobianLensError("Model returned an inconsistent number of encoder layers")
-
-        for probe_index in range(probe_count):
-            # Rademacher probes provide an unbiased estimate of the full
-            # transport matrix while requiring one VJP per probe.
-            probe = torch.empty_like(target).bernoulli_(0.5).mul_(2).sub_(1)
-            scalar = torch.dot(target, probe)
-            gradients = torch.autograd.grad(
-                scalar,
-                raw_sources,
-                retain_graph=probe_index < probe_count - 1,
-                allow_unused=True,
+        with torch.no_grad():
+            return _aligned_fit_pairs(
+                architecture, model, inputs, transcript, processor, frame_samples
             )
-            for layer, gradient in enumerate(gradients):
-                if gradient is None:
-                    raise JacobianLensError(f"Encoder layer {layer} is disconnected from the verbal output")
-                # A perturbation of the pooled activation is broadcast to all
-                # encoder frames, so its VJP is the sum over frame gradients.
-                pooled_gradient = gradient.sum(dim=1).squeeze(0)
-                matrices[layer].add_(
-                    torch.outer(probe.detach().float().cpu(), pooled_gradient.detach().float().cpu())
-                )
 
+    total_steps = len(train_samples) + len(validation_samples)
+    for index, (audio_path, transcript) in enumerate(train_samples, start=1):
+        sources, targets = fit_pairs(audio_path, transcript)
+        targets = targets.detach().float().cpu()
+        if targets.shape[-1] != projection.weight.shape[-1]:
+            raise JacobianLensError("Final verbal state does not match the model vocabulary projection")
+        if statistics is None:
+            statistics = [
+                {
+                    "count": 0,
+                    "x_sum": torch.zeros(source.shape[-1], dtype=torch.float64),
+                    "y_sum": torch.zeros(targets.shape[-1], dtype=torch.float64),
+                    "xx": torch.zeros((source.shape[-1], source.shape[-1]), dtype=torch.float64),
+                    "xy": torch.zeros((source.shape[-1], targets.shape[-1]), dtype=torch.float64),
+                }
+                for source in sources
+            ]
+        if len(sources) != len(statistics):
+            raise JacobianLensError("Model returned an inconsistent number of encoder layers")
         for layer, source in enumerate(sources):
-            baselines[layer].add_(source.detach().float().cpu())
-            counts[layer] += 1
+            values = source.detach().float().cpu().double()
+            targets64 = targets.double()
+            stats = statistics[layer]
+            stats["count"] += values.shape[0]
+            stats["x_sum"].add_(values.sum(dim=0))
+            stats["y_sum"].add_(targets64.sum(dim=0))
+            stats["xx"].add_(values.T @ values)
+            stats["xy"].add_(values.T @ targets64)
         if on_sample:
-            on_sample(index, len(samples))
+            on_sample(index, total_steps)
 
-    if not matrices or not baselines or not counts:
+    if not statistics:
         raise JacobianLensError("No lens samples were fitted")
-    normalizer = float(len(samples) * probe_count)
+    weights, source_means, target_means = [], [], []
+    for stats in statistics:
+        count = stats["count"]
+        source_mean = stats["x_sum"] / count
+        target_mean = stats["y_sum"] / count
+        covariance = stats["xx"] - count * torch.outer(source_mean, source_mean)
+        cross_covariance = stats["xy"] - count * torch.outer(source_mean, target_mean)
+        scale = covariance.diagonal().mean().clamp_min(1e-8)
+        system = covariance + torch.eye(covariance.shape[0], dtype=torch.float64) * (ridge_regularization * scale)
+        try:
+            weight = torch.linalg.solve(system, cross_covariance)
+        except RuntimeError as exc:
+            raise JacobianLensError("Could not solve the regularised encoder readout") from exc
+        weights.append(weight.float())
+        source_means.append(source_mean.float())
+        target_means.append(target_mean.float())
+
+    projection_weight = projection.weight.detach().float().cpu()
+    quality = [{"cosine_similarity_sum": 0.0, "top1_agreement_sum": 0.0, "frame_count": 0} for _ in weights]
+    for index, (audio_path, transcript) in enumerate(validation_samples, start=len(train_samples) + 1):
+        sources, targets = fit_pairs(audio_path, transcript)
+        targets = targets.detach().float().cpu()
+        for layer, source in enumerate(sources):
+            values = source.detach().float().cpu()
+            predicted = (values - source_means[layer]) @ weights[layer] + target_means[layer]
+            cosine = torch.nn.functional.cosine_similarity(predicted, targets, dim=-1)
+            predicted_ids = (predicted @ projection_weight.T).argmax(dim=-1)
+            teacher_ids = (targets @ projection_weight.T).argmax(dim=-1)
+            quality[layer]["cosine_similarity_sum"] += float(cosine.sum())
+            quality[layer]["top1_agreement_sum"] += float((predicted_ids == teacher_ids).sum())
+            quality[layer]["frame_count"] += int(values.shape[0])
+        if on_sample:
+            on_sample(index, total_steps)
+
+    layer_quality = [
+        {
+            "layer": layer,
+            "validation_frames": values["frame_count"],
+            "cosine_similarity": (
+                values["cosine_similarity_sum"] / values["frame_count"]
+                if values["frame_count"] else None
+            ),
+            "top1_agreement": (
+                values["top1_agreement_sum"] / values["frame_count"]
+                if values["frame_count"] else None
+            ),
+        }
+        for layer, values in enumerate(quality)
+    ]
     return {
-        "format_version": 1,
+        "format_version": 2,
+        "method": "teacher_aligned_ridge_readout",
         "architecture": architecture,
         "model_id": adapter.model_id,
         "model_revision": adapter.jacobian_lens_revision(),
-        "matrices": [matrix / normalizer for matrix in matrices],
-        "baselines": [baseline / count for baseline, count in zip(baselines, counts)],
+        "weights": weights,
+        "source_means": source_means,
+        "target_means": target_means,
         "sample_count": len(samples),
-        "probe_count": probe_count,
+        "training_sample_count": len(train_samples),
+        "validation_sample_count": len(validation_samples),
+        "frame_samples": frame_samples,
+        "ridge_regularization": ridge_regularization,
+        "quality": {"layers": layer_quality},
     }
 
 
@@ -226,6 +320,8 @@ def apply_encoder_jacobian_lens(
     top_k: int,
     max_frames: int,
 ) -> dict[str, Any]:
+    if artifact.get("format_version") != 2 or artifact.get("method") != "teacher_aligned_ridge_readout":
+        raise JacobianLensError("This is a legacy uncalibrated J-Lens. Refit it before interpreting its readout.")
     import torch
 
     architecture = adapter.jacobian_lens_architecture()
@@ -239,39 +335,58 @@ def apply_encoder_jacobian_lens(
     inputs = _move_to_device(inputs, _device_of(model))
     with torch.no_grad():
         states = _encoder_states_for_apply(architecture, model, inputs)
-    matrices, baselines = artifact["matrices"], artifact["baselines"]
-    if len(states) != len(matrices) or len(states) != len(baselines):
+    weights = artifact["weights"]
+    source_means = artifact["source_means"]
+    target_means = artifact["target_means"]
+    if len(states) != len(weights) or len(states) != len(source_means) or len(states) != len(target_means):
         raise JacobianLensError("Lens layer count does not match the loaded model")
     tokenizer = _tokenizer(processor)
-    convert = getattr(tokenizer, "convert_ids_to_tokens", None)
+    decode = getattr(tokenizer, "decode", None)
+    quality_by_layer = {item["layer"]: item for item in artifact.get("quality", {}).get("layers", [])}
     layers = []
-    for layer_index, (state, matrix, baseline) in enumerate(zip(states, matrices, baselines)):
-        # Fitted transports are stored in float32; retain that precision even
+    for layer_index, (state, weight, source_mean, target_mean) in enumerate(
+        zip(states, weights, source_means, target_means)
+    ):
+        # Fitted readouts are stored in float32; retain that precision even
         # when the inference model itself runs in fp16/bf16.
-        matrix = matrix.to(_device_of(model), dtype=torch.float32)
-        baseline = baseline.to(_device_of(model), dtype=torch.float32)
+        weight = weight.to(_device_of(model), dtype=torch.float32)
+        source_mean = source_mean.to(_device_of(model), dtype=torch.float32)
+        target_mean = target_mean.to(_device_of(model), dtype=torch.float32)
         frames = _pool_frames(state.squeeze(0), max_frames)
         frame_values = torch.stack([value for value, _, _ in frames]).float()
-        transported = (frame_values - baseline) @ matrix.T
-        logits = transported @ projection.weight.to(transported.device, dtype=torch.float32).T
+        verbal_state = (frame_values - source_mean) @ weight + target_mean
+        logits = verbal_state @ projection.weight.to(verbal_state.device, dtype=torch.float32).T
         top = logits.topk(min(top_k, logits.shape[-1]), dim=-1)
+        probabilities = logits.softmax(dim=-1).gather(dim=-1, index=top.indices)
         layer_frames = []
         source_frames = max(state.shape[1], 1)
         for frame_index, (_, start, end) in enumerate(frames):
             ids = top.indices[frame_index].tolist()
-            tokens = convert(ids) if callable(convert) else [str(token_id) for token_id in ids]
+            tokens = [
+                str(decode([token_id], skip_special_tokens=False)).strip() if callable(decode) else str(token_id)
+                for token_id in ids
+            ]
             layer_frames.append({
                 "start_time": duration * start / source_frames,
                 "end_time": duration * end / source_frames,
                 "tokens": [
-                    {"token_id": token_id, "token": token, "score": float(score)}
-                    for token_id, token, score in zip(ids, tokens, top.values[frame_index].float().tolist())
+                    {
+                        "token_id": token_id,
+                        "token": token or "␠",
+                        "score": float(score),
+                        "probability": float(probability),
+                    }
+                    for token_id, token, score, probability in zip(
+                        ids, tokens, top.values[frame_index].float().tolist(), probabilities[frame_index].float().tolist()
+                    )
                 ],
             })
-        layers.append({"layer": layer_index, "frames": layer_frames})
+        layers.append({"layer": layer_index, "quality": quality_by_layer.get(layer_index), "frames": layer_frames})
     return {
         "model": adapter.model_id,
         "architecture": architecture,
         "duration_seconds": duration,
+        "method": artifact["method"],
+        "quality": artifact.get("quality", {}),
         "layers": layers,
     }

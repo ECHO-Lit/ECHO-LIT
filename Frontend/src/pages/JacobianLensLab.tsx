@@ -169,8 +169,9 @@ export default function JacobianLensLab() {
         audio_ids: materialized.map((sample) => sample.audio_id),
         parameters: {
           samples: materialized,
-          probe_count: 4,
           max_audio_seconds: 30,
+          frame_samples: 32,
+          ridge_regularization: 0.001,
         },
       });
       setCompletedLensId(result.lens.lens_id);
@@ -220,12 +221,12 @@ export default function JacobianLensLab() {
           </Card>
 
           <Card>
-            <CardHeader><CardTitle className="text-base">3. Fit the lens</CardTitle><CardDescription>The model remains frozen. The worker estimates an average transport matrix for each encoder layer.</CardDescription></CardHeader>
+            <CardHeader><CardTitle className="text-base">3. Fit the lens</CardTitle><CardDescription>The model remains frozen. Each layer learns a regularised, teacher-aligned readout and is checked on held-out samples when at least 10 are selected.</CardDescription></CardHeader>
             <CardContent className="flex flex-wrap items-center gap-3"><Button onClick={() => void fitLens()} disabled={selectedSamples.length < 2 || fitJob.isRunning}>{fitJob.isRunning ? "Fitting encoder lenses…" : `Fit with ${selectedSamples.length} samples`}</Button>{fitJob.isRunning && <Button variant="outline" onClick={() => void fitJob.cancel()}>Cancel</Button>}{fitJob.isRunning && <span className="text-sm text-muted-foreground">{fitJob.status?.progress.message || "Preparing worker…"}</span>}{(error || fitJob.error) && <span className="text-sm text-destructive">{error || fitJob.error}</span>}{completedLensId && <span className="text-sm text-emerald-700">Lens {completedLensId} is ready. Open the analysis workspace and choose J-Lens.</span>}</CardContent>
           </Card>
         </section>
 
-        <aside><Card><CardHeader><div className="flex items-center justify-between"><CardTitle className="text-base">Saved lenses</CardTitle><Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => void refreshLenses()}><RefreshCw className="h-3.5 w-3.5" /></Button></div><CardDescription>Available for {model} in this session.</CardDescription></CardHeader><CardContent className="space-y-2">{!lenses.length ? <p className="text-sm text-muted-foreground">No lenses fitted yet.</p> : lenses.map((lens) => <div key={lens.lens_id} className="rounded border p-2 text-xs"><div className="flex items-center justify-between gap-2"><span className="font-mono">{lens.lens_id.slice(-8)}</span><Badge variant={lens.status === "ready" ? "secondary" : "outline"}>{lens.status}</Badge></div><p className="mt-1 text-muted-foreground">{lens.architecture || "ASR"} · {lens.layer_count ?? "?"} layers · {lens.sample_count} samples</p>{lens.error && <p className="mt-1 text-destructive">{lens.error}</p>}</div>)}</CardContent></Card></aside>
+        <aside><Card><CardHeader><div className="flex items-center justify-between"><CardTitle className="text-base">Saved lenses</CardTitle><Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => void refreshLenses()}><RefreshCw className="h-3.5 w-3.5" /></Button></div><CardDescription>Available for {model} in this session.</CardDescription></CardHeader><CardContent className="space-y-2">{!lenses.length ? <p className="text-sm text-muted-foreground">No lenses fitted yet.</p> : lenses.map((lens) => <div key={lens.lens_id} className="rounded border p-2 text-xs"><div className="flex items-center justify-between gap-2"><span className="font-mono">{lens.lens_id.slice(-8)}</span><Badge variant={lens.status === "ready" && lens.format_version === 2 ? "secondary" : "outline"}>{lens.status === "ready" && lens.format_version !== 2 ? "refit required" : lens.status}</Badge></div><p className="mt-1 text-muted-foreground">{lens.architecture || "ASR"} · {lens.layer_count ?? "?"} layers · {lens.sample_count} samples</p>{lens.status === "ready" && lens.format_version !== 2 && <p className="mt-1 text-amber-700">Legacy uncalibrated readout. Refit before interpreting.</p>}{lens.error && <p className="mt-1 text-destructive">{lens.error}</p>}</div>)}</CardContent></Card></aside>
       </div>
     </main>
   );

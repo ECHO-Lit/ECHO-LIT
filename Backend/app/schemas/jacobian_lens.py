@@ -23,6 +23,8 @@ class JacobianLensRecord(BaseModel):
     status: JacobianLensStatus = JacobianLensStatus.FITTING
     artifact_key: str | None = None
     metadata_key: str | None = None
+    format_version: int | None = None
+    method: str | None = None
     layer_count: int | None = None
     fit_job_id: str
     error: str | None = None
