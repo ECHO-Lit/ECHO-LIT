@@ -6,7 +6,9 @@ export type JobOperation =
   | 'attention'
   | 'embedding'
   | 'perturbation'
-  | 'audio_features';
+  | 'audio_features'
+  | 'hidden_states'
+  | 'layer_probe';
 
 export type JobState = 'queued' | 'started' | 'processing' | 'success' | 'failure' | 'cancelled';
 

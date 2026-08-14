@@ -52,7 +52,7 @@ class WhisperAdapter(AudioModelAdapter):
             return "eager-attention"
         if operation == "saliency":
             return "gradient"
-        if operation in {"embedding", "hidden_states"}:
+        if operation in {"embedding", "hidden_states", "layer_probe"}:
             return "encoder"
         return "generation"
 
@@ -105,7 +105,41 @@ class WhisperAdapter(AudioModelAdapter):
             return extract_whisper_embeddings(
                 audio_path, "large" if self.model_id == "whisper-large" else "base"
             )
+        if operation in {"hidden_states", "layer_probe"}:
+            return self._extract_hidden_states(audio_path, parameters)
         raise ValueError(f"{self.model_id} does not yet implement {operation}")
+
+    def _extract_hidden_states(self, audio_path: str, parameters: dict[str, Any]) -> Any:
+        """Per-layer encoder activations for the layer-probing feature."""
+        import torch
+
+        from app.services.hidden_states_service import extract_layer_activations
+
+        processor, model = self.load_resource("encoder")
+        sample_rate = getattr(
+            getattr(processor, "feature_extractor", None), "sampling_rate", 16000
+        )
+        device = next(model.parameters()).device
+
+        def run_encoder(waveform):
+            features = processor(
+                waveform, sampling_rate=sample_rate, return_tensors="pt"
+            ).input_features.to(device)
+            with torch.no_grad():
+                # `model` here is a WhisperModel; its encoder is what carries the
+                # acoustic-to-linguistic progression the probes measure. The
+                # decoder is a language model and would confound that reading.
+                outputs = model.encoder(features, output_hidden_states=True)
+            return outputs.hidden_states
+
+        return extract_layer_activations(
+            run_encoder,
+            audio_path,
+            sample_rate=sample_rate,
+            pooling=parameters.get("pooling", "mean"),
+            noise_snr_db=parameters.get("noise_snr_db"),
+            seed=int(parameters.get("seed", 42)),
+        )
 
 
 class Wav2Vec2ClassificationAdapter(AudioModelAdapter):
@@ -134,7 +168,42 @@ class Wav2Vec2ClassificationAdapter(AudioModelAdapter):
             from app.services.model_loader_service import extract_wav2vec2_embeddings
 
             return extract_wav2vec2_embeddings(audio_path)
+        if operation in {"hidden_states", "layer_probe"}:
+            return self._extract_hidden_states(audio_path, parameters)
         raise ValueError(f"{self.model_id} does not yet implement {operation}")
+
+    def _extract_hidden_states(self, audio_path: str, parameters: dict[str, Any]) -> Any:
+        """Per-layer activations from the wav2vec2 backbone, below the classifier head."""
+        import torch
+
+        from app.services.hidden_states_service import extract_layer_activations
+
+        feature_extractor, emo_model = self.load_resource("eager")
+        sample_rate = getattr(feature_extractor, "sampling_rate", 16000)
+        device = next(emo_model.parameters()).device
+
+        def run_encoder(waveform):
+            inputs = feature_extractor(
+                waveform, sampling_rate=sample_rate, return_tensors="pt", padding=True
+            )
+            values = inputs.input_values.to(device)
+            mask = inputs.attention_mask.to(device) if "attention_mask" in inputs else None
+            with torch.no_grad():
+                # `.wav2vec2` is the transformer backbone; going through the full
+                # model would return classifier logits, not the representation.
+                outputs = emo_model.wav2vec2(
+                    input_values=values, attention_mask=mask, output_hidden_states=True
+                )
+            return outputs.hidden_states
+
+        return extract_layer_activations(
+            run_encoder,
+            audio_path,
+            sample_rate=sample_rate,
+            pooling=parameters.get("pooling", "mean"),
+            noise_snr_db=parameters.get("noise_snr_db"),
+            seed=int(parameters.get("seed", 42)),
+        )
 
 
 class GenericHuggingFaceAdapter(AudioModelAdapter):
@@ -168,11 +237,15 @@ class GenericHuggingFaceAdapter(AudioModelAdapter):
         return processor, model
 
     def execute(self, operation: str, audio_path: str, parameters: dict[str, Any], resource: Any = None) -> Any:
-        if operation not in {"prediction", "embedding", "saliency", "attention"}:
+        if operation not in {"prediction", "embedding", "saliency", "attention", "hidden_states", "layer_probe"}:
             raise ValueError(f"{self.model_id} does not yet implement {operation}")
         if resource is None:
             resource = self.load_resource("generic")
         processor, model = resource
+        if operation in {"hidden_states", "layer_probe"}:
+            # Delegated before the shared audio preparation below: the service
+            # owns loading so it can run the encoder twice for the noise probe.
+            return self._extract_hidden_states(processor, model, audio_path, parameters)
         import librosa
         import numpy as np
         import torch
@@ -207,6 +280,44 @@ class GenericHuggingFaceAdapter(AudioModelAdapter):
             labels = getattr(model.config, "id2label", {})
             scores = {str(labels.get(i, i)): float(score) for i, score in enumerate(probabilities.cpu())}
             return {"predicted_label": str(labels.get(index, index)), "confidence": float(probabilities[index]), "scores": scores}
+
+    def _extract_hidden_states(
+        self, processor: Any, model: Any, audio_path: str, parameters: dict[str, Any]
+    ) -> Any:
+        """Per-layer activations for a custom model of any validated kind."""
+        import torch
+
+        from app.services.hidden_states_service import extract_layer_activations
+
+        sample_rate = getattr(getattr(processor, "feature_extractor", None), "sampling_rate", 16000)
+        device = next(model.parameters()).device
+        # Seq2seq models carry a decoder whose hidden states are language-model
+        # states, not acoustic representations; probe the encoder alone so the
+        # reading is comparable with the CTC and classification kinds.
+        encoder = model.get_encoder() if self.kind == ModelKind.SEQ2SEQ_ASR else model
+
+        def run_encoder(waveform):
+            inputs = processor(waveform, sampling_rate=sample_rate, return_tensors="pt")
+            inputs = {
+                key: value.to(device)
+                for key, value in inputs.items()
+                if hasattr(value, "to")
+            }
+            with torch.no_grad():
+                outputs = encoder(**inputs, output_hidden_states=True, return_dict=True)
+            states = getattr(outputs, "hidden_states", None)
+            if not states:
+                raise ValueError(f"{self.model_id} did not return hidden states")
+            return states
+
+        return extract_layer_activations(
+            run_encoder,
+            audio_path,
+            sample_rate=sample_rate,
+            pooling=parameters.get("pooling", "mean"),
+            noise_snr_db=parameters.get("noise_snr_db"),
+            seed=int(parameters.get("seed", 42)),
+        )
 
     def _extract_attention(self, processor: Any, model: Any, inputs: dict[str, Any], audio: Any, sample_rate: int, parameters: dict[str, Any]) -> dict[str, Any]:
         """Extract decoder self-attention for a standard seq2seq speech model."""
