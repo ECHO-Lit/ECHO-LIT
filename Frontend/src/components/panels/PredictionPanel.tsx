@@ -373,7 +373,21 @@ export const PredictionPanel = ({ selectedFile, selectedEmbeddingFile, model, da
             />
           </TabsContent>
 
-          <TabsContent value="fairness" className="m-0 h-full">
+          {/* forceMount: fairness jobs run 10-30+ minutes. Without this,
+              switching to another tab unmounts FairnessPanel, dropping its
+              status-poll query's only observer -- the job keeps running
+              server-side but the panel loses track of it and reverts to idle
+              on remount. Radix sets data-state itself but (unlike its
+              `hidden` prop) doesn't hide inactive+forceMounted content via
+              CSS on its own, so that's done explicitly here instead of
+              unmounting, keeping polling (and the gcTime pin in
+              use-job-query.ts) alive the whole time regardless of which tab
+              is showing. */}
+          <TabsContent
+            value="fairness"
+            className="m-0 h-full data-[state=inactive]:hidden"
+            forceMount
+          >
             <FairnessPanel model={model} dataset={dataset} originalDataset={originalDataset} />
           </TabsContent>
         </div>
