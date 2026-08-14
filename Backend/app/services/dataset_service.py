@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import csv
 import logging
+import time
 from app.core.audio_probe import probe_audio
 from .custom_dataset_service import (
     get_custom_dataset_manager, 
@@ -168,7 +169,17 @@ def resolve_file(dataset: str, file_path: str, session_id: Optional[str] = None)
     safe_name = Path(file_path).name
     audio_path = base_dir / safe_name
     if not audio_path.exists() or not audio_path.is_file():
-        raise FileNotFoundError(f"Dataset file not found: {safe_name}")
+        # Docker Desktop's Windows bind-mount layer can transiently report an
+        # existing file as missing under a burst of concurrent reads from
+        # multiple worker processes (observed with FR-10 dispatching ~20
+        # shards at once). A short retry absorbs that without masking a
+        # genuinely missing file, which will still fail after these retries.
+        for _ in range(3):
+            time.sleep(0.1)
+            if audio_path.exists() and audio_path.is_file():
+                break
+        else:
+            raise FileNotFoundError(f"Dataset file not found: {safe_name}")
 
     return audio_path
 

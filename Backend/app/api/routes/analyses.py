@@ -29,10 +29,24 @@ from app.schemas.jobs import (
     TaskAudio,
     TaskEnvelope,
 )
+from app.schemas.fairness import FairnessAccepted, FairnessRequest, GroupableColumnsResponse
 from app.schemas.models import CustomModelStatus
+from app.services import dataset_service
+from app.services.custom_dataset_service import is_custom_dataset, parse_custom_dataset_name
+from app.services.fairness_service import groupable_columns
 from app.services.fr7_planning import estimate_cost, resolve_task
 
 router = APIRouter(prefix="/analyses")
+
+
+def _dataset_visible(dataset: str, session_id: str) -> bool:
+    if is_custom_dataset(dataset):
+        try:
+            owner_session, _ = parse_custom_dataset_name(dataset)
+        except ValueError:
+            return False
+        return owner_session == session_id
+    return dataset.lower() in dataset_service.DATASET_PATHS
 
 
 @router.post(
@@ -135,4 +149,114 @@ async def create_linguistic_acoustic_analysis(payload: LinguisticAcousticRequest
         job_id=job_id, status=JobStatus.queued,
         status_url=f"/jobs/{job_id}", result_url=f"/jobs/{job_id}/result",
         estimated_variants=variants, estimated_seconds=seconds,
+    )
+
+
+@router.get("/fairness/groupable", response_model=GroupableColumnsResponse)
+async def get_fairness_groupable_columns(dataset: str, request: Request):
+    """FR-10. Powers the UI's grouping dropdown before submission
+    (docs/FR10plan.md Part 1 S5.2). Cheap: built-in CSVs are cached by mtime
+    in dataset_service; custom datasets are small per-session listings."""
+    session_id = request.state.sid
+    if not _dataset_visible(dataset, session_id):
+        raise HTTPException(404, f"Dataset not available: {dataset}")
+    try:
+        return groupable_columns(dataset, session_id)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@router.post("/fairness", response_model=FairnessAccepted, status_code=202)
+async def create_fairness_analysis(payload: FairnessRequest, request: Request):
+    """FR-10: accent and language fairness analysis (docs/FR10plan.md Part 1 S5.3).
+
+    Returns 202 immediately; poll `status_url` (FR-14) for completion. Dataset
+    size is irrelevant to this handler's latency -- partitioning, item
+    resolution and cost estimation all happen on a cpu worker in stage A. The
+    control plane touches only the model catalogue, Redis and dataset_service's
+    (dependency-free) metadata cache, never torch/librosa/jiwer/scikit-learn.
+    """
+    session_id = request.state.sid
+
+    model_spec: RuntimeModelSpec | None = None
+    if payload.model in MODEL_DEFINITIONS:
+        definition = MODEL_DEFINITIONS[payload.model]
+        kind, capabilities = definition.kind, set(definition.capabilities)
+    else:
+        custom = await CustomModelRepository().get_owned(payload.model, session_id)
+        if not custom:
+            raise HTTPException(404, "Custom model not found")
+        if custom.status != CustomModelStatus.READY or not custom.kind:
+            raise HTTPException(409, "Custom model is not ready")
+        kind = custom.kind
+        capabilities = set(custom_model_capabilities(custom.kind))
+        model_spec = RuntimeModelSpec(
+            hf_repo=custom.hf_repo, revision=custom.revision,
+            kind=custom.kind, capabilities=custom.capabilities,
+        )
+
+    if "prediction" not in capabilities:
+        raise HTTPException(400, f"{payload.model} cannot run prediction")
+
+    task = resolve_task(payload.task, kind)
+    if task == "transcription" and kind == ModelKind.AUDIO_CLASSIFICATION:
+        raise HTTPException(400, "A classification model cannot run a transcription fairness analysis")
+    if task == "classification" and kind != ModelKind.AUDIO_CLASSIFICATION:
+        raise HTTPException(400, "A transcription model cannot run a classification fairness analysis")
+
+    # Missing optional capabilities DEGRADE the analysis; they never reject it.
+    notes: list[str] = []
+    include_representation = payload.include_representation
+    include_explanations = payload.include_explanations
+    if include_representation and "embedding" not in capabilities:
+        include_representation = False
+        notes.append(f"{payload.model} exposes no embeddings; representational comparison will be skipped.")
+    if include_explanations and "saliency" not in capabilities:
+        include_explanations = False
+        notes.append(f"{payload.model} does not support saliency; explanation fairness will be skipped.")
+
+    if not _dataset_visible(payload.dataset, session_id):
+        raise HTTPException(404, f"Dataset not available: {payload.dataset}")
+
+    now = datetime.now(timezone.utc)
+    job_id = uuid.uuid4().hex
+    parameters = {
+        **payload.model_dump(mode="json"),
+        "task": task,
+        "include_representation": include_representation,
+        "include_explanations": include_explanations,
+    }
+
+    jobs = JobRepository()
+    await jobs.create(JobRecord(
+        job_id=job_id, session_id=session_id, operation=JobOperation.fairness,
+        model=payload.model, audio_ids=[], parameters=parameters,
+        # Provisional total; stage A (fr10_orchestrate -> prepare_analysis)
+        # rewrites it once the dataset has been partitioned into shards.
+        progress=JobProgress(current=0, total=1, message="Queued"),
+        created_at=now, updated_at=now,
+    ))
+
+    envelope = TaskEnvelope(
+        job_id=job_id, session_id=session_id, operation=JobOperation.fairness,
+        model=payload.model, model_spec=model_spec, audio=[], parameters=parameters,
+        result_schema_version=settings.RESULT_SCHEMA_VERSION, code_version=settings.CODE_VERSION,
+    )
+    try:
+        task_handle = celery_app.send_task(
+            "app.worker.tasks.fr10_orchestrate",
+            args=[envelope.model_dump(mode="json")], queue="cpu",
+        )
+        await jobs.update(job_id, task_id=task_handle.id)
+    except Exception as exc:
+        await jobs.update(
+            job_id, status=JobStatus.failure,
+            error=JobError(code="broker_unavailable", message="Job broker is unavailable", retryable=True),
+        )
+        raise HTTPException(503, "Job broker is unavailable") from exc
+
+    return FairnessAccepted(
+        job_id=job_id, status=JobStatus.queued,
+        status_url=f"/jobs/{job_id}", result_url=f"/jobs/{job_id}/result",
+        dataset=payload.dataset, grouping_key=payload.grouping_key, notes=notes,
     )

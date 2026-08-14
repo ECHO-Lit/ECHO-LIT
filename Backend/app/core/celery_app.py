@@ -34,7 +34,7 @@ celery_app.conf.update(
 
 
 def queue_for(operation: str, model: str | None) -> str:
-    if operation in {"perturbation", "audio_features", "linguistic_acoustic"}:
+    if operation in {"perturbation", "audio_features", "linguistic_acoustic", "fairness"}:
         return "cpu"
     if operation in {"saliency", "attention"} or model == "whisper-large":
         return "gpu-large"

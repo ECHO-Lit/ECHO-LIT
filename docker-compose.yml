@@ -34,6 +34,15 @@ x-worker-common: &worker-common
     MKL_NUM_THREADS: "1"
     NUMEXPR_NUM_THREADS: "1"
     NUMBA_NUM_THREADS: "1"
+    # NUMBA_NUM_THREADS=1 alone doesn't stop numba's default threading layer
+    # (auto-picks TBB, falling back to OpenMP) from lazily initializing a
+    # native thread pool the first time a jitted ufunc runs (e.g. librosa's
+    # beat_track). If that init races a Celery prefork fork, the child's copy
+    # of that thread pool is corrupt and segfaults on first use (signal 11,
+    # no Python traceback). "workqueue" is numba's pure-C threading layer with
+    # no native thread pool to corrupt across fork -- forcing it here removes
+    # the crash class regardless of thread count.
+    NUMBA_THREADING_LAYER: "workqueue"
     TOKENIZERS_PARALLELISM: "false"
     # Turns a future native crash into a Python traceback naming the offending
     # module, instead of just "signal 11 (SIGSEGV)".
@@ -41,6 +50,12 @@ x-worker-common: &worker-common
   volumes:
     - ./Backend/app:/app/app
     - ./Backend/shared-storage:/app/shared-storage
+    # FR-10 shards read built-in dataset audio (SAA/L2-ARCTIC/Common Voice/RAVDESS)
+    # and custom per-session datasets directly off disk via app.services.dataset_service
+    # / custom_dataset_service, the same way the API container already does (it
+    # mounts both below). Without these, a worker resolving a dataset file 404s.
+    - ./Backend/data:/app/data:ro
+    - ./Backend/uploads:/app/uploads
     - hf-cache:/home/appuser/.cache/huggingface
   depends_on:
     redis:

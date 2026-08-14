@@ -17,6 +17,7 @@ class JobOperation(str, Enum):
     perturbation = "perturbation"
     audio_features = "audio_features"
     linguistic_acoustic = "linguistic_acoustic"
+    fairness = "fairness"
 
 
 class JobStatus(str, Enum):
@@ -118,6 +119,11 @@ class JobCreateRequest(BaseModel):
             raise ValueError(
                 "linguistic_acoustic must be submitted via POST /analyses/linguistic-vs-acoustic"
             )
+        if self.operation == JobOperation.fairness:
+            # Dispatched through its own partition->infer->explain->aggregate chord
+            # (fr10_orchestrate), driven by a dataset + grouping key rather than
+            # audio_ids -- see POST /api/v1/analyses/fairness.
+            raise ValueError("fairness must be submitted via POST /api/v1/analyses/fairness")
         if self.operation in MODEL_REQUIRED_OPERATIONS and not self.model:
             raise ValueError(f"model must be one of: {', '.join(sorted(SUPPORTED_MODELS))}")
         if self.operation in SINGLE_AUDIO_OPERATIONS and len(self.audio_ids) != 1:

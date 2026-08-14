@@ -39,4 +39,8 @@ class Settings(BaseSettings):
     TASK_SOFT_TIME_LIMIT_SECONDS: int = 55 * 60
     TASK_TIME_LIMIT_SECONDS: int = 60 * 60
 
+    # FR-10: Accent and language fairness analysis (docs/FR10plan.md Part 1 S2.3)
+    FR10_MIN_GROUP_SIZE: int = 8
+    FR10_MIN_SPEAKERS_PER_GROUP: int = 2
+
 settings = Settings()
