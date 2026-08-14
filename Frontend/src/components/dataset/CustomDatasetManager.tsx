@@ -21,6 +21,7 @@ import {
   Trash2, 
   FolderPlus, 
   File, 
+  FileText,
   Database,
   AlertCircle,
   CheckCircle,
@@ -42,6 +43,12 @@ interface CustomDataset {
     uploaded_at: string;
   }>;
   total_files: number;
+  manifest?: {
+    filename: string;
+    pair_count: number;
+    matched_audio_count: number;
+    unmatched_filenames?: string[];
+  };
 }
 
 interface CustomDatasetManagerProps {
@@ -69,6 +76,9 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadLoading, setUploadLoading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<Array<{file: string, status: 'pending' | 'uploading' | 'success' | 'error', error?: string}>>([]);
+  const [selectedManifest, setSelectedManifest] = useState<File | null>(null);
+  const [manifestLoading, setManifestLoading] = useState(false);
+  const [manifestMessage, setManifestMessage] = useState<string | null>(null);
 
   const fetchDatasets = async () => {
     setLoading(true);
@@ -184,9 +194,8 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
       
       // Clear form
       setSelectedFiles(null);
-      if (document.querySelector('input[type="file"]') as HTMLInputElement) {
-        (document.querySelector('input[type="file"]') as HTMLInputElement).value = '';
-      }
+      const audioInput = document.getElementById('files-input') as HTMLInputElement | null;
+      if (audioInput) audioInput.value = '';
       
       await fetchDatasets(); // Refresh the list
       
@@ -202,6 +211,40 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
       })));
     } finally {
       setUploadLoading(false);
+    }
+  };
+
+  const uploadManifest = async () => {
+    if (!selectedDataset || !selectedManifest) {
+      setError("Choose a dataset and metadata.csv first");
+      return;
+    }
+    setManifestLoading(true);
+    setError(null);
+    setManifestMessage(null);
+    try {
+      const formData = new FormData();
+      formData.append('manifest', selectedManifest);
+      const response = await fetch(`${API_BASE}/upload/dataset/${selectedDataset}/manifest`, {
+        method: 'POST',
+        credentials: 'include',
+        body: formData,
+      });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || `Failed to upload manifest: ${response.status}`);
+      }
+      const data = await response.json();
+      const details = data.manifest;
+      setManifestMessage(`Loaded ${details.pair_count} transcript pairs; ${details.matched_audio_count} match uploaded audio.`);
+      setSelectedManifest(null);
+      const manifestInput = document.getElementById('manifest-input') as HTMLInputElement | null;
+      if (manifestInput) manifestInput.value = '';
+      await fetchDatasets();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to upload manifest');
+    } finally {
+      setManifestLoading(false);
     }
   };
 
@@ -337,6 +380,10 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
                         <span className="font-medium">Total Size:</span>{" "}
                         {formatFileSize(dataset.files.reduce((sum, file) => sum + file.size, 0))}
                       </div>
+                      <div>
+                        <span className="font-medium">Transcript pairs:</span>{" "}
+                        {dataset.manifest ? `${dataset.manifest.matched_audio_count}/${dataset.manifest.pair_count}` : 'No manifest'}
+                      </div>
                     </div>
                     
                     {dataset.files.length > 0 && (
@@ -430,6 +477,20 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
                       {selectedFiles.length} file(s) selected
                     </p>
                   )}
+                </div>
+
+                <div className="rounded-md border border-dashed p-3 space-y-2">
+                  <div>
+                    <Label htmlFor="manifest-input">Transcript Manifest (metadata.csv)</Label>
+                    <p className="text-xs text-muted-foreground mt-1">CSV columns: `filename` (or `file`, `filepath`, `path`) and `transcript` (or `sentence`, `text`, `statement`). Filenames must match uploaded audio.</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2 items-center">
+                    <Input id="manifest-input" type="file" accept=".csv,text/csv" onChange={(e) => setSelectedManifest(e.target.files?.[0] || null)} className="max-w-sm" />
+                    <Button type="button" variant="outline" onClick={uploadManifest} disabled={manifestLoading || !selectedDataset || !selectedManifest}>
+                      <FileText className="h-4 w-4 mr-2" />{manifestLoading ? 'Loading manifest…' : 'Upload metadata.csv'}
+                    </Button>
+                  </div>
+                  {manifestMessage && <p className="text-sm text-emerald-700">{manifestMessage}</p>}
                 </div>
                 
                 {uploadLoading && (
