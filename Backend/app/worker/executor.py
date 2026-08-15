@@ -20,6 +20,7 @@ from redis.exceptions import RedisError
 from app.repositories.audio import AudioRepository
 from app.repositories.jobs import JobRepository
 from app.schemas.jobs import AudioAsset, JobError, JobProgress, JobStatus, TaskEnvelope
+from app.worker.cache_policy import item_cache_identity
 
 
 logger = logging.getLogger(__name__)
@@ -81,6 +82,97 @@ def _attach_embedding_analysis(
         result["clustering"] = {"error": str(exc)}
 
 
+# Synthetic property added when a noise pass was requested: does the encoder
+# represent *that the signal is degraded*, and at what depth?
+NOISE_PROPERTY = "noise"
+
+
+def _probe_matrix(activations: list[dict[str, Any]], key: str) -> list[list[list[float]]]:
+    """Collect one [layer][dim] block per file, rejecting inconsistent shapes."""
+    matrix: list[list[list[float]]] = []
+    expected: tuple[int, int] | None = None
+    for index, payload in enumerate(activations):
+        layers = (payload or {}).get(key)
+        if not layers:
+            raise ValueError(f"file {index} has no '{key}' activations")
+        shape = (len(layers), len(layers[0]))
+        if expected is None:
+            expected = shape
+        elif shape != expected:
+            raise ValueError(
+                f"file {index} has shape {shape}, expected {expected} -- "
+                "all files in a probe must come from the same model"
+            )
+        matrix.append(layers)
+    return matrix
+
+
+def _attach_probe_analysis(
+    result: dict[str, Any], activations: list[dict[str, Any]], parameters: dict[str, Any]
+) -> None:
+    """Train per-layer probes over the batch, then drop the raw activations.
+
+    `activations` holds one `hidden_states` payload per file, in the same order
+    as `result["items"]` -- which is the same order as the request's `audio_ids`,
+    and therefore the order the labels in `parameters["properties"]` are aligned
+    to.
+
+    Shared by the single-task and batched paths so both stay in step.
+    """
+    from app.services.probing_service import train_layer_probes
+
+    properties = {
+        name: list(labels) for name, labels in (parameters.get("properties") or {}).items()
+    }
+    n_files = len(activations)
+    for name, labels in properties.items():
+        # The API validates this against `audio_ids`; re-checking against the
+        # activations the worker actually assembled is what catches a reordered
+        # or short batch, which would otherwise silently mislabel every row.
+        if len(labels) != n_files:
+            raise ValueError(f"property '{name}' has {len(labels)} labels for {n_files} files")
+
+    clean = _probe_matrix(activations, "layers")
+    layer_names = (activations[0] or {}).get("layer_names")
+    options = {
+        "probe": parameters.get("probe", "logreg"),
+        "cv_folds": int(parameters.get("cv_folds", 5)),
+        "project_dims": int(parameters.get("project_dims", 256)),
+        "min_class_count": int(parameters.get("min_class_count", 5)),
+        "include_control": bool(parameters.get("include_control", True)),
+        "seed": int(parameters.get("seed", 42)),
+        "layer_names": layer_names,
+    }
+    probes = train_layer_probes(clean, properties, **options)
+
+    if parameters.get("noise_snr_db") is not None:
+        noisy = _probe_matrix(activations, "noisy_layers")
+        # The noise probe is trained on the clean and noisy passes stacked, but
+        # the *other* properties are not: stacking puts a near-duplicate of every
+        # clip in the batch, so a speaker or emotion probe would meet the same
+        # utterance in both its training and its test fold and report inflated
+        # accuracy. Only the clean/noisy contrast is legitimate over that set.
+        stacked = clean + noisy
+        noise_labels = ["clean"] * n_files + ["noisy"] * n_files
+        noise_probe = train_layer_probes(stacked, {NOISE_PROPERTY: noise_labels}, **options)
+        probes["properties"][NOISE_PROPERTY] = noise_probe["properties"][NOISE_PROPERTY]
+        probes["noise_snr_db"] = float(parameters["noise_snr_db"])
+
+    result["probes"] = _jsonable(probes)
+    # Raw activations are what make this job expensive to move: 144 whisper-large
+    # files is ~50 MB of JSON. They are already content-addressed per file, so the
+    # batch response keeps only their shape.
+    result["items"] = [
+        {
+            "audio_id": item["audio_id"],
+            "layers": probes["num_layers"],
+            "dim": probes["hidden_dim"],
+            **({"cache_hit": item["cache_hit"]} if "cache_hit" in item else {}),
+        }
+        for item in result["items"]
+    ]
+
+
 def analysis_cache_key(envelope: TaskEnvelope) -> str:
     material = {
         "operation": envelope.operation.value,
@@ -96,12 +188,15 @@ def analysis_cache_key(envelope: TaskEnvelope) -> str:
 
 
 def item_cache_key(envelope: TaskEnvelope, sha256: str) -> str:
+    # Per-file entries are keyed on what actually produced them, not on the whole
+    # job configuration -- see `cache_policy` for why that distinction matters.
+    operation, parameters = item_cache_identity(envelope.operation.value, envelope.parameters)
     material = {
-        "operation": envelope.operation.value,
+        "operation": operation,
         "model": envelope.model,
         "revision": MODEL_REVISIONS.get(envelope.model or ""),
         "audio": sha256,
-        "parameters": envelope.parameters,
+        "parameters": parameters,
         "schema": envelope.result_schema_version,
         "code": envelope.code_version,
     }
@@ -579,6 +674,10 @@ async def execute(envelope_data: dict[str, Any], celery_task_id: str) -> None:
                 _attach_embedding_analysis(
                     result, [item["result"] for item in items], envelope.parameters
                 )
+            if envelope.operation.value == "layer_probe":
+                _attach_probe_analysis(
+                    result, [item["result"] for item in items], envelope.parameters
+                )
 
             if cacheable:
                 result_key = f"cache/{cache_digest}/result.json"
@@ -740,6 +839,10 @@ async def finalize_batch(
     _aggregate_batch(result, [item["filename"] for item in ordered])
     if envelope.operation.value == "embedding":
         _attach_embedding_analysis(
+            result, [item["result"] for item in ordered], envelope.parameters
+        )
+    if envelope.operation.value == "layer_probe":
+        _attach_probe_analysis(
             result, [item["result"] for item in ordered], envelope.parameters
         )
     storage = get_storage()

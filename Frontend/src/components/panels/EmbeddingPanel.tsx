@@ -11,6 +11,7 @@ import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/comp
 import { EmbeddingPlot, type EmbeddingColorMode } from "../visualization/EmbeddingPlot";
 import { ScalarPlot } from "../visualization/ScalarPlot";
 import { DatasetEdaView } from "../eda/DatasetEdaView";
+import { LayerProbePanel } from "../probing/LayerProbePanel";
 import { ClusterSizeControl } from "../eda/ClusterSizeControl";
 import { ClusterInsights } from "../eda/ClusterInsights";
 import { useEmbedding } from "../../contexts/EmbeddingContext";
@@ -448,6 +449,7 @@ export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice
           <TabsList className="h-8">
             <TabsTrigger value="embeddings" className="text-xs">Embeddings</TabsTrigger>
             <TabsTrigger value="eda" className="text-xs">Dataset EDA</TabsTrigger>
+            <TabsTrigger value="probes" className="text-xs">Layer Probes</TabsTrigger>
           </TabsList>
         </div>
 
@@ -1023,6 +1025,10 @@ export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice
           onBucketClick={handleBucketClick}
           activeFilterKey={activeFilterKey}
         />
+      </TabsContent>
+
+      <TabsContent value="probes" className="flex-1 p-3 bg-panel-background overflow-auto m-0">
+        <LayerProbePanel model={model} dataset={dataset} availableFiles={availableFiles} />
       </TabsContent>
       </Tabs>
     </div>

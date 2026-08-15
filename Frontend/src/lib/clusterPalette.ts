@@ -47,6 +47,20 @@ export function clusterSymbol(label: number): string {
   return SYMBOLS[Math.floor(label / LIGHT_HUES.length) % SYMBOLS.length];
 }
 
+/** Plotly line dash patterns, cycled one step behind the hues. */
+const DASHES = ["solid", "dash", "dot", "dashdot"] as const;
+
+/**
+ * Line-style channel for series identity, for charts drawn as lines rather than
+ * markers (the layer-probe profile). Same composite-encoding contract as
+ * `clusterSymbol`: hue alone never carries identity past the fourth series, and
+ * the first four differ in hue anyway.
+ */
+export function clusterDash(label: number): string {
+  if (label === NOISE_LABEL) return "dot";
+  return DASHES[Math.floor(label / LIGHT_HUES.length) % DASHES.length];
+}
+
 export function clusterName(label: number): string {
   return label === NOISE_LABEL ? "Noise" : `Cluster ${label}`;
 }
