@@ -38,4 +38,6 @@ def queue_for(operation: str, model: str | None) -> str:
         return "cpu"
     if operation in {"saliency", "attention"} or model == "whisper-large":
         return "gpu-large"
+    # `hidden_states` and `layer_probe` are encoder forward passes, the same
+    # shape of work as `embedding`, so they share its routing.
     return "gpu-fast"

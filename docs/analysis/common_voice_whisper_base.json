@@ -1,0 +1,340 @@
+{
+  "num_layers": 7,
+  "layer_names": [
+    "input",
+    "layer_1",
+    "layer_2",
+    "layer_3",
+    "layer_4",
+    "layer_5",
+    "layer_6"
+  ],
+  "hidden_dim": 512,
+  "projected_dim": 256,
+  "n_files": 100,
+  "properties": {
+    "gender": {
+      "n_samples": 38,
+      "n_missing": 62,
+      "n_classes": 2,
+      "class_counts": {
+        "female": 10,
+        "male": 28
+      },
+      "dropped_classes": [],
+      "majority_baseline": 0.7368421052631579,
+      "cv_folds_used": 5,
+      "layers": [
+        {
+          "layer": 0,
+          "layer_name": "input",
+          "accuracy": 0.8428571428571429,
+          "accuracy_std": 0.12132348393902165,
+          "macro_f1": 0.7816091954022988,
+          "control_accuracy": 0.7678571428571429,
+          "selectivity": 0.07499999999999996
+        },
+        {
+          "layer": 1,
+          "layer_name": "layer_1",
+          "accuracy": 0.8392857142857142,
+          "accuracy_std": 0.10101525445522107,
+          "macro_f1": 0.7816091954022988,
+          "control_accuracy": 0.7142857142857143,
+          "selectivity": 0.12499999999999989
+        },
+        {
+          "layer": 2,
+          "layer_name": "layer_2",
+          "accuracy": 0.8392857142857142,
+          "accuracy_std": 0.10101525445522107,
+          "macro_f1": 0.7816091954022988,
+          "control_accuracy": 0.6571428571428571,
+          "selectivity": 0.18214285714285705
+        },
+        {
+          "layer": 3,
+          "layer_name": "layer_3",
+          "accuracy": 0.7607142857142858,
+          "accuracy_std": 0.05933302759227196,
+          "macro_f1": 0.6590229312063809,
+          "control_accuracy": 0.675,
+          "selectivity": 0.08571428571428574
+        },
+        {
+          "layer": 4,
+          "layer_name": "layer_4",
+          "accuracy": 0.7892857142857144,
+          "accuracy_std": 0.06428571428571428,
+          "macro_f1": 0.7088122605363985,
+          "control_accuracy": 0.6464285714285714,
+          "selectivity": 0.14285714285714302
+        },
+        {
+          "layer": 5,
+          "layer_name": "layer_5",
+          "accuracy": 0.8678571428571429,
+          "accuracy_std": 0.07953949089757174,
+          "macro_f1": 0.810568295114656,
+          "control_accuracy": 0.7071428571428571,
+          "selectivity": 0.1607142857142858
+        },
+        {
+          "layer": 6,
+          "layer_name": "layer_6",
+          "accuracy": 0.8678571428571429,
+          "accuracy_std": 0.07953949089757174,
+          "macro_f1": 0.810568295114656,
+          "control_accuracy": 0.6285714285714286,
+          "selectivity": 0.23928571428571432
+        }
+      ],
+      "best_layer": 5,
+      "best_accuracy": 0.8678571428571429,
+      "best_selectivity": 0.1607142857142858,
+      "peak_depth": 0.8333333333333334,
+      "confusion_matrix": [
+        [
+          6,
+          4
+        ],
+        [
+          1,
+          27
+        ]
+      ],
+      "class_labels": [
+        "female",
+        "male"
+      ],
+      "skipped_reason": null
+    },
+    "accent": {
+      "n_samples": 28,
+      "n_missing": 67,
+      "n_classes": 2,
+      "class_counts": {
+        "england": 10,
+        "us": 18
+      },
+      "dropped_classes": [
+        {
+          "label": "australia",
+          "count": 3
+        },
+        {
+          "label": "indian",
+          "count": 2
+        }
+      ],
+      "majority_baseline": 0.6428571428571429,
+      "cv_folds_used": 5,
+      "layers": [
+        {
+          "layer": 0,
+          "layer_name": "input",
+          "accuracy": 0.5333333333333333,
+          "accuracy_std": 0.1398411797560202,
+          "macro_f1": 0.4822190611664296,
+          "control_accuracy": 0.6066666666666667,
+          "selectivity": -0.07333333333333336
+        },
+        {
+          "layer": 1,
+          "layer_name": "layer_1",
+          "accuracy": 0.5,
+          "accuracy_std": 0.12292725943057183,
+          "macro_f1": 0.4555555555555556,
+          "control_accuracy": 0.6133333333333334,
+          "selectivity": -0.1133333333333334
+        },
+        {
+          "layer": 2,
+          "layer_name": "layer_2",
+          "accuracy": 0.54,
+          "accuracy_std": 0.11623730516108462,
+          "macro_f1": 0.4822190611664296,
+          "control_accuracy": 0.6466666666666666,
+          "selectivity": -0.10666666666666658
+        },
+        {
+          "layer": 3,
+          "layer_name": "layer_3",
+          "accuracy": 0.6133333333333334,
+          "accuracy_std": 0.11274356350191843,
+          "macro_f1": 0.5354449472096531,
+          "control_accuracy": 0.7533333333333333,
+          "selectivity": -0.1399999999999999
+        },
+        {
+          "layer": 4,
+          "layer_name": "layer_4",
+          "accuracy": 0.7266666666666668,
+          "accuracy_std": 0.22350739485653615,
+          "macro_f1": 0.672514619883041,
+          "control_accuracy": 0.72,
+          "selectivity": 0.006666666666666821
+        },
+        {
+          "layer": 5,
+          "layer_name": "layer_5",
+          "accuracy": 0.72,
+          "accuracy_std": 0.12400716825158853,
+          "macro_f1": 0.65,
+          "control_accuracy": 0.6866666666666668,
+          "selectivity": 0.033333333333333215
+        },
+        {
+          "layer": 6,
+          "layer_name": "layer_6",
+          "accuracy": 0.82,
+          "accuracy_std": 0.10666666666666669,
+          "macro_f1": 0.7888386123680242,
+          "control_accuracy": 0.5866666666666667,
+          "selectivity": 0.23333333333333328
+        }
+      ],
+      "best_layer": 6,
+      "best_accuracy": 0.82,
+      "best_selectivity": 0.23333333333333328,
+      "peak_depth": 1.0,
+      "confusion_matrix": [
+        [
+          6,
+          4
+        ],
+        [
+          1,
+          17
+        ]
+      ],
+      "class_labels": [
+        "england",
+        "us"
+      ],
+      "skipped_reason": null
+    },
+    "age": {
+      "n_samples": 25,
+      "n_missing": 69,
+      "n_classes": 3,
+      "class_counts": {
+        "fifties": 6,
+        "thirties": 9,
+        "twenties": 10
+      },
+      "dropped_classes": [
+        {
+          "label": "sixties",
+          "count": 2
+        },
+        {
+          "label": "teens",
+          "count": 4
+        }
+      ],
+      "majority_baseline": 0.4,
+      "cv_folds_used": 5,
+      "layers": [
+        {
+          "layer": 0,
+          "layer_name": "input",
+          "accuracy": 0.32,
+          "accuracy_std": 0.09797958971132713,
+          "macro_f1": 0.2927170868347339,
+          "control_accuracy": 0.72,
+          "selectivity": -0.39999999999999997
+        },
+        {
+          "layer": 1,
+          "layer_name": "layer_1",
+          "accuracy": 0.44000000000000006,
+          "accuracy_std": 0.07999999999999999,
+          "macro_f1": 0.4011857707509881,
+          "control_accuracy": 0.4800000000000001,
+          "selectivity": -0.040000000000000036
+        },
+        {
+          "layer": 2,
+          "layer_name": "layer_2",
+          "accuracy": 0.36000000000000004,
+          "accuracy_std": 0.19595917942265426,
+          "macro_f1": 0.2901960784313726,
+          "control_accuracy": 0.43999999999999995,
+          "selectivity": -0.0799999999999999
+        },
+        {
+          "layer": 3,
+          "layer_name": "layer_3",
+          "accuracy": 0.36000000000000004,
+          "accuracy_std": 0.23323807579381203,
+          "macro_f1": 0.27149321266968324,
+          "control_accuracy": 0.48,
+          "selectivity": -0.11999999999999994
+        },
+        {
+          "layer": 4,
+          "layer_name": "layer_4",
+          "accuracy": 0.4000000000000001,
+          "accuracy_std": 0.17888543819998315,
+          "macro_f1": 0.3910631279052332,
+          "control_accuracy": 0.32,
+          "selectivity": 0.08000000000000007
+        },
+        {
+          "layer": 5,
+          "layer_name": "layer_5",
+          "accuracy": 0.28,
+          "accuracy_std": 0.20396078054371136,
+          "macro_f1": 0.24338624338624337,
+          "control_accuracy": 0.48,
+          "selectivity": -0.19999999999999996
+        },
+        {
+          "layer": 6,
+          "layer_name": "layer_6",
+          "accuracy": 0.27999999999999997,
+          "accuracy_std": 0.15999999999999998,
+          "macro_f1": 0.26916221033868093,
+          "control_accuracy": 0.27999999999999997,
+          "selectivity": 0.0
+        }
+      ],
+      "best_layer": 1,
+      "best_accuracy": 0.44000000000000006,
+      "best_selectivity": -0.040000000000000036,
+      "peak_depth": 0.16666666666666666,
+      "confusion_matrix": [
+        [
+          1,
+          1,
+          4
+        ],
+        [
+          2,
+          4,
+          3
+        ],
+        [
+          2,
+          2,
+          6
+        ]
+      ],
+      "class_labels": [
+        "fifties",
+        "thirties",
+        "twenties"
+      ],
+      "skipped_reason": null
+    }
+  },
+  "params": {
+    "probe": "logreg",
+    "cv_folds": 5,
+    "project_dims": 256,
+    "min_class_count": 5,
+    "include_control": true,
+    "seed": 42
+  }
+}
