@@ -53,6 +53,7 @@ export function PerturbationDiagnosticsPanel({
   const [sweepState, setSweepState] = useState<SweepStateMap>(defaultSweepState);
   const [includeLexicalControl, setIncludeLexicalControl] = useState(true);
   const [selected, setSelected] = useState<{ property: string; theta: number } | null>(null);
+  const [resolvedAudioId, setResolvedAudioId] = useState<string | null>(null);
 
   const job = useAnalysisJob<LinguisticAcousticResult, void>(async () => {
     if (!selectedFile) throw new Error("No file selected");
@@ -61,6 +62,7 @@ export function PerturbationDiagnosticsPanel({
       selectedFile,
       originalDataset && originalDataset !== "custom" ? originalDataset : dataset,
     );
+    setResolvedAudioId(audioId);
     const sweeps = toSweepConfigs(sweepState);
     if (sweeps.length === 0) throw new Error("Enable at least one property to sweep");
     return submitLinguisticAcoustic({
@@ -185,6 +187,7 @@ export function PerturbationDiagnosticsPanel({
           <VariantInspector
             result={job.result}
             baselineAudioUrl={getAudioUrl(selectedFile)}
+            baselineAudioId={resolvedAudioId}
             selectedProperty={selected?.property ?? null}
             selectedTheta={selected?.theta ?? null}
           />

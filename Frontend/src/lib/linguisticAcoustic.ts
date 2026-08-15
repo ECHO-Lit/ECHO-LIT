@@ -123,6 +123,23 @@ export async function submitLinguisticAcoustic(
   return response.json();
 }
 
+export async function renderVariantAudio(
+  audioId: string,
+  property: string,
+  theta: number,
+  signal?: AbortSignal,
+): Promise<{ variant_audio_id: string; playback_url: string }> {
+  const response = await fetch(`${API_BASE}/audio/${audioId}/variant`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ property, theta }),
+    signal,
+  });
+  if (!response.ok) throw await parseError(response);
+  return response.json();
+}
+
 const STOCHASTIC_PROPERTIES = new Set<SweepProperty>(['noise']);
 const MAX_GRID_VARIANTS = 60;
 
