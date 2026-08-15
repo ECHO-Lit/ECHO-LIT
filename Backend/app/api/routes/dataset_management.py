@@ -6,13 +6,23 @@ from pathlib import Path
 import json
 
 from app.services.custom_dataset_service import (
-    get_custom_dataset_manager, 
+    get_custom_dataset_manager,
     format_custom_dataset_name,
     cleanup_session_datasets
+)
+from app.services.dataset_labels_service import (
+    available_patterns,
+    derive_from_filenames,
+    parse_labels_csv,
+    preview_dataset,
 )
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# An uploaded answer key is text, and a large one is a mistake rather than a
+# use case: one row per audio file, and the audio itself is capped elsewhere.
+MAX_LABEL_CSV_BYTES = 4 * 1024 * 1024
 
 
 def get_session_id(request: Request) -> str:
@@ -132,6 +142,128 @@ async def upload_files_to_dataset(
     except Exception as e:
         logger.error(f"Error uploading files to dataset {dataset_name}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to upload files: {str(e)}")
+
+
+@router.get("/dataset/label-patterns")
+async def list_label_patterns():
+    """Filename patterns that can supply labels without a CSV.
+
+    Many speech corpora encode everything in the filename -- SAVEE's `DC_a01.wav`
+    is speaker DC, anger, take 1 -- so for those a user needs no answer key at
+    all, only to say which corpus this is.
+    """
+    return JSONResponse(status_code=200, content={"patterns": available_patterns()})
+
+
+def _label_response(manager, dataset_name: str, extra: dict | None = None) -> JSONResponse:
+    """Stored labels plus the preview of what the probe will do with them.
+
+    The preview is the point.  Extraction is the expensive step of a probe run
+    and training is not, so a user should discover "two of your three classes are
+    about to be dropped" here, in a second, rather than after a multi-minute job.
+    """
+    rows = manager.get_dataset_files_as_csv_format(dataset_name)
+    stored = manager.get_labels(dataset_name) or {}
+    body = {
+        "dataset_name": dataset_name,
+        "source": stored.get("source"),
+        "columns": manager.get_label_columns(dataset_name),
+        "warnings": stored.get("warnings", []),
+        "updated_at": stored.get("updated_at"),
+        "preview": preview_dataset(rows),
+    }
+    if extra:
+        body.update(extra)
+    return JSONResponse(status_code=200, content=body)
+
+
+@router.get("/dataset/{dataset_name}/labels")
+async def get_dataset_labels(request: Request, dataset_name: str):
+    """Current answer key for a dataset, with a per-property preview."""
+    session_id = get_session_id(request)
+    manager = get_custom_dataset_manager(session_id)
+    if not manager.get_dataset_metadata(dataset_name):
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_name}' not found")
+    return _label_response(manager, dataset_name)
+
+
+@router.post("/dataset/{dataset_name}/labels")
+async def upload_dataset_labels(
+    request: Request,
+    dataset_name: str,
+    file: UploadFile = File(..., description="CSV with a filename column plus label columns"),
+):
+    """Attach an answer key from an uploaded CSV, joined on `filename`."""
+    session_id = get_session_id(request)
+    manager = get_custom_dataset_manager(session_id)
+    if not manager.get_dataset_metadata(dataset_name):
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_name}' not found")
+
+    raw = await file.read()
+    if len(raw) > MAX_LABEL_CSV_BYTES:
+        raise HTTPException(status_code=413, detail="Label CSV is too large (limit 4 MB)")
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="Label CSV must be UTF-8 encoded")
+
+    try:
+        table, warnings = parse_labels_csv(text)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # How many of *this dataset's* files the CSV actually reaches. A CSV that
+    # parses cleanly but matches nothing is the most likely user error here, and
+    # it would otherwise show up as an empty property list with no explanation.
+    known = {row["filename"] for row in manager.get_dataset_files_as_csv_format(dataset_name)}
+    matched = sum(1 for name in known if name in table or Path(name).name in table)
+    if matched == 0:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "The CSV parsed but none of its filenames match this dataset. "
+                f"Dataset files look like: {', '.join(sorted(known)[:3])}"
+            ),
+        )
+    if matched < len(known):
+        warnings.append(f"{len(known) - matched} of {len(known)} files have no row in the CSV")
+
+    record = manager.set_labels(dataset_name, table, source="csv", warnings=warnings)
+    return _label_response(manager, dataset_name, {"matched_files": matched, "stored": record["columns"]})
+
+
+@router.post("/dataset/{dataset_name}/labels/derive")
+async def derive_dataset_labels(
+    request: Request,
+    dataset_name: str,
+    pattern_id: str = Form(..., description="Filename pattern id, e.g. 'savee'"),
+):
+    """Attach an answer key parsed out of the filenames themselves."""
+    session_id = get_session_id(request)
+    manager = get_custom_dataset_manager(session_id)
+    if not manager.get_dataset_metadata(dataset_name):
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_name}' not found")
+
+    filenames = [row["filename"] for row in manager.get_dataset_files_as_csv_format(dataset_name)]
+    try:
+        table, warnings = derive_from_filenames(filenames, pattern_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    record = manager.set_labels(dataset_name, table, source=f"pattern:{pattern_id}", warnings=warnings)
+    matched = sum(1 for name in filenames if name in table)
+    return _label_response(manager, dataset_name, {"matched_files": matched, "stored": record["columns"]})
+
+
+@router.delete("/dataset/{dataset_name}/labels")
+async def delete_dataset_labels(request: Request, dataset_name: str):
+    """Remove the answer key, leaving the audio and the derived bands in place."""
+    session_id = get_session_id(request)
+    manager = get_custom_dataset_manager(session_id)
+    if not manager.get_dataset_metadata(dataset_name):
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_name}' not found")
+    manager.clear_labels(dataset_name)
+    return _label_response(manager, dataset_name)
 
 
 @router.get("/dataset/list")
