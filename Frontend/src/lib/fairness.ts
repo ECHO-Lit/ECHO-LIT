@@ -237,6 +237,19 @@ export async function submitFairnessAnalysis(body: FairnessRequest, signal?: Abo
   return response.json();
 }
 
+/** Cancels every non-terminal fairness job in this session, not just
+ * whichever one the UI currently has a jobId for -- see the backend route's
+ * docstring for why that distinction matters. */
+export async function cancelAllFairnessAnalyses(signal?: AbortSignal): Promise<{ cancelled_job_ids: string[]; count: number }> {
+  const response = await fetch(`${API_BASE}/api/v1/analyses/fairness/cancel-all`, {
+    method: 'POST',
+    credentials: 'include',
+    signal,
+  });
+  if (!response.ok) throw await parseError(response);
+  return response.json();
+}
+
 export const DESIGN_LABEL: Record<FairnessDesign, string> = {
   matched: 'Matched (content controlled)',
   partially_matched: 'Partially matched',

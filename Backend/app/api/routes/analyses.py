@@ -16,7 +16,7 @@ from app.core.celery_app import celery_app
 from app.core.model_catalog import MODEL_DEFINITIONS, ModelKind, custom_model_capabilities
 from app.core.settings import settings
 from app.repositories.audio import AudioRepository
-from app.repositories.jobs import JobRepository
+from app.repositories.jobs import JobRepository, TERMINAL_STATES
 from app.repositories.models import CustomModelRepository
 from app.schemas.analyses import LinguisticAcousticAccepted, LinguisticAcousticRequest
 from app.schemas.jobs import (
@@ -260,3 +260,38 @@ async def create_fairness_analysis(payload: FairnessRequest, request: Request):
         status_url=f"/jobs/{job_id}", result_url=f"/jobs/{job_id}/result",
         dataset=payload.dataset, grouping_key=payload.grouping_key, notes=notes,
     )
+
+
+@router.post("/fairness/cancel-all")
+async def cancel_all_fairness_analyses(request: Request):
+    """Cancel every non-terminal fairness job in this session, not just
+    whichever one the frontend currently has a jobId for.
+
+    The frontend only ever tracks a single active job (use-job-query.ts's
+    `activeKey`), so any fairness job it lost track of -- e.g. from the
+    tab-unmount/gcTime bug, or simply opening a second tab -- keeps running
+    server-side with no UI reference to cancel it individually. This walks
+    the session's own job index instead of relying on a client-supplied id.
+    """
+    session_id = request.state.sid
+    jobs = JobRepository()
+    job_ids = await jobs.list_session_job_ids(session_id)
+
+    cancelled: list[str] = []
+    for job_id in job_ids:
+        record = await jobs.get(job_id)
+        if not record or record.operation != JobOperation.fairness or record.status in TERMINAL_STATES:
+            continue
+        await jobs.request_cancel(job_id)
+        if record.task_id:
+            celery_app.control.revoke(record.task_id, terminate=False)
+        for child_task_id in record.child_task_ids:
+            celery_app.control.revoke(child_task_id, terminate=False)
+        if record.status == JobStatus.queued:
+            await jobs.update(
+                job_id, status=JobStatus.cancelled,
+                progress=JobProgress(current=0, total=record.progress.total, message="Cancelled"),
+            )
+        cancelled.append(job_id)
+
+    return {"cancelled_job_ids": cancelled, "count": len(cancelled)}

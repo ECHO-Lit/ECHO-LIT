@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -13,7 +14,7 @@ import { useAnalysisJob } from "@/hooks/use-job-query";
 import { InfoTooltip } from "@/components/analysis/InfoTooltip";
 import { FR10_GLOSSARY } from "@/lib/fairnessGlossary";
 import {
-  fetchGroupableColumns, submitFairnessAnalysis,
+  cancelAllFairnessAnalyses, fetchGroupableColumns, submitFairnessAnalysis,
   type FairnessMetricId, type FairnessReport, type FairnessRequest,
 } from "@/lib/fairness";
 import { DesignBanner } from "./DesignBanner";
@@ -75,6 +76,21 @@ export function FairnessPanel({ model, dataset, originalDataset }: FairnessPanel
     };
     return submitFairnessAnalysis(body);
   }, "fr10");
+
+  // Separate from `job.cancel()`: that only knows about the ONE job this
+  // panel's own React Query cache is currently tracking. If the panel ever
+  // lost track of a running job (the tab-unmount/gcTime bug, opening a
+  // second tab, a page reload mid-run), the backend job keeps going with no
+  // local reference to cancel it. This walks the session's own job list
+  // server-side instead, so it works regardless of what the UI remembers.
+  const cancelAll = useMutation({
+    mutationFn: () => cancelAllFairnessAnalyses(),
+    onSuccess: ({ count }) => {
+      toast.success(count > 0 ? `Cancelled ${count} running fairness job(s).` : "No running fairness jobs to cancel.");
+      job.reset();
+    },
+    onError: (err: Error) => toast.error(err.message || "Failed to cancel fairness jobs."),
+  });
 
   const progressPct = job.progress && job.progress.total > 0
     ? Math.round((job.progress.current / job.progress.total) * 100)
@@ -191,6 +207,21 @@ export function FairnessPanel({ model, dataset, originalDataset }: FairnessPanel
                 Cancel
               </Button>
             )}
+            <Button
+              size="sm"
+              variant="outline"
+              className="text-destructive hover:text-destructive"
+              disabled={cancelAll.isPending}
+              onClick={() => cancelAll.mutate()}
+              title="Cancel every running fairness job in this session, including any the panel lost track of"
+            >
+              {cancelAll.isPending ? (
+                <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+              ) : (
+                <X className="h-4 w-4 mr-1" />
+              )}
+              Cancel all fairness jobs
+            </Button>
           </div>
 
           {job.isRunning && job.progress && (
