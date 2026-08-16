@@ -6,8 +6,10 @@ import uuid
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from app.core.celery_app import celery_app
-from app.core.model_catalog import custom_model_capabilities
+from app.core.model_catalog import MODEL_DEFINITIONS, custom_model_capabilities
 from app.repositories.models import CustomModelRepository
+from app.repositories.jacobian_lenses import JacobianLensRepository
+from app.schemas.jacobian_lens import JacobianLensRecord
 from app.schemas.models import (
     CustomModelCreateRequest,
     CustomModelCreateResponse,
@@ -74,6 +76,17 @@ async def list_custom_models(request: Request):
     return [await _refresh_capabilities(record, repository) for record in records]
 
 
+@router.get("/jacobian-lenses/{model_id}", response_model=list[JacobianLensRecord])
+async def list_model_jacobian_lenses(model_id: str, request: Request):
+    """List ready or in-progress lenses for a built-in or owned custom ASR model."""
+    if model_id not in MODEL_DEFINITIONS:
+        model = await CustomModelRepository().get_owned(model_id, request.state.sid)
+        if not model:
+            raise HTTPException(status_code=404, detail="Model not found")
+    lenses = await JacobianLensRepository().list_owned(request.state.sid)
+    return [lens for lens in lenses if lens.model_id == model_id]
+
+
 @router.get("/{model_id}", response_model=CustomModelRecord)
 async def get_custom_model(model_id: str, request: Request):
     repository = CustomModelRepository()
@@ -81,6 +94,12 @@ async def get_custom_model(model_id: str, request: Request):
     if not record:
         raise HTTPException(status_code=404, detail="Custom model not found")
     return await _refresh_capabilities(record, repository)
+
+
+@router.get("/{model_id}/jacobian-lenses", response_model=list[JacobianLensRecord])
+async def list_jacobian_lenses(model_id: str, request: Request):
+    """Deprecated compatibility route for custom-model lens listings."""
+    return await list_model_jacobian_lenses(model_id, request)
 
 
 @router.delete("/{model_id}", status_code=204)

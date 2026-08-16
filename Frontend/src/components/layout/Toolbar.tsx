@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { Upload, HelpCircle } from "lucide-react";
+import { Link } from "react-router-dom";
 import { API_BASE } from '@/lib/api';
 import { CustomDatasetManager } from '@/components/dataset/CustomDatasetManager';
 import { CustomModelManager } from '@/components/model/CustomModelManager';
@@ -140,6 +141,9 @@ const onModelChange = (value: string) => {
               v1.0
             </Badge>
           </div>
+          <Button asChild variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground">
+            <Link to="/j-lens">J-Lens Lab</Link>
+          </Button>
 
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-1.5">

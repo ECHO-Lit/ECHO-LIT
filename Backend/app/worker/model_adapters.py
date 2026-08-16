@@ -33,6 +33,31 @@ class AudioModelAdapter(ABC):
     def supports(self, operation: str) -> bool:
         return self.definition.supports(operation)
 
+    def jacobian_lens_architecture(self) -> str | None:
+        """Architecture-specific output path used by the generic J-lens service.
+
+        Only speech-to-text adapters expose a verbal vocabulary.  Keeping this
+        on the adapter prevents the fitting code from depending on Whisper or
+        any individual Hugging Face model class.
+        """
+        if self.kind == ModelKind.SEQ2SEQ_ASR:
+            return "seq2seq"
+        if self.kind == ModelKind.CTC_ASR:
+            return "ctc"
+        return None
+
+    def jacobian_lens_components(self, resource: Any) -> tuple[Any, Any]:
+        """Return the processor and model needed for generic lens operations."""
+        if not self.jacobian_lens_architecture():
+            raise ValueError(f"{self.model_id} is not a speech-to-text model")
+        if not isinstance(resource, tuple) or len(resource) != 2:
+            raise ValueError("Adapter did not provide processor and model for Jacobian lens")
+        return resource
+
+    def jacobian_lens_revision(self) -> str:
+        """Stable model identity embedded in a fitted artifact."""
+        return self.revision
+
     @abstractmethod
     def resource_variant(self, operation: str) -> str:
         """Return the registry variant required by an operation."""
@@ -48,6 +73,8 @@ class AudioModelAdapter(ABC):
 
 class WhisperAdapter(AudioModelAdapter):
     def resource_variant(self, operation: str) -> str:
+        if operation in {"jacobian_lens_fit", "jacobian_lens_apply"}:
+            return "jacobian-lens"
         if operation == "attention":
             return "eager-attention"
         if operation == "saliency":
@@ -58,6 +85,9 @@ class WhisperAdapter(AudioModelAdapter):
 
     def load_resource(self, variant: str) -> Any:
         from app.services import model_loader_service as models
+
+        if variant == "jacobian-lens":
+            return models.get_whisper_jacobian_lens_models(self.revision)
 
         if variant == "encoder":
             return (
@@ -216,6 +246,9 @@ class GenericHuggingFaceAdapter(AudioModelAdapter):
 
     def resource_variant(self, operation: str) -> str:
         return "eager-attention" if operation == "attention" else "generic"
+
+    def jacobian_lens_revision(self) -> str:
+        return f"{self.revision}@{self.hf_revision or 'main'}"
 
     def load_resource(self, variant: str) -> Any:
         from transformers import AutoModelForAudioClassification, AutoModelForCTC, AutoModelForSpeechSeq2Seq, AutoProcessor
