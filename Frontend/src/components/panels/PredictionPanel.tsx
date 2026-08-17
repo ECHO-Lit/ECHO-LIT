@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { SaliencyVisualization } from "../visualization/SaliencyVisualization";
 import { AttentionVisualization } from "../visualization/AttentionVisualization";
+import { JacobianLensVisualization } from "../visualization/JacobianLensVisualization";
 import { PerturbationTools } from "../analysis/PerturbationTools";
 import { PerturbationDiagnosticsPanel } from "../analysis/PerturbationDiagnosticsPanel";
 import { FairnessPanel } from "../fairness/FairnessPanel";
@@ -78,17 +79,24 @@ export const PredictionPanel = ({ selectedFile, selectedEmbeddingFile, model, da
   const [perturbedFile, setPerturbedFile] = useState<UploadedFile | null>(null);
   const [isLoadingPerturbed, setIsLoadingPerturbed] = useState(false);
   const [customModelHasAttention, setCustomModelHasAttention] = useState(false);
+  const [customModelHasJacobianLens, setCustomModelHasJacobianLens] = useState(false);
 
   useEffect(() => {
     if (!model?.startsWith('custom-')) {
       setCustomModelHasAttention(false);
+      setCustomModelHasJacobianLens(false);
       return;
     }
     listCustomModels()
-      .then((models) => setCustomModelHasAttention(
-        models.some((customModel) => customModel.model_id === model && customModel.capabilities.includes('attention')),
-      ))
-      .catch(() => setCustomModelHasAttention(false));
+      .then((models) => {
+        const selectedModel = models.find((customModel) => customModel.model_id === model);
+        setCustomModelHasAttention(Boolean(selectedModel?.capabilities.includes('attention')));
+        setCustomModelHasJacobianLens(Boolean(selectedModel?.capabilities.includes('jacobian_lens_apply')));
+      })
+      .catch(() => {
+        setCustomModelHasAttention(false);
+        setCustomModelHasJacobianLens(false);
+      });
   }, [model]);
 
 
@@ -313,14 +321,17 @@ export const PredictionPanel = ({ selectedFile, selectedEmbeddingFile, model, da
   }, [selectedFile, selectedEmbeddingFile, model, dataset, originalDataset]);
 
   const hasAttention = !!model && (model.includes('whisper') || customModelHasAttention);
+  const hasJacobianLens = !!model && (model.includes('whisper') || customModelHasJacobianLens);
+  const tabCount = 4 + Number(hasAttention) + Number(hasJacobianLens);
 
   return (
     <div className="h-full bg-panel-background border-t border-border">
       <Tabs defaultValue="saliency" className="h-full">
         <div className="bg-panel-header border-b border-border px-3 py-2">
-          <TabsList className={`h-7 grid w-full ${hasAttention ? 'grid-cols-5' : 'grid-cols-4'} bg-muted`}>
+          <TabsList className="h-7 grid w-full bg-muted" style={{ gridTemplateColumns: `repeat(${tabCount}, minmax(0, 1fr))` }}>
             <TabsTrigger value="saliency" className="text-xs">Saliency</TabsTrigger>
             {hasAttention && <TabsTrigger value="attention" className="text-xs">Attention</TabsTrigger>}
+            {hasJacobianLens && <TabsTrigger value="jacobian-lens" className="text-xs">J-Lens</TabsTrigger>}
             <TabsTrigger value="perturbation" className="text-xs">Perturbation</TabsTrigger>
             <TabsTrigger value="diagnostics" className="text-xs">Diagnostics</TabsTrigger>
             <TabsTrigger value="fairness" className="text-xs">Fairness</TabsTrigger>
@@ -346,6 +357,19 @@ export const PredictionPanel = ({ selectedFile, selectedEmbeddingFile, model, da
                   selectedFile={selectedFile || selectedEmbeddingFile}
                   model={model}
                   dataset={originalDataset && originalDataset !== 'custom' ? originalDataset : dataset}
+                />
+              </div>
+            </TabsContent>
+          )}
+
+          {hasJacobianLens && (
+            <TabsContent value="jacobian-lens" className="m-0 h-full">
+              <div className="p-3">
+                <JacobianLensVisualization
+                  selectedFile={selectedFile || selectedEmbeddingFile}
+                  model={model}
+                  dataset={dataset}
+                  originalDataset={originalDataset}
                 />
               </div>
             </TabsContent>

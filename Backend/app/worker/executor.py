@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -358,6 +359,119 @@ def _execute_one(
     return adapter.execute(operation, str(audio_path), parameters, resource)
 
 
+def _load_torch_artifact(storage: ObjectStorage, key: str, destination: Path) -> dict[str, Any]:
+    """Load an artifact ECHO created itself; user-controlled pickle data is never read."""
+    import torch
+
+    storage.download_file(key, destination)
+    try:
+        return torch.load(destination, map_location="cpu", weights_only=True)
+    except TypeError:  # Torch before weights_only support.
+        return torch.load(destination, map_location="cpu")
+
+
+async def _execute_jacobian_lens_fit(
+    envelope: TaskEnvelope, storage: ObjectStorage, temp_root: Path
+) -> dict[str, Any]:
+    import torch
+
+    from app.repositories.jacobian_lenses import JacobianLensRepository
+    from app.schemas.jacobian_lens import JacobianLensStatus
+    from app.services.jacobian_lens_service import fit_encoder_jacobian_lens
+    from app.worker.model_adapters import get_model_adapter
+    from app.worker.model_registry import model_registry
+
+    lens_id = envelope.parameters["lens_id"]
+    repository = JacobianLensRepository()
+    record = await repository.get_owned(lens_id, envelope.session_id)
+    if not record:
+        raise ValueError("Jacobian lens record no longer exists")
+    transcripts = {sample["audio_id"]: sample["transcript"] for sample in envelope.parameters["samples"]}
+    samples = []
+    for asset in envelope.audio:
+        transcript = transcripts.get(asset.audio_id)
+        if not transcript:
+            raise ValueError(f"Missing transcript for lens sample {asset.audio_id}")
+        local_path = temp_root / f"{asset.audio_id}{Path(asset.filename).suffix}"
+        storage.download_file(asset.object_key, local_path)
+        samples.append((str(local_path), transcript))
+    adapter = get_model_adapter(envelope.model or "", envelope.model_spec)
+    resource = model_registry.prepare(adapter, "jacobian_lens_fit")
+    job_repository = JobRepository()
+    event_loop = asyncio.get_running_loop()
+
+    def on_sample(completed: int, total: int) -> None:
+        """Persist sample progress from the CPU-bound fitting thread."""
+        update = job_repository.update(
+            envelope.job_id,
+            progress=JobProgress(
+                current=completed,
+                total=total,
+                message=f"Fitting encoder Jacobian lenses ({completed}/{total})",
+            ),
+        )
+        asyncio.run_coroutine_threadsafe(update, event_loop).result()
+
+    # Fitting is CPU-bound. Keeping it in a worker thread lets the event loop
+    # publish progress after each fitted or held-out sample.
+    artifact = await asyncio.to_thread(
+        fit_encoder_jacobian_lens,
+        adapter,
+        resource,
+        samples,
+        max_audio_seconds=float(envelope.parameters["max_audio_seconds"]),
+        frame_samples=int(envelope.parameters["frame_samples"]),
+        ridge_regularization=float(envelope.parameters["ridge_regularization"]),
+        on_sample=on_sample,
+    )
+    artifact_key = f"jacobian-lenses/{envelope.session_id}/{lens_id}/lens.pt"
+    metadata_key = f"jacobian-lenses/{envelope.session_id}/{lens_id}/metadata.json"
+    artifact_path = temp_root / "lens.pt"
+    torch.save(artifact, artifact_path)
+    storage.put_file(artifact_key, artifact_path, "application/octet-stream")
+    metadata = {
+        key: value
+        for key, value in artifact.items()
+        if key not in {"weights", "source_means", "target_means"}
+    }
+    metadata.update({"lens_id": lens_id, "layer_count": len(artifact["weights"])})
+    storage.put_json(metadata_key, metadata)
+    record.status = JacobianLensStatus.READY
+    record.architecture = artifact["architecture"]
+    record.artifact_key = artifact_key
+    record.metadata_key = metadata_key
+    record.format_version = int(artifact["format_version"])
+    record.method = str(artifact["method"])
+    record.layer_count = len(artifact["weights"])
+    record.error = None
+    await repository.save(record)
+    return metadata
+
+
+async def _execute_jacobian_lens_apply(
+    envelope: TaskEnvelope, storage: ObjectStorage, audio_path: Path, temp_root: Path
+) -> dict[str, Any]:
+    from app.repositories.jacobian_lenses import JacobianLensRepository
+    from app.schemas.jacobian_lens import JacobianLensStatus
+    from app.services.jacobian_lens_service import apply_encoder_jacobian_lens
+    from app.worker.model_adapters import get_model_adapter
+    from app.worker.model_registry import model_registry
+
+    lens_id = envelope.parameters["lens_id"]
+    record = await JacobianLensRepository().get_owned(lens_id, envelope.session_id)
+    if not record or record.status != JacobianLensStatus.READY or not record.artifact_key:
+        raise ValueError("Jacobian lens is not available")
+    artifact = _load_torch_artifact(storage, record.artifact_key, temp_root / "lens.pt")
+    adapter = get_model_adapter(envelope.model or "", envelope.model_spec)
+    resource = model_registry.prepare(adapter, "jacobian_lens_apply")
+    output = apply_encoder_jacobian_lens(
+        adapter, resource, artifact, str(audio_path),
+        top_k=int(envelope.parameters["top_k"]),
+        max_frames=int(envelope.parameters["max_frames"]),
+    )
+    return {"lens_id": lens_id, **output}
+
+
 async def _execute_perturbation(
     envelope: TaskEnvelope,
     input_path: Path,
@@ -418,7 +532,7 @@ async def execute(envelope_data: dict[str, Any], celery_task_id: str) -> None:
     cache_pointer_key = f"analysis-cache:{cache_digest}"
     # Generated audio is session-owned. Reusing a cached perturbation payload
     # would leak an audio_id owned by the session that originally created it.
-    cacheable = envelope.operation.value != "perturbation"
+    cacheable = envelope.operation.value not in {"perturbation", "jacobian_lens_fit"}
     await jobs.update(
         envelope.job_id,
         status=JobStatus.started,
@@ -431,6 +545,40 @@ async def execute(envelope_data: dict[str, Any], celery_task_id: str) -> None:
     )
     try:
         await _check_cancel(envelope.job_id, jobs)
+        if envelope.operation.value == "jacobian_lens_fit":
+            await jobs.update(
+                envelope.job_id,
+                status=JobStatus.processing,
+                progress=JobProgress(
+                    current=0,
+                    total=len(envelope.audio),
+                    message="Fitting encoder Jacobian lenses",
+                ),
+            )
+            with tempfile.TemporaryDirectory(prefix=f"echo-{envelope.job_id}-") as temp_dir:
+                output = await _execute_jacobian_lens_fit(envelope, storage, Path(temp_dir))
+            result = {
+                "job_id": envelope.job_id,
+                "operation": envelope.operation.value,
+                "model": envelope.model,
+                "items": [],
+                "lens": output,
+                "metadata": {"parameters": envelope.parameters, "cache_hit": False},
+            }
+            job_result_key = f"results/{envelope.session_id}/{envelope.job_id}/result.json"
+            storage.put_json(job_result_key, result)
+            await jobs.update(
+                envelope.job_id,
+                status=JobStatus.success,
+                progress=JobProgress(
+                    current=len(envelope.audio),
+                    total=len(envelope.audio),
+                    message="Jacobian lens fitted",
+                ),
+                result_key=job_result_key,
+            )
+            await redis_module.job_redis.hincrby("metrics:jobs", "success", 1)
+            return
         cached_key = await redis_module.redis.get(cache_pointer_key) if cacheable else None
         if cached_key and storage.exists(cached_key):
             job_result_key = f"results/{envelope.session_id}/{envelope.job_id}/result.json"
@@ -478,9 +626,15 @@ async def execute(envelope_data: dict[str, Any], celery_task_id: str) -> None:
                     if output is None:
                         local_path = temp_root / f"{asset.audio_id}{Path(asset.filename).suffix}"
                         storage.download_file(asset.object_key, local_path)
-                        output = _jsonable(_execute_one(
-                            envelope.operation.value, envelope.model, local_path, envelope.parameters, envelope.model_spec
-                        ))
+                        if envelope.operation.value == "jacobian_lens_apply":
+                            output = await _execute_jacobian_lens_apply(
+                                envelope, storage, local_path, temp_root
+                            )
+                        else:
+                            output = _jsonable(_execute_one(
+                                envelope.operation.value, envelope.model, local_path,
+                                envelope.parameters, envelope.model_spec,
+                            ))
                         await _store_item_result(envelope, asset.sha256, storage, output)
                 items.append({"audio_id": asset.audio_id, "result": _jsonable(output), "cache_hit": item_cache_hit})
                 await jobs.update(
@@ -563,6 +717,16 @@ async def execute(envelope_data: dict[str, Any], celery_task_id: str) -> None:
         )
         raise
     except Exception as exc:
+        if envelope.operation.value == "jacobian_lens_fit":
+            from app.repositories.jacobian_lenses import JacobianLensRepository
+            from app.schemas.jacobian_lens import JacobianLensStatus
+
+            repository = JacobianLensRepository()
+            lens = await repository.get_owned(envelope.parameters.get("lens_id", ""), envelope.session_id)
+            if lens:
+                lens.status = JacobianLensStatus.FAILED
+                lens.error = str(exc)[:500]
+                await repository.save(lens)
         await jobs.update(
             envelope.job_id,
             status=JobStatus.failure,

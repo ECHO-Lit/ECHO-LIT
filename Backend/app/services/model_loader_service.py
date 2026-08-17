@@ -1015,6 +1015,15 @@ def get_whisper_gen_model(model_id: str):
     return model
 
 
+def get_whisper_jacobian_lens_models(model_id: str):
+    """Return the complete ASR model and processor for adapter-native J-lenses.
+
+    The lens must see both the encoder and decoder output projection, unlike
+    embedding extraction which only needs ``WhisperModel.encoder``.
+    """
+    return WhisperProcessor.from_pretrained(model_id), get_whisper_gen_model(model_id)
+
+
 def get_whisper_attention_models(model_id: str):
     """Return a cached eager-attention Whisper generation variant."""
     global _whisper_attention_processor_base, _whisper_attention_model_base

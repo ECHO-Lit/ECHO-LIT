@@ -1,5 +1,7 @@
 import json
 import logging
+import csv
+import io
 from pathlib import Path
 from typing import Dict, List, Optional
 from datetime import datetime
@@ -10,6 +12,8 @@ logger = logging.getLogger(__name__)
 
 # Base directory for session-based custom datasets
 SESSIONS_BASE_DIR = Path("uploads/sessions")
+MANIFEST_FILENAME_FIELDS = ("filename", "file", "filepath", "path")
+MANIFEST_TRANSCRIPT_FIELDS = ("transcript", "sentence", "text", "statement")
 
 class CustomDatasetManager:
     """Manages session-based custom datasets"""
@@ -94,6 +98,11 @@ class CustomDatasetManager:
         
         metadata["files"].append(file_metadata)
         metadata["total_files"] = len(metadata["files"])
+        if metadata.get("manifest") and metadata.get("transcripts"):
+            stored_files = {item["filename"] for item in metadata["files"]}
+            unmatched = sorted(name for name in metadata["transcripts"] if name not in stored_files)
+            metadata["manifest"]["matched_audio_count"] = len(metadata["transcripts"]) - len(unmatched)
+            metadata["manifest"]["unmatched_filenames"] = unmatched[:20]
         
         # Save updated metadata
         with metadata_file.open("w") as f:
@@ -101,6 +110,80 @@ class CustomDatasetManager:
         
         logger.info(f"Added file '{filename}' to dataset '{dataset_name}' in session {self.session_id}")
         return file_metadata
+
+    def add_manifest_to_dataset(self, dataset_name: str, filename: str, manifest_data: bytes) -> Dict:
+        """Attach a CSV manifest with filename-to-reference-transcript pairs.
+
+        The mapping is retained even when audio is uploaded later, so users may
+        upload either the audio batch or the manifest first.  The J-Lens
+        metadata view only exposes pairs whose audio is currently present.
+        """
+        dataset_dir = self.datasets_dir / dataset_name
+        metadata_file = dataset_dir / "dataset_metadata.json"
+        if not dataset_dir.exists() or not metadata_file.exists():
+            raise ValueError(f"Dataset '{dataset_name}' does not exist")
+        if Path(filename).suffix.lower() != ".csv":
+            raise ValueError("Dataset manifest must be a .csv file")
+        if len(manifest_data) > 10 * 1024 * 1024:
+            raise ValueError("Dataset manifest must be 10 MB or smaller")
+        try:
+            content = manifest_data.decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise ValueError("Dataset manifest must be UTF-8 encoded") from exc
+
+        reader = csv.DictReader(io.StringIO(content))
+        if not reader.fieldnames:
+            raise ValueError("Dataset manifest must include a header row")
+        field_map = {field.strip().lower(): field for field in reader.fieldnames if field}
+        filename_field = next((field_map[key] for key in MANIFEST_FILENAME_FIELDS if key in field_map), None)
+        transcript_field = next((field_map[key] for key in MANIFEST_TRANSCRIPT_FIELDS if key in field_map), None)
+        if not filename_field or not transcript_field:
+            raise ValueError(
+                "Dataset manifest needs a filename column (filename, file, filepath, or path) "
+                "and a transcript column (transcript, sentence, text, or statement)"
+            )
+
+        transcripts: Dict[str, str] = {}
+        blank_rows = 0
+        for row in reader:
+            raw_filename = str(row.get(filename_field) or "").strip()
+            transcript = str(row.get(transcript_field) or "").strip()
+            if not raw_filename or not transcript:
+                blank_rows += 1
+                continue
+            stored_name = Path(raw_filename.replace("\\", "/")).name
+            if stored_name in transcripts:
+                raise ValueError(f"Dataset manifest contains duplicate filename: {stored_name}")
+            transcripts[stored_name] = transcript
+        if not transcripts:
+            raise ValueError("Dataset manifest contains no filename/transcript pairs")
+
+        with metadata_file.open("r", encoding="utf-8") as handle:
+            metadata = json.load(handle)
+        stored_files = {file_info["filename"] for file_info in metadata.get("files", [])}
+        matched = sum(name in stored_files for name in transcripts)
+        unmatched = sorted(name for name in transcripts if name not in stored_files)
+        metadata["transcripts"] = transcripts
+        metadata["manifest"] = {
+            "filename": Path(filename).name,
+            "uploaded_at": datetime.utcnow().isoformat(),
+            "filename_field": filename_field,
+            "transcript_field": transcript_field,
+            "pair_count": len(transcripts),
+            "matched_audio_count": matched,
+            "unmatched_filenames": unmatched[:20],
+        }
+        with metadata_file.open("w", encoding="utf-8") as handle:
+            json.dump(metadata, handle, indent=2)
+        return {
+            "filename": Path(filename).name,
+            "pair_count": len(transcripts),
+            "matched_audio_count": matched,
+            "unmatched_audio_count": len(unmatched),
+            "blank_row_count": blank_rows,
+            "filename_field": filename_field,
+            "transcript_field": transcript_field,
+        }
     
     def list_datasets(self) -> List[Dict]:
         """List all custom datasets in the session"""
@@ -170,13 +253,15 @@ class CustomDatasetManager:
             return []
         
         csv_format_files = []
+        transcripts = metadata.get("transcripts", {})
         for file_info in metadata["files"]:
             csv_format_files.append({
                 "filename": file_info["filename"],
                 "duration": str(file_info["duration"]),
                 "sample_rate": str(file_info.get("sample_rate", 0)),
                 "size": str(file_info["size"]),
-                "uploaded_at": file_info["uploaded_at"]
+                "uploaded_at": file_info["uploaded_at"],
+                "transcript": transcripts.get(file_info["filename"], ""),
             })
         
         return csv_format_files

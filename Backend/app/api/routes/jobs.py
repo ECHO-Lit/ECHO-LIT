@@ -7,12 +7,14 @@ import uuid
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from app.core.celery_app import celery_app, queue_for
-from app.core.model_catalog import custom_model_capabilities
+from app.core.model_catalog import MODEL_REVISIONS, custom_model_capabilities
 from app.core.settings import settings
 from app.core.storage import get_storage
 from app.repositories.audio import AudioRepository
 from app.repositories.jobs import JobRepository, TERMINAL_STATES
 from app.repositories.models import CustomModelRepository
+from app.repositories.jacobian_lenses import JacobianLensRepository
+from app.schemas.jacobian_lens import JacobianLensRecord, JacobianLensStatus
 from app.schemas.models import CustomModelStatus
 from app.schemas.jobs import (
     JobCreateRequest,
@@ -79,6 +81,32 @@ async def create_job(payload: JobCreateRequest, request: Request):
 
     now = datetime.now(timezone.utc)
     job_id = uuid.uuid4().hex
+    lens_repository = JacobianLensRepository()
+    if payload.operation.value == "jacobian_lens_fit":
+        lens_id = f"jlens-{uuid.uuid4().hex}"
+        revision = (
+            model_spec.revision or model_spec.hf_repo
+            if model_spec else MODEL_REVISIONS.get(payload.model or "", "")
+        )
+        await lens_repository.create(JacobianLensRecord(
+            lens_id=lens_id,
+            session_id=request.state.sid,
+            model_id=payload.model or "",
+            model_revision=revision,
+            fit_job_id=job_id,
+            created_at=now,
+            updated_at=now,
+            sample_count=len(payload.parameters["samples"]),
+        ))
+        payload.parameters = {**payload.parameters, "lens_id": lens_id}
+    elif payload.operation.value == "jacobian_lens_apply":
+        lens = await lens_repository.get_owned(payload.parameters["lens_id"], request.state.sid)
+        if not lens:
+            raise HTTPException(status_code=404, detail="Jacobian lens not found")
+        if lens.status != JacobianLensStatus.READY:
+            raise HTTPException(status_code=409, detail=f"Jacobian lens is {lens.status.value}")
+        if lens.model_id != payload.model:
+            raise HTTPException(status_code=400, detail="Jacobian lens belongs to a different model")
     record = JobRecord(
         job_id=job_id,
         session_id=request.state.sid,
@@ -116,13 +144,17 @@ async def create_job(payload: JobCreateRequest, request: Request):
     try:
         task_name = (
             "app.worker.tasks.orchestrate_batch"
-            if len(assets) > 1
+            if len(assets) > 1 and payload.operation.value != "jacobian_lens_fit"
             else "app.worker.tasks.execute_job"
         )
         task = celery_app.send_task(
             task_name,
             args=[envelope.model_dump(mode="json")],
-            queue="cpu" if len(assets) > 1 else queue_for(payload.operation.value, payload.model),
+            queue=(
+                queue_for(payload.operation.value, payload.model)
+                if payload.operation.value == "jacobian_lens_fit"
+                else "cpu" if len(assets) > 1 else queue_for(payload.operation.value, payload.model)
+            ),
         )
         await jobs.update(job_id, task_id=task.id)
     except Exception as exc:
@@ -131,6 +163,12 @@ async def create_job(payload: JobCreateRequest, request: Request):
             status=JobStatus.failure,
             error=JobError(code="broker_unavailable", message="Job broker is unavailable", retryable=True),
         )
+        if payload.operation.value == "jacobian_lens_fit":
+            lens = await lens_repository.get_owned(payload.parameters["lens_id"], request.state.sid)
+            if lens:
+                lens.status = JacobianLensStatus.FAILED
+                lens.error = "Lens-fitting worker is unavailable"
+                await lens_repository.save(lens)
         raise HTTPException(status_code=503, detail="Job broker is unavailable") from exc
     return JobCreateResponse(
         job_id=job_id,
