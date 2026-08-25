@@ -36,7 +36,7 @@ celery_app.conf.update(
 def queue_for(operation: str, model: str | None) -> str:
     if operation in {"perturbation", "audio_features"}:
         return "cpu"
-    if operation in {"saliency", "attention"} or model == "whisper-large":
+    if operation in {"saliency", "attention", "jacobian_lens_fit", "jacobian_lens_apply"} or model == "whisper-large":
         return "gpu-large"
     # `hidden_states` and `layer_probe` are encoder forward passes, the same
     # shape of work as `embedding`, so they share its routing.

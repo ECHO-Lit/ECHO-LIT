@@ -14,6 +14,27 @@ export interface CustomModel {
   created_at: string;
 }
 
+export interface JacobianLens {
+  lens_id: string;
+  model_id: string;
+  model_revision: string;
+  architecture?: 'seq2seq' | 'ctc';
+  status: 'fitting' | 'ready' | 'failed';
+  format_version?: number | null;
+  method?: string | null;
+  layer_count?: number;
+  error?: string;
+  sample_count: number;
+}
+
+export async function listJacobianLenses(modelId: string): Promise<JacobianLens[]> {
+  const response = await fetch(`${API_BASE}/models/jacobian-lenses/${encodeURIComponent(modelId)}`, {
+    credentials: 'include',
+  });
+  if (!response.ok) throw new Error(`Could not load Jacobian lenses (${response.status})`);
+  return response.json();
+}
+
 async function errorFor(response: Response): Promise<Error> {
   try {
     const body = await response.json();

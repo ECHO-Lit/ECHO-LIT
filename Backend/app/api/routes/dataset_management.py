@@ -144,6 +144,34 @@ async def upload_files_to_dataset(
         raise HTTPException(status_code=500, detail=f"Failed to upload files: {str(e)}")
 
 
+@router.post("/dataset/{dataset_name}/manifest")
+async def upload_dataset_manifest(
+    request: Request,
+    dataset_name: str,
+    manifest: UploadFile = File(..., description="CSV mapping audio filenames to reference transcripts"),
+):
+    """Attach a generic CSV manifest so this custom dataset can train J-Lens."""
+    session_id = get_session_id(request)
+    try:
+        details = get_custom_dataset_manager(session_id).add_manifest_to_dataset(
+            dataset_name,
+            manifest.filename or "metadata.csv",
+            await manifest.read(),
+        )
+        return JSONResponse(content={
+            "message": "Dataset manifest uploaded",
+            "dataset_name": format_custom_dataset_name(session_id, dataset_name),
+            "manifest": details,
+        })
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error uploading manifest for dataset {dataset_name}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload dataset manifest: {str(e)}")
+    finally:
+        await manifest.close()
+
+
 @router.get("/dataset/label-patterns")
 async def list_label_patterns():
     """Filename patterns that can supply labels without a CSV.

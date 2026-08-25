@@ -7,6 +7,8 @@ export type JobOperation =
   | 'embedding'
   | 'perturbation'
   | 'audio_features'
+  | 'jacobian_lens_fit'
+  | 'jacobian_lens_apply'
   | 'hidden_states'
   | 'layer_probe';
 
