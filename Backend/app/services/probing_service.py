@@ -336,7 +336,6 @@ def train_layer_probes(
         seed: Seeds the projection, the fold assignment and the control shuffle.
         layer_names: Display names from the extraction payload. Defaults to
             ``input, layer_1, ...`` when probing synthetic activations.
-
     Returns:
         A dict matching the frontend `LayerProbeResult` contract.
     """
