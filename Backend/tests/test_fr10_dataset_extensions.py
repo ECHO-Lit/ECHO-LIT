@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from app.services import dataset_service, l2_arctic_annotations as l2, saa_reference_analysis as saa
+from app.services.fairness_service import build_index
 
 
 @pytest.fixture(scope="module")
@@ -110,3 +111,119 @@ def test_l2_arctic_bundled_subset_is_one_speaker_per_language(l2_rows):
     for row in l2_rows:
         by_language.setdefault(row["native_language"], set()).add(row["speaker_code"])
     assert all(len(speakers) == 1 for speakers in by_language.values())
+
+
+# ---------------------------------------------------------------------------
+# Phone confusion matrix (FR-10 S6.2 extension)
+# ---------------------------------------------------------------------------
+
+def _all_l2_entries(l2_rows):
+    """One entry per row, grouped by native_language -- mirrors what
+    _build_dataset_extensions passes in (filename + group label per indexed
+    item), covering every row so counts describe the whole corpus."""
+    return [{"filename": row["filename"], "group_label": row["native_language"]} for row in l2_rows]
+
+
+def test_phone_confusion_matrix_dedups_the_sampling_stratum(l2_rows):
+    """sub_/add_/del_ filename prefixes are a balanced sampling stratum over
+    the SAME underlying recordings (sub_0_ABA.wav and add_0_ABA.wav are
+    byte-identical audio) -- annotation rows must be deduped on
+    (speaker, utt_id, xmin, xmax, canonical, perceived, error_type), not
+    counted once per filename, or the interval count is inflated ~65%."""
+    result = l2.phone_confusion_matrix(_all_l2_entries(l2_rows))
+    assert result["status"] == "ok"
+    assert result["n_intervals"] == 539
+    assert result["n_intervals_raw"] == 891
+
+
+def test_phone_confusion_matrix_per_group_totals(l2_rows):
+    result = l2.phone_confusion_matrix(_all_l2_entries(l2_rows))
+    totals = {}
+    for cell in result["cells"]:
+        totals[cell["group"]] = totals.get(cell["group"], 0) + cell["n"]
+    assert totals == {"Arabic": 115, "Spanish": 184, "Chinese": 240}
+
+
+def test_phone_confusion_matrix_stress_stripping_changes_shared_pair_count(l2_rows):
+    stripped = l2.phone_confusion_matrix(_all_l2_entries(l2_rows), strip_stress=True)
+    raw = l2.phone_confusion_matrix(_all_l2_entries(l2_rows), strip_stress=False)
+    n3_stripped = sum(1 for p in stripped["shared_pairs"] if p["n_groups"] == 3)
+    n3_raw = sum(1 for p in raw["shared_pairs"] if p["n_groups"] == 3)
+    assert n3_stripped == 5
+    assert n3_raw == 4
+
+
+def test_phone_confusion_matrix_z_to_s_is_the_dominant_shared_pair(l2_rows):
+    result = l2.phone_confusion_matrix(_all_l2_entries(l2_rows))
+    all_three = [p for p in result["shared_pairs"] if p["n_groups"] == 3]
+    assert all_three, "at least one pair must occur in all three L1 groups"
+    top = max(all_three, key=lambda p: sum(p["n_by_group"].values()))
+    assert (top["canonical"], top["perceived"]) == ("Z", "S")
+    assert sum(top["n_by_group"].values()) == 65
+
+
+def test_phone_confusion_matrix_saliency_weighting_flows_through(l2_rows):
+    """A synthetic saliency_by_interval keyed by interval_key must land on
+    the matching cell's mean_saliency_ratio -- the join key connecting
+    interval_saliency() records (built per explain-sample item) to
+    phone_confusion_matrix() cells (built per corpus item)."""
+    entries = _all_l2_entries(l2_rows)
+    baseline = l2.phone_confusion_matrix(entries)
+    some_cell = next(c for c in baseline["cells"] if c["n"] >= 1)
+    # Recover an interval_key landing in this exact cell by re-reading the
+    # annotations for one filename in this group.
+    row = next(r for r in l2_rows if r["native_language"] == some_cell["group"])
+    intervals = l2.annotations_for(row["filename"])
+    target = next(
+        (iv for iv in intervals
+         if l2.normalize_phone(iv["canonical_phone"]) == some_cell["canonical"]
+         and l2.normalize_phone(iv["perceived_phone"]) == some_cell["perceived"]),
+        None,
+    )
+    if target is None:
+        pytest.skip("no interval in the fixture row lands in the sampled cell")
+    weighted = l2.phone_confusion_matrix(entries, saliency_by_interval={target["interval_key"]: [2.5, 3.5]})
+    cell = next(
+        c for c in weighted["cells"]
+        if c["group"] == some_cell["group"] and c["canonical"] == some_cell["canonical"]
+        and c["perceived"] == some_cell["perceived"]
+    )
+    assert cell["n_saliency"] >= 1
+    assert cell["mean_saliency_ratio"] is not None
+
+
+def test_interval_saliency_ratio_discriminates_peaked_vs_flat(l2_rows):
+    row = next(r for r in l2_rows if r["error_type"] == "substitution")
+    intervals = l2.annotations_for(row["filename"])
+    assert intervals
+
+    duration = max(iv["xmax"] for iv in intervals) + 0.5
+    n_frames = 200
+    dt = duration / n_frames
+    series = np.full(n_frames, 0.1)
+    for interval in intervals:
+        lo = int(interval["xmin"] / dt)
+        hi = max(lo + 1, int(np.ceil(interval["xmax"] / dt)))
+        series[lo:hi] = 5.0
+    speech_mask = np.ones(n_frames, dtype=bool)
+
+    peaked = l2.interval_saliency(series.tolist(), duration, intervals, speech_mask)
+    flat = l2.interval_saliency(np.full(n_frames, 0.1).tolist(), duration, intervals, speech_mask)
+
+    assert all(r["saliency_ratio"] is not None and r["saliency_ratio"] > 1 for r in peaked)
+    assert all(r["saliency_ratio"] is not None and abs(r["saliency_ratio"] - 1) < 1e-6 for r in flat)
+
+
+def test_accentedness_survives_build_index_covariates():
+    """Regression test for the covariate-stripping bug: g2p_canonical used to
+    be stripped from item.covariates by _RESERVED_COLUMNS (it was only in
+    _NON_GROUPABLE, meant to block it as a grouping KEY, not as covariate
+    data), which silently zeroed accentedness() for every real request and
+    made equal_accentedness_regression always report insufficient_data. This
+    must go through build_index()'s actual covariate construction, not a raw
+    metadata row, or it passes for the wrong reason."""
+    index = build_index("l2-arctic", ["native_language"], None, task="transcription", min_group_size=1,
+                         min_speakers_per_group=1)
+    item = next(item for group in index.groups for item in group.items)
+    assert item.covariates.get("g2p_canonical"), "g2p_canonical must survive the covariate filter"
+    assert l2.accentedness(item.covariates) is not None

@@ -22,6 +22,7 @@ import { GroupErrorBarChart } from "./GroupErrorBarChart";
 import { DisparityRadar } from "./DisparityRadar";
 import { RepresentationGroundingCard } from "./RepresentationGroundingCard";
 import { FairnessVerdictList } from "./FairnessVerdictList";
+import { PhoneConfusionMatrix } from "./PhoneConfusionMatrix";
 
 interface FairnessPanelProps {
   model?: string;
@@ -313,6 +314,11 @@ export function FairnessPanel({ model, dataset, originalDataset }: FairnessPanel
                     <pre className="whitespace-pre-wrap text-[11px] bg-muted/40 rounded p-2 overflow-auto max-h-40">
                       {JSON.stringify(job.result.dataset_extensions.age_onset_dose_response, null, 2)}
                     </pre>
+                  )}
+                  {job.result.dataset_extensions.phone_confusion_matrix && (
+                    <div className="pt-2">
+                      <PhoneConfusionMatrix matrix={job.result.dataset_extensions.phone_confusion_matrix} />
+                    </div>
                   )}
                 </CardContent>
               </Card>

@@ -29,4 +29,8 @@ export const FR10_GLOSSARY = {
     "'Disparity detected' requires both statistical significance (after correction) and a practically meaningful gap size. 'Inconclusive' means either too few speakers to attribute an effect to the group, or too little data to rule out a real gap. 'No evidence of disparity' is not the same as 'proven fair'.",
   speakerConfounded:
     "This group has fewer speakers than the minimum — any performance or grounding difference could be a property of these specific speakers' voices rather than the group label.",
+  confusionPair:
+    "A canonical phone (what should have been said) mapped to a perceived phone (what a human annotator heard instead), both from L2-ARCTIC's bundled annotations — there is no model-side phone recognizer in this system, so this is a corpus property, not a model output.",
+  saliencyRatio:
+    "Bottom line: does the model actually \"notice\" pronunciation errors, and does it notice them equally well across accents? Mean model saliency inside an annotated phone-error interval, relative to the mean over the rest of the speech — 1.0 means the model attends to this interval no more than average; higher means the model's attribution concentrates there.",
 };

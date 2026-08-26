@@ -163,12 +163,51 @@ export interface FairnessRepresentation {
   };
 }
 
+export interface PhoneConfusionCell {
+  canonical: string;
+  perceived: string;
+  group: string;
+  error_type: string;
+  n: number;
+  mean_saliency_ratio: number | null;
+  n_saliency: number;
+}
+
+export interface PhoneConfusionSharedPair {
+  canonical: string;
+  perceived: string;
+  n_groups: number;
+  n_by_group: Record<string, number>;
+  mean_saliency_ratio_by_group: Record<string, number | null>;
+}
+
+export interface PhoneClassAttribution {
+  mean_saliency_ratio: number | null;
+  n: number;
+  n_saliency: number;
+}
+
+export interface PhoneConfusionMatrix {
+  status: 'ok' | 'unavailable';
+  strip_stress?: boolean;
+  n_intervals?: number;
+  n_intervals_raw?: number;
+  groups?: string[];
+  cells?: PhoneConfusionCell[];
+  canonical_marginals?: Record<string, Record<string, number>>;
+  perceived_marginals?: Record<string, Record<string, number>>;
+  shared_pairs?: PhoneConfusionSharedPair[];
+  attribution_by_phone_class?: Record<string, Record<string, PhoneClassAttribution>>;
+  caveat?: string;
+}
+
 export interface FairnessDatasetExtensions {
   kind: 'l2_arctic' | 'saa';
   // l2_arctic
   phone_error_grounding_by_error_type?: Record<string, { n: number; mean_auroc: number; mean_auroc_within_speech: number | null }>;
   h1_substitution_gt_addition_gt_deletion?: boolean | null;
   equal_accentedness_regression?: Record<string, unknown>;
+  phone_confusion_matrix?: PhoneConfusionMatrix;
   caveat?: string;
   // saa
   reference_position_heatmap?: { words: string[]; error_rate_by_group: Record<string, number[]> } | null;

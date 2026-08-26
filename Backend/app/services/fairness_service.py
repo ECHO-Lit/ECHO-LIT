@@ -105,7 +105,13 @@ _LABEL_COLUMNS = ("emotion", "label", "class", "category")
 # bundled subset writes literal "unknown" for 67/100 accent/gender rows.
 _MISSING = {"", "unknown", "n/a", "na", "none", "null", "-"}
 
-_RESERVED_COLUMNS = _NON_GROUPABLE | set(_SPEAKER_COLUMNS) | set(_LABEL_COLUMNS)
+# Columns that are non-groupable but still needed by downstream
+# dataset-specific analyses (l2_arctic_annotations.accentedness() reads
+# g2p_canonical), so they must NOT be stripped from item.covariates even
+# though they can never be offered as a grouping key.
+_ANALYSIS_COLUMNS = {"g2p_canonical", "ipa_perceived"}
+
+_RESERVED_COLUMNS = (_NON_GROUPABLE - _ANALYSIS_COLUMNS) | set(_SPEAKER_COLUMNS) | set(_LABEL_COLUMNS)
 
 # Below this Jaccard overlap (and per-group coverage), two groups' content
 # sets are treated as unrelated even if a handful of ids coincide by chance.
@@ -604,6 +610,11 @@ def fairness_cache_key(envelope: TaskEnvelope) -> str:
         "seed": params.get("seed"), "n_bootstrap": params.get("n_bootstrap"),
         "thresholds": params.get("thresholds"),
         "schema": envelope.result_schema_version, "code": envelope.code_version,
+        # Bump when dataset_extensions' shape changes (fairness_cache_key
+        # cannot rely on code_version -- that's a static "development"
+        # literal in settings, so bumping it would invalidate every cached
+        # fairness result, not just this shape change).
+        "fr10_ext": 2,
     }
     canonical = json.dumps(material, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()
@@ -919,6 +930,9 @@ async def explain_shard(envelope_data: dict[str, Any], shard_data: dict[str, Any
                     record["l2_phone_grounding"] = l2_arctic_annotations.phone_error_grounding(
                         series, total_duration, intervals, speech_mask,
                     )
+                    record["l2_interval_saliency"] = l2_arctic_annotations.interval_saliency(
+                        series, total_duration, intervals, speech_mask,
+                    )
             records.append(_jsonable(record))
         except Exception as exc:  # noqa: BLE001 -- per-item failure must not fail the shard
             n_failed += 1
@@ -1013,11 +1027,29 @@ def _build_dataset_extensions(
             if len(wer_values) >= 5 else {"status": "insufficient_data", "n": len(wer_values)}
         )
 
+        # Confusion matrix covers every INDEXED item (not just the explain
+        # sample) so its counts describe the corpus the WER was computed
+        # over; the saliency weighting on top is necessarily thinner since
+        # it only has data for items in the explain sample.
+        entries = [
+            {"filename": item.filename, "group_label": group.label}
+            for group in index.groups for item in group.items
+        ]
+        saliency_by_interval: dict[str, list[float]] = defaultdict(list)
+        for records in grounding_by_group.values():
+            for record in records:
+                for entry in record.get("l2_interval_saliency", []):
+                    key = entry.get("interval_key")
+                    if key and entry.get("saliency_ratio") is not None:
+                        saliency_by_interval[key].append(entry["saliency_ratio"])
+        confusion_matrix = l2_arctic_annotations.phone_confusion_matrix(entries, saliency_by_interval)
+
         return {
             "kind": "l2_arctic",
             "phone_error_grounding_by_error_type": error_type_summary,
             "h1_substitution_gt_addition_gt_deletion": h1_sub_gt_add_gt_del,
             "equal_accentedness_regression": regression,
+            "phone_confusion_matrix": confusion_matrix,
             "caveat": (
                 "This bundled subset has exactly 1 speaker per native_language; "
                 "`group_intercepts` in the regression are descriptive only and are NOT "
