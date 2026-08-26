@@ -40,6 +40,7 @@ export function FairnessPanel({ model, dataset, originalDataset }: FairnessPanel
   const effectiveDataset = originalDataset && originalDataset !== "custom" ? originalDataset : dataset;
 
   const [groupingColumn, setGroupingColumn] = useState<string>("");
+  const [referenceGroup, setReferenceGroup] = useState<string>("");
   const [minGroupSize, setMinGroupSize] = useState(8);
   const [minSpeakers, setMinSpeakers] = useState(2);
   const [includeRepresentation, setIncludeRepresentation] = useState(true);
@@ -54,6 +55,11 @@ export function FairnessPanel({ model, dataset, originalDataset }: FairnessPanel
   });
 
   const groupableColumns = columnsQuery.data?.columns.filter((c) => !c.is_stratum_only) ?? [];
+  const referenceGroupOptions = useMemo(() => {
+    const column = groupableColumns.find((c) => c.column === groupingColumn);
+    if (!column) return [];
+    return Object.entries(column.counts).sort((a, b) => b[1] - a[1]);
+  }, [groupableColumns, groupingColumn]);
 
   useEffect(() => {
     setGroupingColumn("");
@@ -65,12 +71,20 @@ export function FairnessPanel({ model, dataset, originalDataset }: FairnessPanel
     }
   }, [groupableColumns, groupingColumn]);
 
+  // Picking a new grouping column invalidates whatever reference value was
+  // chosen for the previous one -- go back to "auto" rather than silently
+  // submitting a value that belongs to a different column.
+  useEffect(() => {
+    setReferenceGroup("");
+  }, [groupingColumn]);
+
   const job = useAnalysisJob<FairnessReport, void>(async () => {
     if (!effectiveDataset) throw new Error("Select a dataset first");
     if (!model) throw new Error("Select a model first");
     if (!groupingColumn) throw new Error("Select a column to group by");
     const body: FairnessRequest = {
       dataset: effectiveDataset, grouping_key: [groupingColumn], model, task: "auto",
+      reference_group: referenceGroup || undefined,
       min_group_size: minGroupSize, min_speakers_per_group: minSpeakers,
       include_representation: includeRepresentation, include_explanations: includeExplanations,
       metrics: [...ASR_METRICS, ...CLASSIFICATION_METRICS, "grounding_lift", "attribution_entropy"],
@@ -146,6 +160,30 @@ export function FairnessPanel({ model, dataset, originalDataset }: FairnessPanel
                 No usable grouping column found in {columnsQuery.data.n_rows} rows of this dataset.
               </p>
             )}
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-xs flex items-center gap-1">
+              Reference group
+              <InfoTooltip text={FR10_GLOSSARY.referenceGroup} />
+            </Label>
+            <Select
+              value={referenceGroup || "__auto__"}
+              onValueChange={(v) => setReferenceGroup(v === "__auto__" ? "" : v)}
+              disabled={job.isRunning || !groupingColumn}
+            >
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue placeholder="Auto (largest group)" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__auto__" className="text-xs">Auto (largest surviving group)</SelectItem>
+                {referenceGroupOptions.map(([value, count]) => (
+                  <SelectItem key={value} value={value} className="text-xs">
+                    {value} ({count})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
