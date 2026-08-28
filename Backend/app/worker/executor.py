@@ -432,9 +432,11 @@ async def _execute_jacobian_lens_fit(
     metadata = {
         key: value
         for key, value in artifact.items()
-        if key not in {"weights", "source_means", "target_means"}
+        if key not in {"weights", "source_means", "target_means", "token_prior_log_probs"}
     }
-    metadata.update({"lens_id": lens_id, "layer_count": len(artifact["weights"])})
+    metadata.update({"lens_id": lens_id, "layer_count": len(artifact["weights"]),
+        "has_prior_correction": "token_prior_log_probs" in artifact,
+    })
     storage.put_json(metadata_key, metadata)
     record.status = JacobianLensStatus.READY
     record.architecture = artifact["architecture"]
