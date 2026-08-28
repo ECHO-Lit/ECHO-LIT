@@ -82,12 +82,13 @@ services:
       - ./Backend/data:/app/data:ro
       - ./Backend/uploads:/app/uploads
       - ./Backend/shared-storage:/app/shared-storage
+      - ./scripts/init-custom-datasets.sh:/app/init-custom-datasets.sh:ro
     ports:
       - "8000:8000"
     depends_on:
       redis:
         condition: service_healthy
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/app"]
+    command: ["sh", "-c", "sh /app/init-custom-datasets.sh && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/app"]
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
       interval: 15s

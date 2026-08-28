@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 # Base directory for session-based custom datasets
 SESSIONS_BASE_DIR = Path("uploads/sessions")
+GLOBAL_DATASETS_DIR = Path("uploads/sessions/_global_datasets")
 MANIFEST_FILENAME_FIELDS = ("filename", "file", "filepath", "path")
 MANIFEST_TRANSCRIPT_FIELDS = ("transcript", "sentence", "text", "statement")
 
@@ -186,10 +187,10 @@ class CustomDatasetManager:
         }
     
     def list_datasets(self) -> List[Dict]:
-        """List all custom datasets in the session"""
+        """List all custom datasets in the session."""
         if not self.datasets_dir.exists():
             return []
-        
+
         datasets = []
         for dataset_dir in self.datasets_dir.iterdir():
             if dataset_dir.is_dir():
@@ -201,8 +202,52 @@ class CustomDatasetManager:
                             datasets.append(metadata)
                     except Exception as e:
                         logger.warning(f"Could not read metadata for dataset {dataset_dir.name}: {e}")
-        
+
         return datasets
+
+    def list_global_datasets(self) -> List[Dict]:
+        """List globally-shared custom datasets (visible to every session).
+
+        These are provisioned by the startup script into
+        ``uploads/sessions/_global_datasets`` and are read-only.
+        """
+        if not GLOBAL_DATASETS_DIR.exists():
+            return []
+
+        datasets = []
+        for dataset_dir in GLOBAL_DATASETS_DIR.iterdir():
+            if dataset_dir.is_dir():
+                metadata_file = dataset_dir / "dataset_metadata.json"
+                if metadata_file.exists():
+                    try:
+                        with metadata_file.open("r") as f:
+                            metadata = json.load(f)
+                            metadata["session_id"] = "__global__"
+                            metadata["_global"] = True
+                            datasets.append(metadata)
+                    except Exception as e:
+                        logger.warning(f"Could not read global dataset metadata {dataset_dir.name}: {e}")
+        return datasets
+
+    def resolve_global_file(self, dataset_name: str, filename: str) -> Path:
+        """Resolve an audio file inside a global dataset."""
+        dataset_dir = GLOBAL_DATASETS_DIR / dataset_name
+        file_path = dataset_dir / filename
+        if not file_path.exists():
+            raise FileNotFoundError(f"File '{filename}' not found in global dataset '{dataset_name}'")
+        return file_path
+
+    def get_global_dataset_metadata(self, dataset_name: str) -> Optional[Dict]:
+        dataset_dir = GLOBAL_DATASETS_DIR / dataset_name
+        metadata_file = dataset_dir / "dataset_metadata.json"
+        if not metadata_file.exists():
+            return None
+        try:
+            with metadata_file.open("r") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Could not read global dataset metadata {dataset_name}: {e}")
+            return None
     
     def get_dataset_metadata(self, dataset_name: str) -> Optional[Dict]:
         """Get metadata for a specific dataset"""
@@ -264,6 +309,24 @@ class CustomDatasetManager:
                 "transcript": transcripts.get(file_info["filename"], ""),
             })
         
+        return csv_format_files
+
+    def get_global_dataset_files_as_csv_format(self, dataset_name: str) -> List[Dict[str, str]]:
+        """Get global dataset files in CSV format."""
+        metadata = self.get_global_dataset_metadata(dataset_name)
+        if not metadata:
+            return []
+        csv_format_files = []
+        transcripts = metadata.get("transcripts", {})
+        for file_info in metadata["files"]:
+            csv_format_files.append({
+                "filename": file_info["filename"],
+                "duration": str(file_info["duration"]),
+                "sample_rate": str(file_info.get("sample_rate", 0)),
+                "size": str(file_info["size"]),
+                "uploaded_at": file_info["uploaded_at"],
+                "transcript": transcripts.get(file_info["filename"], ""),
+            })
         return csv_format_files
 
 

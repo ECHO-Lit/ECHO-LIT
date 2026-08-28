@@ -164,7 +164,7 @@ async def upload_dataset_manifest(
 
 @router.get("/dataset/list")
 async def list_custom_datasets(request: Request):
-    """List all custom datasets in the current session"""
+    """List all custom datasets in the current session plus shared global datasets"""
     session_id = get_session_id(request)
     
     try:
@@ -178,12 +178,19 @@ async def list_custom_datasets(request: Request):
                 dataset["dataset_name"]
             )
         
+        # Include globally-shared datasets (provisioned at startup)
+        global_datasets = manager.list_global_datasets()
+        for dataset in global_datasets:
+            dataset["formatted_name"] = f"custom:__global__:{dataset['dataset_name']}"
+        
+        all_datasets = datasets + global_datasets
+        
         return JSONResponse(
             status_code=200,
             content={
                 "session_id": session_id,
-                "datasets": datasets,
-                "total_datasets": len(datasets)
+                "datasets": all_datasets,
+                "total_datasets": len(all_datasets)
             }
         )
         

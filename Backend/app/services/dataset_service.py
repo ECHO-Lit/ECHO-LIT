@@ -63,6 +63,9 @@ def load_metadata(dataset: str, session_id: Optional[str] = None) -> List[Dict[s
         
         session_id_from_name, dataset_name = parse_custom_dataset_name(dataset)
         logger.info(f"Custom dataset metadata: session_id_from_name='{session_id_from_name}', current_session_id='{session_id}'")
+        if session_id_from_name == "__global__":
+            manager = get_custom_dataset_manager(session_id or "__global__")
+            return manager.get_global_dataset_files_as_csv_format(dataset_name)
         if session_id_from_name != session_id:
             logger.warning(f"Session ID mismatch in metadata: dataset has '{session_id_from_name}' but request has '{session_id}'")
             # Use the dataset's session ID instead
@@ -134,6 +137,9 @@ def resolve_file(dataset: str, file_path: str, session_id: Optional[str] = None)
         
         session_id_from_name, dataset_name = parse_custom_dataset_name(dataset)
         logger.info(f"Custom dataset: session_id_from_name='{session_id_from_name}', current_session_id='{session_id}'")
+        if session_id_from_name == "__global__":
+            manager = get_custom_dataset_manager(session_id or "__global__")
+            return manager.resolve_global_file(dataset_name, file_path)
         if session_id_from_name != session_id:
             logger.warning(f"Session ID mismatch: dataset has '{session_id_from_name}' but request has '{session_id}'")
             # For debugging, let's check if the file exists with the dataset's session ID

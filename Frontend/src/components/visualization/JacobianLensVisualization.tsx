@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { Slider } from "@/components/ui/slider";
 import { firstJobResult, resolveAudioId } from "@/lib/jobs";
 import { listJacobianLenses, type JacobianLens } from "@/lib/models";
 import { useJob } from "@/hooks/use-job";
@@ -66,6 +68,7 @@ export const JacobianLensVisualization = ({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [result, setResult] = useState<JacobianLensResult | null>(null);
   const [selectedCell, setSelectedCell] = useState<{ layer: number; frame: LensFrame } | null>(null);
+  const [topK, setTopK] = useState(0);
   const lensJob = useJob<unknown>();
 
   const readyLenses = useMemo(
@@ -134,26 +137,26 @@ export const JacobianLensVisualization = ({
           </p>
         </CardHeader>
         <CardContent className="space-y-2">
-          <div className="flex gap-2">
-            <Select value={lensId} onValueChange={setLensId} disabled={!readyLenses.length || lensJob.isRunning}>
-              <SelectTrigger className="h-8 text-xs flex-1">
-                <SelectValue placeholder="Choose a fitted lens" />
-              </SelectTrigger>
-              <SelectContent>
-                {readyLenses.map((lens) => (
-                  <SelectItem key={lens.lens_id} value={lens.lens_id} className="text-xs">
-                    {lens.architecture || "ASR"} · {lens.layer_count ?? "?"} layers · {lens.sample_count} samples
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => void refreshLenses()} disabled={lensJob.isRunning}>
-              Refresh
-            </Button>
-            <Button size="sm" className="h-8 text-xs" onClick={() => void analyze()} disabled={!lensId || lensJob.isRunning}>
-              {lensJob.isRunning ? "Reading…" : "Analyze"}
-            </Button>
-          </div>
+          <div className="flex items-center gap-3">
+                <Select value={lensId} onValueChange={setLensId} disabled={!readyLenses.length || lensJob.isRunning}>
+                  <SelectTrigger className="h-8 text-xs flex-1">
+                    <SelectValue placeholder="Choose a fitted lens" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {readyLenses.map((lens) => (
+                      <SelectItem key={lens.lens_id} value={lens.lens_id} className="text-xs">
+                        {lens.architecture || "ASR"} · {lens.layer_count ?? "?"} layers · {lens.sample_count} samples
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => void refreshLenses()} disabled={lensJob.isRunning}>
+                  Refresh
+                </Button>
+                <Button size="sm" className="h-8 text-xs" onClick={() => void analyze()} disabled={!lensId || lensJob.isRunning}>
+                  {lensJob.isRunning ? "Reading…" : "Analyze"}
+                </Button>
+              </div>
           {!readyLenses.length && !loadError && (
             <p className="text-xs text-muted-foreground">No calibrated lens is available for this model in this session.</p>
           )}
@@ -172,18 +175,30 @@ export const JacobianLensVisualization = ({
             </div>
           </CardHeader>
           <CardContent className="space-y-2">
-            <p className="text-[11px] text-muted-foreground">Each cell is the strongest vocabulary evidence for one pooled audio interval. Select a cell to inspect alternatives and calibration.</p>
+            <p className="text-[11px] text-muted-foreground">Each cell shows the #{topK + 1} most probable token for one pooled audio interval. Select a cell to inspect alternatives and calibration.</p>
             {result.quality?.layers?.some((item) => item.validation_frames > 0) ? (
               <p className="text-[11px] text-muted-foreground">Held-out calibration is shown per layer: cosine similarity compares the readout with the frozen teacher representation; token agreement compares their top vocabulary token.</p>
             ) : (
               <p className="text-[11px] text-amber-700">This lens has no held-out calibration because it was fitted with fewer than 10 samples. Treat the readout as exploratory.</p>
             )}
+            <div className="flex items-center gap-3 px-1 pb-1">
+              <Label className="text-[11px] shrink-0">Token rank</Label>
+              <Slider
+                value={[topK]}
+                onValueChange={([v]) => setTopK(v)}
+                min={0}
+                max={Math.min(4, (result.layers[0]?.frames[0]?.tokens.length || 5) - 1)}
+                step={1}
+                className="w-28"
+              />
+              <span className="text-[11px] text-muted-foreground w-16">#{topK + 1}</span>
+            </div>
             <div className="space-y-1 overflow-x-auto pb-1">
               {result.layers.map((layer) => (
                 <div key={layer.layer} className="flex min-w-max gap-1 items-stretch">
                   <span className="w-12 shrink-0 text-[10px] text-muted-foreground pt-1">Layer {layer.layer + 1}</span>
                   {layer.frames.map((frame, index) => {
-                    const top = frame.tokens[0];
+                    const token = frame.tokens[topK];
                     const quality = layer.quality;
                     const active = selectedCell?.layer === layer.layer && selectedCell.frame === frame;
                     return (
@@ -193,10 +208,10 @@ export const JacobianLensVisualization = ({
                         className={`w-12 min-h-10 rounded border px-1 text-[9px] leading-tight break-all transition-colors ${
                           active ? "border-primary bg-primary/15" : "border-border bg-muted/40 hover:bg-muted"
                         }`}
-                        title={`${frame.start_time.toFixed(2)}–${frame.end_time.toFixed(2)} s: ${top?.token || "—"}${quality?.cosine_similarity != null ? ` · held-out cosine ${quality.cosine_similarity.toFixed(2)}` : " · unvalidated"}`}
+                        title={`${frame.start_time.toFixed(2)}–${frame.end_time.toFixed(2)} s · rank #{topK + 1}: ${token?.token || "—"}${quality?.cosine_similarity != null ? ` · held-out cosine ${quality.cosine_similarity.toFixed(2)}` : " · unvalidated"}`}
                         onClick={() => setSelectedCell({ layer: layer.layer, frame })}
                       >
-                        {top?.token || "—"}
+                        {token?.token || "—"}
                       </button>
                     );
                   })}

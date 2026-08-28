@@ -60,7 +60,7 @@ def collect_samples(count: int) -> tuple[list[dict], int]:
             filename = Path(raw_file.replace("\\", "/")).name
             if not filename:
                 continue
-            samples.append({"filename": filename, "text": text, "src": src})
+            samples.append({"filename": filename, "text": text.lower(), "src": src})
             if len(samples) >= count:
                 break
         offset += len(rows)
