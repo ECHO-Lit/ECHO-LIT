@@ -136,14 +136,14 @@ export default function JacobianLensLab() {
 
   const selectFirstSamples = () => {
     const parsed = Number.parseInt(sampleLimit, 10);
-    const limit = Number.isFinite(parsed) ? Math.max(2, Math.min(parsed, 200)) : 50;
+    const limit = Number.isFinite(parsed) ? Math.max(2, Math.min(parsed, 1000)) : 50;
     setSelectedFilenames(trainableRows.slice(0, limit).map((sample) => sample.filename));
   };
 
   const toggleSample = (filename: string) => {
     setSelectedFilenames((current) => current.includes(filename)
       ? current.filter((item) => item !== filename)
-      : current.length < 200 ? [...current, filename] : current,
+      : current.length < 1000 ? [...current, filename] : current,
     );
   };
 
@@ -203,19 +203,19 @@ export default function JacobianLensLab() {
             </CardHeader>
             <CardContent className="grid gap-4 md:grid-cols-2">
               <div className="space-y-2"><Label>Speech-to-text model</Label><Select value={model} onValueChange={setModel}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{modelOptions.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectContent></Select></div>
-              <div className="space-y-2"><Label>Transcript dataset</Label><Select value={dataset} onValueChange={setDataset}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="common-voice">Common Voice</SelectItem><SelectItem value="ravdess">RAVDESS</SelectItem>{customDatasets.map((item) => <SelectItem key={item.formatted_name} value={item.formatted_name}>{item.dataset_name}</SelectItem>)}</SelectContent></Select></div>
+              <div className="space-y-2"><Label>Transcript dataset</Label><Select value={dataset} onValueChange={setDataset}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="common-voice">Common Voice</SelectItem><SelectItem value="ravdess">RAVDESS</SelectItem><SelectItem value="librispeech-1000">LibriSpeech 1000</SelectItem>{customDatasets.map((item) => <SelectItem key={item.formatted_name} value={item.formatted_name}>{item.dataset_name}</SelectItem>)}</SelectContent></Select></div>
             </CardContent>
           </Card>
 
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between gap-3"><div><CardTitle className="text-base">2. Select fitting samples</CardTitle><CardDescription>{isLoadingDataset ? "Loading metadata…" : `${trainableRows.length} transcript-bearing samples available; select 2–200.`}</CardDescription></div><Badge variant="outline">{selectedSamples.length} selected</Badge></div>
+              <div className="flex items-center justify-between gap-3"><div><CardTitle className="text-base">2. Select fitting samples</CardTitle><CardDescription>{isLoadingDataset ? "Loading metadata…" : `${trainableRows.length} transcript-bearing samples available; select 2–1000.`}</CardDescription></div><Badge variant="outline">{selectedSamples.length} selected</Badge></div>
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="flex flex-wrap items-end gap-2"><div className="space-y-1"><Label htmlFor="sample-limit" className="text-xs">Select first</Label><Input id="sample-limit" value={sampleLimit} onChange={(event) => setSampleLimit(event.target.value)} className="h-8 w-24" inputMode="numeric" /></div><Button size="sm" variant="outline" onClick={selectFirstSamples} disabled={!trainableRows.length || fitJob.isRunning}><CheckSquare className="mr-1 h-3.5 w-3.5" />Select samples</Button><Button size="sm" variant="ghost" onClick={() => setSelectedFilenames([])} disabled={!selectedFilenames.length || fitJob.isRunning}><Square className="mr-1 h-3.5 w-3.5" />Clear</Button></div>
               {!isLoadingDataset && !trainableRows.length && <p className="text-sm text-muted-foreground">This dataset has no usable transcript field, so it cannot fit a J-lens.</p>}
               <div className="max-h-[420px] overflow-auto rounded border">
-                {trainableRows.map((sample) => <label key={sample.filename} className="flex cursor-pointer items-start gap-3 border-b p-3 last:border-b-0 hover:bg-muted/40"><Checkbox checked={selectedFilenames.includes(sample.filename)} onCheckedChange={() => toggleSample(sample.filename)} disabled={fitJob.isRunning || (!selectedFilenames.includes(sample.filename) && selectedFilenames.length >= 200)} /><span className="min-w-0"><span className="block font-mono text-xs">{sample.filename}</span><span className="block truncate text-xs text-muted-foreground">{sample.transcript}</span></span></label>)}
+                {trainableRows.map((sample) => <label key={sample.filename} className="flex cursor-pointer items-start gap-3 border-b p-3 last:border-b-0 hover:bg-muted/40"><Checkbox checked={selectedFilenames.includes(sample.filename)} onCheckedChange={() => toggleSample(sample.filename)} disabled={fitJob.isRunning || (!selectedFilenames.includes(sample.filename) && selectedFilenames.length >= 1000)} /><span className="min-w-0"><span className="block font-mono text-xs">{sample.filename}</span><span className="block truncate text-xs text-muted-foreground">{sample.transcript}</span></span></label>)}
               </div>
             </CardContent>
           </Card>

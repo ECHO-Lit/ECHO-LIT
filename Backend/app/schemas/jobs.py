@@ -101,7 +101,7 @@ class JacobianLensTrainingSample(BaseModel):
 
 
 class JacobianLensFitParameters(OperationParameters):
-    samples: list[JacobianLensTrainingSample] = Field(min_length=2, max_length=200)
+    samples: list[JacobianLensTrainingSample] = Field(min_length=2, max_length=1000)
     max_audio_seconds: float = Field(default=30.0, gt=0, le=60)
     frame_samples: int = Field(default=32, ge=8, le=128)
     ridge_regularization: float = Field(default=1e-3, gt=0, le=1.0)
@@ -180,7 +180,7 @@ PARAMETER_MODELS: dict[JobOperation, type[OperationParameters]] = {
 
 class JobCreateRequest(BaseModel):
     operation: JobOperation
-    audio_ids: list[str] = Field(min_length=1, max_length=200)
+    audio_ids: list[str] = Field(min_length=1, max_length=1000)
     model: str | None = None
     parameters: dict[str, Any] = Field(default_factory=dict)
 

@@ -32,6 +32,7 @@ DATASET_PATHS: Dict[str, Path] = {
     "common-voice": DATA_DIR / "common_voice_valid_dev" / "common_voice_valid_data_metadata.csv",
     "cv-valid-dev": DATA_DIR / "common_voice_valid_dev" / "common_voice_valid_data_metadata.csv",
     "ravdess": DATA_DIR / "ravdess_subset" / "ravdess_subset_metadata.csv",
+    "librispeech-1000": DATA_DIR / "librispeech_1000" / "librispeech_1000_metadata.csv",
 }
 
 # Base directories for dataset audio files
@@ -39,6 +40,7 @@ DATASET_BASE_DIRS: Dict[str, Path] = {
     "common-voice": DATA_DIR / "common_voice_valid_dev",
     "cv-valid-dev": DATA_DIR / "common_voice_valid_dev", 
     "ravdess": DATA_DIR / "ravdess_subset",
+    "librispeech-1000": DATA_DIR / "librispeech_1000",
 }
 
 
