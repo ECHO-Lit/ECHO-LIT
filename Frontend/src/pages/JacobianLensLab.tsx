@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { CustomDatasetManager } from "@/components/dataset/CustomDatasetManager";
 import { API_BASE } from "@/lib/api";
 import { materializeAudio } from "@/lib/jobs";
 import { listCustomModels, listJacobianLenses, type CustomModel, type JacobianLens } from "@/lib/models";
@@ -98,13 +99,20 @@ export default function JacobianLensLab() {
     }
   }, [model]);
 
+  const fetchCustomDatasets = useCallback(async () => {
+    try {
+      const payload = await fetch(`${API_BASE}/upload/dataset/list`, { credentials: "include" })
+        .then((response) => response.ok ? response.json() : { datasets: [] });
+      setCustomDatasets(payload.datasets || []);
+    } catch (caught) {
+      setCustomDatasets([]);
+    }
+  }, []);
+
   useEffect(() => {
     listCustomModels().then(setCustomModels).catch(() => setCustomModels([]));
-    fetch(`${API_BASE}/upload/dataset/list`, { credentials: "include" })
-      .then((response) => response.ok ? response.json() : { datasets: [] })
-      .then((payload) => setCustomDatasets(payload.datasets || []))
-      .catch(() => setCustomDatasets([]));
-  }, []);
+    void fetchCustomDatasets();
+  }, [fetchCustomDatasets]);
 
   useEffect(() => {
     if (!modelOptions.some((item) => item.value === model)) setModel("whisper-base");
@@ -181,6 +189,15 @@ export default function JacobianLensLab() {
     }
   };
 
+  const handleDatasetCreated = (formattedName: string) => {
+    void fetchCustomDatasets();
+    setDataset(formattedName);
+  };
+
+  const handleDatasetSelected = (formattedName: string) => {
+    setDataset(formattedName);
+  };
+
   return (
     <main className="min-h-screen bg-background">
       <header className="h-14 border-b bg-panel-header flex items-center justify-between px-6">
@@ -203,7 +220,7 @@ export default function JacobianLensLab() {
             </CardHeader>
             <CardContent className="grid gap-4 md:grid-cols-2">
               <div className="space-y-2"><Label>Speech-to-text model</Label><Select value={model} onValueChange={setModel}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{modelOptions.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectContent></Select></div>
-              <div className="space-y-2"><Label>Transcript dataset</Label><Select value={dataset} onValueChange={setDataset}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="common-voice">Common Voice</SelectItem><SelectItem value="ravdess">RAVDESS</SelectItem><SelectItem value="librispeech-1000">LibriSpeech 1000</SelectItem>{customDatasets.map((item) => <SelectItem key={item.formatted_name} value={item.formatted_name}>{item.dataset_name}</SelectItem>)}</SelectContent></Select></div>
+              <div className="space-y-2"><Label>Transcript dataset</Label><div className="flex items-start gap-2"><Select value={dataset} onValueChange={setDataset}><SelectTrigger className="min-w-0 flex-1"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="common-voice">Common Voice</SelectItem><SelectItem value="ravdess">RAVDESS</SelectItem><SelectItem value="librispeech-1000">LibriSpeech 1000</SelectItem><SelectItem disabled value="separator">─ Custom Datasets ─</SelectItem>{customDatasets.map((item) => <SelectItem key={item.formatted_name} value={item.formatted_name}>{item.dataset_name}</SelectItem>)}</SelectContent></Select><CustomDatasetManager onDatasetCreated={handleDatasetCreated} onDatasetSelected={handleDatasetSelected} /></div></div>
             </CardContent>
           </Card>
 
