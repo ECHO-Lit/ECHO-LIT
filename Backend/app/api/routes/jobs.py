@@ -232,3 +232,12 @@ async def cancel_or_delete_job(job_id: str, request: Request, response: Response
             progress=JobProgress(current=0, total=record.progress.total, message="Cancelled"),
         )
     return {"job_id": job_id, "status": "cancellation_requested"}
+
+
+@router.delete("/jacobian-lenses/{lens_id}", status_code=204)
+async def delete_jacobian_lens(lens_id: str, request: Request, response: Response):
+    storage = get_storage()
+    deleted = await JacobianLensRepository().delete(lens_id, request.state.sid, storage=storage)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Jacobian lens not found")
+    return None

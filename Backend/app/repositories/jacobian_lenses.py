@@ -44,3 +44,24 @@ class JacobianLensRepository:
         await redis_module.job_redis.set(
             self._key(record.lens_id), record.model_dump_json(), ex=settings.JOB_TTL_SECONDS
         )
+
+    async def delete(self, lens_id: str, session_id: str, storage=None) -> bool:
+        record = await self.get_owned(lens_id, session_id)
+        if not record:
+            return False
+        client = redis_module.job_redis
+        pipe = client.pipeline()
+        pipe.delete(self._key(lens_id))
+        pipe.zrem(self._session_key(session_id), lens_id)
+        await pipe.execute()
+        if storage and record.artifact_key:
+            try:
+                storage.delete(record.artifact_key)
+            except Exception:
+                pass
+        if storage and record.metadata_key:
+            try:
+                storage.delete(record.metadata_key)
+            except Exception:
+                pass
+        return True

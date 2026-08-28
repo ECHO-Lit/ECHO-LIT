@@ -52,6 +52,35 @@ def _output_projection(model: Any) -> Any:
     return projection
 
 
+def _token_prior(processor: Any, transcripts: list[str], smoothing: float = 1e-5) -> Any:
+    """Estimate a log-unigram prior over the vocabulary from the training
+    transcripts using the same processor tokenizer that aligns the targets.
+
+    This is the `log P(token)` used to frequency-correct the readout during
+    apply: `log P(token | encoder) - log P(token)`.  Tokens never seen in the
+    transcripts get a floor set by a Laplace factor so they remain possible
+    but never dominate.
+    """
+    import torch
+
+    tokenizer = _tokenizer(processor)
+    counts: dict[int, int] = {}
+    total = 0
+    for transcript in transcripts:
+        ids = tokenizer(transcript, add_special_tokens=False).input_ids
+        for token_id in ids:
+            counts[token_id] = counts.get(token_id, 0) + 1
+            total += 1
+    vocab_size = len(tokenizer)
+    if total == 0 or vocab_size == 0:
+        raise JacobianLensError("Could not estimate a token prior from the transcripts")
+    prior = torch.full((vocab_size,), smoothing, dtype=torch.float64)
+    for token_id, count in counts.items():
+        prior[token_id] = (count + smoothing) / (total + smoothing * vocab_size)
+    prior = prior / prior.sum()
+    return prior
+
+
 def _seq2seq_states(model: Any, inputs: dict[str, Any], transcript: str, processor: Any):
     tokenizer = _tokenizer(processor)
     labels = tokenizer(transcript, return_tensors="pt", truncation=True).input_ids.to(_device_of(model))
@@ -185,6 +214,9 @@ def fit_encoder_jacobian_lens(
     if len(train_samples) < 2:
         raise JacobianLensError("At least two training samples are required after validation split")
 
+    token_prior = _token_prior(processor, [t for _, t in train_samples])
+    token_prior_log_probs = token_prior.log().float().cpu()
+
     statistics: list[dict[str, Any]] | None = None
     projection = _output_projection(model)
 
@@ -287,6 +319,7 @@ def fit_encoder_jacobian_lens(
         "weights": weights,
         "source_means": source_means,
         "target_means": target_means,
+        "token_prior_log_probs": token_prior_log_probs,
         "sample_count": len(samples),
         "training_sample_count": len(train_samples),
         "validation_sample_count": len(validation_samples),
@@ -338,6 +371,9 @@ def apply_encoder_jacobian_lens(
     weights = artifact["weights"]
     source_means = artifact["source_means"]
     target_means = artifact["target_means"]
+    token_prior_log_probs = artifact.get("token_prior_log_probs")
+    if token_prior_log_probs is not None:
+        token_prior_log_probs = torch.tensor(token_prior_log_probs, dtype=torch.float32)
     if len(states) != len(weights) or len(states) != len(source_means) or len(states) != len(target_means):
         raise JacobianLensError("Lens layer count does not match the loaded model")
     tokenizer = _tokenizer(processor)
@@ -356,15 +392,25 @@ def apply_encoder_jacobian_lens(
         frame_values = torch.stack([value for value, _, _ in frames]).float()
         verbal_state = (frame_values - source_mean) @ weight + target_mean
         logits = verbal_state @ projection.weight.to(verbal_state.device, dtype=torch.float32).T
+        raw_logits = logits.clone()
+        if token_prior_log_probs is not None:
+            logits = logits - token_prior_log_probs.to(logits.device, dtype=torch.float32)
         top = logits.topk(min(top_k, logits.shape[-1]), dim=-1)
+        raw_top = raw_logits.topk(min(top_k, raw_logits.shape[-1]), dim=-1)
         probabilities = logits.softmax(dim=-1).gather(dim=-1, index=top.indices)
+        raw_probabilities = raw_logits.softmax(dim=-1).gather(dim=-1, index=raw_top.indices)
         layer_frames = []
         source_frames = max(state.shape[1], 1)
         for frame_index, (_, start, end) in enumerate(frames):
             ids = top.indices[frame_index].tolist()
+            raw_ids = raw_top.indices[frame_index].tolist()
             tokens = [
                 str(decode([token_id], skip_special_tokens=False)).strip() if callable(decode) else str(token_id)
                 for token_id in ids
+            ]
+            raw_tokens_list = [
+                str(decode([token_id], skip_special_tokens=False)).strip() if callable(decode) else str(token_id)
+                for token_id in raw_ids
             ]
             layer_frames.append({
                 "start_time": duration * start / source_frames,
@@ -380,6 +426,17 @@ def apply_encoder_jacobian_lens(
                         ids, tokens, top.values[frame_index].float().tolist(), probabilities[frame_index].float().tolist()
                     )
                 ],
+                "raw_tokens": [
+                    {
+                        "token_id": token_id,
+                        "token": token or "␠",
+                        "score": float(score),
+                        "probability": float(probability),
+                    }
+                    for token_id, token, score, probability in zip(
+                        raw_ids, raw_tokens_list, raw_top.values[frame_index].float().tolist(), raw_probabilities[frame_index].float().tolist()
+                    )
+                ],
             })
         layers.append({"layer": layer_index, "quality": quality_by_layer.get(layer_index), "frames": layer_frames})
     return {
@@ -387,6 +444,7 @@ def apply_encoder_jacobian_lens(
         "architecture": architecture,
         "duration_seconds": duration,
         "method": artifact["method"],
+        "prior_correction": token_prior_log_probs is not None,
         "quality": artifact.get("quality", {}),
         "layers": layers,
     }
