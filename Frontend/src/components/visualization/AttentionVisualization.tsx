@@ -37,6 +37,7 @@ export const AttentionVisualization = ({ selectedFile, model, dataset }: Attenti
   const [selectedLayer, setSelectedLayer] = useState(6);  // Middle layer for better semantic attention patterns
   const [selectedHead, setSelectedHead] = useState(0);
   const [attentionData, setAttentionData] = useState<any>(null);
+  const [showFullMatrix, setShowFullMatrix] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const attentionJob = useJob<any>();
@@ -57,6 +58,7 @@ export const AttentionVisualization = ({ selectedFile, model, dataset }: Attenti
 
     setIsLoading(true);
     setError(null);
+    setShowFullMatrix(false);
 
     try {
       const audioId = await resolveAudioId(selectedFile, dataset);
@@ -145,23 +147,29 @@ export const AttentionVisualization = ({ selectedFile, model, dataset }: Attenti
           </CardHeader>
           <CardContent>
             {/* Limit matrix display size for performance and readability */}
-            {words.length > 50 ? (
-              <div className="text-xs text-muted-foreground p-4">
-                Attention matrix too large to display ({words.length}x{words.length}). 
-                Showing top attention pairs below instead.
+            {words.length > 50 && !showFullMatrix ? (
+              <div className="text-xs text-muted-foreground p-4 space-y-2">
+                <div>
+                  Attention matrix too large to display ({words.length}x{words.length}).
+                  Showing top attention pairs below instead.
+                </div>
+                <Button size="sm" variant="outline" className="h-6" onClick={() => setShowFullMatrix(true)}>
+                  Show anyway
+                </Button>
               </div>
             ) : (
-              <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${words.length + 1}, minmax(0, 1fr))` }}>
-                <div></div>
+              <div className="overflow-auto max-h-[70vh]">
+              <div className="grid gap-1 w-max" style={{ gridTemplateColumns: `repeat(${words.length + 1}, minmax(20px, 1fr))` }}>
+                <div className="sticky top-0 left-0 z-20 bg-background"></div>
                 {words.map((word, i) => (
-                  <div key={i} className="text-[9px] p-1 text-center font-medium truncate" title={word}>
+                  <div key={i} className="sticky top-0 z-10 bg-background text-[9px] p-1 text-center font-medium truncate" title={word}>
                     {word.length > 6 ? word.substring(0, 6) + '...' : word}
                   </div>
                 ))}
-                
+
                 {words.map((fromWord, i) => (
                 <>
-                  <div key={`row-${i}`} className="text-[9px] p-1 font-medium truncate" title={fromWord}>
+                  <div key={`row-${i}`} className="sticky left-0 z-10 bg-background text-[9px] p-1 font-medium truncate" title={fromWord}>
                     {fromWord.length > 8 ? fromWord.substring(0, 8) + '...' : fromWord}
                   </div>
                   {words.map((toWord, j) => {
@@ -208,6 +216,7 @@ export const AttentionVisualization = ({ selectedFile, model, dataset }: Attenti
                   })}
                 </>
               ))}
+              </div>
               </div>
             )}
           </CardContent>

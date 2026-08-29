@@ -16,6 +16,8 @@ class JobOperation(str, Enum):
     embedding = "embedding"
     perturbation = "perturbation"
     audio_features = "audio_features"
+    linguistic_acoustic = "linguistic_acoustic"
+    fairness = "fairness"
     jacobian_lens_fit = "jacobian_lens_fit"
     jacobian_lens_apply = "jacobian_lens_apply"
     hidden_states = "hidden_states"
@@ -37,6 +39,7 @@ MODEL_REQUIRED_OPERATIONS = {
     JobOperation.saliency,
     JobOperation.attention,
     JobOperation.embedding,
+    JobOperation.linguistic_acoustic,
     JobOperation.jacobian_lens_fit,
     JobOperation.jacobian_lens_apply,
     JobOperation.hidden_states,
@@ -66,6 +69,9 @@ class PredictionParameters(OperationParameters):
 
 class SaliencyParameters(OperationParameters):
     method: Literal["gradcam", "lime", "shap"] = "gradcam"
+    # Bypasses MAX_SALIENCY_SECONDS(_SHAP) cropping to analyze the full clip.
+    # Opt-in only — memory/runtime scale with duration, so the default stays capped.
+    full_audio: bool = False
 
 
 class AttentionParameters(OperationParameters):
@@ -91,6 +97,15 @@ class PerturbationParameters(OperationParameters):
 
 class AudioFeatureParameters(OperationParameters):
     pass
+
+
+class LinguisticAcousticParameters(OperationParameters):
+    task: Literal["transcription", "classification"]
+    sweeps: list[dict[str, Any]]
+    reference_transcript: str | None = None
+    language: str | None = "en"
+    normalize_loudness: bool = True
+    include_lexical_control: bool = True
 
 
 class JacobianLensTrainingSample(BaseModel):
@@ -171,6 +186,7 @@ PARAMETER_MODELS: dict[JobOperation, type[OperationParameters]] = {
     JobOperation.embedding: EmbeddingParameters,
     JobOperation.perturbation: PerturbationParameters,
     JobOperation.audio_features: AudioFeatureParameters,
+    JobOperation.linguistic_acoustic: LinguisticAcousticParameters,
     JobOperation.jacobian_lens_fit: JacobianLensFitParameters,
     JobOperation.jacobian_lens_apply: JacobianLensApplyParameters,
     JobOperation.hidden_states: HiddenStatesParameters,
@@ -186,6 +202,18 @@ class JobCreateRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_operation(self) -> "JobCreateRequest":
+        if self.operation == JobOperation.linguistic_acoustic:
+            # Dispatched through its own render->infer->aggregate chord
+            # (fr7_orchestrate), not the single-shot execute_job/orchestrate_batch
+            # pipeline this endpoint drives -- see POST /analyses/linguistic-vs-acoustic.
+            raise ValueError(
+                "linguistic_acoustic must be submitted via POST /analyses/linguistic-vs-acoustic"
+            )
+        if self.operation == JobOperation.fairness:
+            # Dispatched through its own partition->infer->explain->aggregate chord
+            # (fr10_orchestrate), driven by a dataset + grouping key rather than
+            # audio_ids -- see POST /api/v1/analyses/fairness.
+            raise ValueError("fairness must be submitted via POST /api/v1/analyses/fairness")
         if self.operation in MODEL_REQUIRED_OPERATIONS and not self.model:
             raise ValueError(f"model must be one of: {', '.join(sorted(SUPPORTED_MODELS))}")
         if self.operation in SINGLE_AUDIO_OPERATIONS and len(self.audio_ids) != 1:

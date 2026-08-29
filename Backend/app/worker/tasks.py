@@ -132,6 +132,167 @@ def finalize_batch_job(child_results: list[dict], envelope: dict) -> None:
         raise
 
 
+@celery_app.task(bind=True, name="app.worker.tasks.fr7_orchestrate", acks_late=True)
+def fr7_orchestrate(self, envelope: dict) -> None:
+    from app.services.linguistic_acoustic_service import complete_sweep_from_cache, prepare_sweep
+
+    if _run(complete_sweep_from_cache(envelope)):
+        return
+    specs = _run(prepare_sweep(envelope, self.request.id))
+    signatures = [fr7_render_variant.s(envelope, spec).set(queue="cpu") for spec in specs]
+    result = chord(signatures)(fr7_dispatch_inference.s(envelope).set(queue="cpu"))
+    child_ids = [child.id for child in (result.parent.results if result.parent else [])]
+    _run(JobRepository().update(envelope["job_id"], task_id=self.request.id, child_task_ids=child_ids))
+
+
+@celery_app.task(
+    bind=True, name="app.worker.tasks.fr7_render_variant", acks_late=True, max_retries=3
+)
+def fr7_render_variant(self, envelope: dict, spec: dict) -> dict:
+    from app.services.linguistic_acoustic_service import render_and_register
+
+    try:
+        return _run(render_and_register(envelope, spec))
+    except (StorageError, RedisError) as exc:
+        if self.request.retries >= self.max_retries:
+            raise
+        raise self.retry(exc=exc, countdown=min(2 ** self.request.retries, 30))
+
+
+@celery_app.task(bind=True, name="app.worker.tasks.fr7_dispatch_inference", acks_late=True)
+def fr7_dispatch_inference(self, rendered: list[dict], envelope: dict) -> None:
+    from app.services.linguistic_acoustic_service import mark_render_complete
+
+    _run(mark_render_complete(envelope, rendered))
+    queue = queue_for("prediction", envelope.get("model"))
+    runnable = [item for item in rendered if item.get("applicable")]
+    if not runnable:
+        fr7_aggregate.apply_async(args=[[], envelope, rendered], queue="cpu")
+        return
+    signatures = [fr7_infer_variant.s(envelope, item).set(queue=queue) for item in runnable]
+    chord(signatures)(fr7_aggregate.s(envelope, rendered).set(queue="cpu"))
+
+
+@celery_app.task(
+    bind=True, name="app.worker.tasks.fr7_infer_variant", acks_late=True, max_retries=2
+)
+def fr7_infer_variant(self, envelope: dict, rendered: dict) -> dict:
+    from app.services.linguistic_acoustic_service import infer_variant
+
+    try:
+        return _run(infer_variant(envelope, rendered, self.request.id))
+    except (StorageError, RedisError) as exc:
+        if self.request.retries >= self.max_retries:
+            raise
+        raise self.retry(exc=exc, countdown=min(2 ** self.request.retries, 30))
+
+
+@celery_app.task(name="app.worker.tasks.fr7_aggregate", acks_late=True)
+def fr7_aggregate(outputs: list[dict], envelope: dict, rendered: list[dict]) -> None:
+    from app.services.linguistic_acoustic_service import aggregate_sweep
+
+    try:
+        _run(aggregate_sweep(outputs, rendered, envelope))
+    except Exception as exc:
+        from app.schemas.jobs import JobError, JobStatus
+
+        _run(JobRepository().update(
+            envelope["job_id"],
+            status=JobStatus.failure,
+            error=JobError(code="fr7_aggregate_failed", message=str(exc)[:500], retryable=False),
+        ))
+        raise
+
+
+@celery_app.task(bind=True, name="app.worker.tasks.fr10_orchestrate", acks_late=True)
+def fr10_orchestrate(self, envelope: dict) -> None:
+    from app.services.fairness_service import FairnessInputError, complete_from_cache, prepare_analysis
+
+    if _run(complete_from_cache(envelope)):
+        return
+    try:
+        infer_shards = _run(prepare_analysis(envelope, self.request.id))
+    except FairnessInputError:
+        return  # prepare_analysis already wrote the JobError; nothing to dispatch.
+    if not infer_shards:
+        fr10_aggregate.apply_async(args=[[], [], envelope], queue="cpu")
+        return
+    queue = queue_for("prediction", envelope.get("model"))
+    signatures = [fr10_infer_shard.s(envelope, shard).set(queue=queue) for shard in infer_shards]
+    result = chord(signatures)(fr10_dispatch_explain.s(envelope).set(queue="cpu"))
+    child_ids = [child.id for child in (result.parent.results if result.parent else [])]
+    _run(JobRepository().update(envelope["job_id"], task_id=self.request.id, child_task_ids=child_ids))
+
+
+@celery_app.task(bind=True, name="app.worker.tasks.fr10_infer_shard", acks_late=True, max_retries=2)
+def fr10_infer_shard(self, envelope: dict, shard: dict) -> dict:
+    from app.services.fairness_service import infer_shard
+
+    try:
+        return _run(infer_shard(envelope, shard, self.request.id))
+    except (StorageError, RedisError) as exc:
+        if self.request.retries >= self.max_retries:
+            # A dead shard degrades the run rather than killing it: the
+            # aggregator sees n_failed == n_items and shrinks the group.
+            return {
+                "shard_id": shard["shard_id"], "group_label": shard["group_label"],
+                "operation": "prediction", "n_items": len(shard["item_ids"]), "n_cached": 0,
+                "n_failed": len(shard["item_ids"]), "artifact_key": None,
+                "failures": [{"item_id": i, "code": "dependency_unavailable"} for i in shard["item_ids"]],
+            }
+        raise self.retry(exc=exc, countdown=min(2 ** self.request.retries, 30))
+
+
+@celery_app.task(bind=True, name="app.worker.tasks.fr10_dispatch_explain", acks_late=True)
+def fr10_dispatch_explain(self, infer_results: list[dict], envelope: dict) -> None:
+    from app.services.fairness_service import load_plan, mark_infer_complete
+
+    _run(mark_infer_complete(envelope, infer_results))
+    if not envelope["parameters"].get("include_explanations", True):
+        fr10_aggregate.apply_async(args=[[], infer_results, envelope], queue="cpu")
+        return
+    plan = _run(load_plan(envelope))
+    shards = plan["plan"]["explain_shards"]
+    if not shards:
+        fr10_aggregate.apply_async(args=[[], infer_results, envelope], queue="cpu")
+        return
+    signatures = [fr10_explain_shard.s(envelope, shard).set(queue="gpu-large") for shard in shards]
+    chord(signatures)(fr10_aggregate.s(infer_results, envelope).set(queue="cpu"))
+
+
+@celery_app.task(bind=True, name="app.worker.tasks.fr10_explain_shard", acks_late=True, max_retries=1)
+def fr10_explain_shard(self, envelope: dict, shard: dict) -> dict:
+    from app.services.fairness_service import explain_shard
+
+    try:
+        return _run(explain_shard(envelope, shard, self.request.id))
+    except (StorageError, RedisError) as exc:
+        if self.request.retries >= self.max_retries:
+            return {
+                "shard_id": shard["shard_id"], "group_label": shard["group_label"],
+                "operation": "saliency", "n_items": len(shard["item_ids"]),
+                "n_failed": len(shard["item_ids"]), "artifact_key": None,
+                "failures": [{"item_id": i, "code": "dependency_unavailable"} for i in shard["item_ids"]],
+            }
+        raise self.retry(exc=exc, countdown=min(2 ** self.request.retries, 30))
+
+
+@celery_app.task(name="app.worker.tasks.fr10_aggregate", acks_late=True)
+def fr10_aggregate(explain_results: list[dict], infer_results: list[dict], envelope: dict) -> None:
+    from app.services.fairness_service import aggregate_fairness
+
+    try:
+        _run(aggregate_fairness(explain_results, infer_results, envelope))
+    except Exception as exc:
+        from app.schemas.jobs import JobError, JobStatus
+
+        _run(JobRepository().update(
+            envelope["job_id"], status=JobStatus.failure,
+            error=JobError(code="fr10_aggregate_failed", message=str(exc)[:500], retryable=False),
+        ))
+        raise
+
+
 @celery_app.task(name="app.worker.tasks.cleanup_expired_local_objects")
 def cleanup_expired_local_objects() -> int:
     if settings.STORAGE_BACKEND.lower() != "local":

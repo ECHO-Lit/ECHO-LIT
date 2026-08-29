@@ -6,6 +6,8 @@ import { SaliencyVisualization } from "../visualization/SaliencyVisualization";
 import { AttentionVisualization } from "../visualization/AttentionVisualization";
 import { JacobianLensVisualization } from "../visualization/JacobianLensVisualization";
 import { PerturbationTools } from "../analysis/PerturbationTools";
+import { PerturbationDiagnosticsPanel } from "../analysis/PerturbationDiagnosticsPanel";
+import { FairnessPanel } from "../fairness/FairnessPanel";
 import { useState, useEffect } from "react";
 import { firstJobResult, resolveAudioId, runJob } from '@/lib/jobs';
 import { listCustomModels } from '@/lib/models';
@@ -320,7 +322,7 @@ export const PredictionPanel = ({ selectedFile, selectedEmbeddingFile, model, da
 
   const hasAttention = !!model && (model.includes('whisper') || customModelHasAttention);
   const hasJacobianLens = !!model && (model.includes('whisper') || customModelHasJacobianLens);
-  const tabCount = 2 + Number(hasAttention) + Number(hasJacobianLens);
+  const tabCount = 4 + Number(hasAttention) + Number(hasJacobianLens);
 
   return (
     <div className="h-full bg-panel-background border-t border-border">
@@ -331,6 +333,8 @@ export const PredictionPanel = ({ selectedFile, selectedEmbeddingFile, model, da
             {hasAttention && <TabsTrigger value="attention" className="text-xs">Attention</TabsTrigger>}
             {hasJacobianLens && <TabsTrigger value="jacobian-lens" className="text-xs">J-Lens</TabsTrigger>}
             <TabsTrigger value="perturbation" className="text-xs">Perturbation</TabsTrigger>
+            <TabsTrigger value="diagnostics" className="text-xs">Diagnostics</TabsTrigger>
+            <TabsTrigger value="fairness" className="text-xs">Fairness</TabsTrigger>
           </TabsList>
         </div>
 
@@ -382,6 +386,33 @@ export const PredictionPanel = ({ selectedFile, selectedEmbeddingFile, model, da
                 originalDataset={originalDataset}
               />
             </div>
+          </TabsContent>
+
+          <TabsContent value="diagnostics" className="m-0 h-full">
+            <PerturbationDiagnosticsPanel
+              selectedFile={selectedFile}
+              model={model}
+              dataset={dataset}
+              originalDataset={originalDataset}
+            />
+          </TabsContent>
+
+          {/* forceMount: fairness jobs run 10-30+ minutes. Without this,
+              switching to another tab unmounts FairnessPanel, dropping its
+              status-poll query's only observer -- the job keeps running
+              server-side but the panel loses track of it and reverts to idle
+              on remount. Radix sets data-state itself but (unlike its
+              `hidden` prop) doesn't hide inactive+forceMounted content via
+              CSS on its own, so that's done explicitly here instead of
+              unmounting, keeping polling (and the gcTime pin in
+              use-job-query.ts) alive the whole time regardless of which tab
+              is showing. */}
+          <TabsContent
+            value="fairness"
+            className="m-0 h-full data-[state=inactive]:hidden"
+            forceMount
+          >
+            <FairnessPanel model={model} dataset={dataset} originalDataset={originalDataset} />
           </TabsContent>
         </div>
       </Tabs>

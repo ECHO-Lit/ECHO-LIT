@@ -40,6 +40,9 @@ class JobRepository:
         record = await self.get(job_id)
         return record if record and record.session_id == session_id else None
 
+    async def list_session_job_ids(self, session_id: str) -> list[str]:
+        return await redis_module.job_redis.zrange(self._session_key(session_id), 0, -1)
+
     async def save(self, record: JobRecord) -> JobRecord:
         record.updated_at = datetime.now(timezone.utc)
         await redis_module.job_redis.set(

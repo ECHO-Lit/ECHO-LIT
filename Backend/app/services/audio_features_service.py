@@ -14,6 +14,26 @@ import librosa
 import numpy as np
 
 
+def _zero_crossing_rate(y: np.ndarray, frame_length: int = 2048, hop_length: int = 512) -> np.ndarray:
+    """Drop-in replacement for `librosa.feature.zero_crossing_rate(y)[0]`.
+
+    librosa's version calls into a numba guvectorize kernel (`_zc_wrapper`) that
+    segfaults in this container regardless of the NUMBA_CPU_NAME/NUMBA_THREADING_LAYER
+    overrides in docker-compose.yml -- those were verified against beat_track/yin only.
+    This reimplements the exact default-argument semantics (threshold=1e-10, zero_pos=True,
+    pad=False, center=True) in plain numpy, byte-for-byte matched against librosa's output.
+    """
+    pad = frame_length // 2
+    padded = np.pad(y, (pad, pad), mode="edge")
+    frames = librosa.util.frame(padded, frame_length=frame_length, hop_length=hop_length)
+    clipped = np.where(np.abs(frames) <= 1e-10, 0.0, frames)
+    sign = np.sign(clipped)
+    sign[sign == 0] = 1.0
+    crossings = sign[1:, :] != sign[:-1, :]
+    full = np.vstack([np.zeros((1, crossings.shape[1]), dtype=bool), crossings])
+    return np.mean(full, axis=0, keepdims=True)[0]
+
+
 def extract_audio_frequency_features(audio_file_path: str) -> dict:
     """
     Extract comprehensive frequency-domain audio features using librosa.
@@ -34,7 +54,7 @@ def extract_audio_frequency_features(audio_file_path: str) -> dict:
     spectral_centroids = librosa.feature.spectral_centroid(y=audio, sr=sr)[0]
     spectral_rolloff = librosa.feature.spectral_rolloff(y=audio, sr=sr, roll_percent=0.85)[0]
     spectral_bandwidth = librosa.feature.spectral_bandwidth(y=audio, sr=sr)[0]
-    zero_crossing_rate = librosa.feature.zero_crossing_rate(audio)[0]
+    zero_crossing_rate = _zero_crossing_rate(audio)
     
     # MFCC features (first 13 coefficients)
     mfccs = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=13)

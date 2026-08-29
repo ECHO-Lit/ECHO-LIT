@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import csv
 import logging
+import time
 from app.core.audio_probe import probe_audio
 from .custom_dataset_service import (
     get_custom_dataset_manager, 
@@ -32,13 +33,23 @@ DATASET_PATHS: Dict[str, Path] = {
     "common-voice": DATA_DIR / "common_voice_valid_dev" / "common_voice_valid_data_metadata.csv",
     "cv-valid-dev": DATA_DIR / "common_voice_valid_dev" / "common_voice_valid_data_metadata.csv",
     "ravdess": DATA_DIR / "ravdess_subset" / "ravdess_subset_metadata.csv",
+    "l2-arctic": DATA_DIR / "L2_ARCTIC_dataset" / "l2_metadata.csv",
+    "saa": DATA_DIR / "SAA_dataset" / "saa_metadata.csv",
 }
 
 # Base directories for dataset audio files
 DATASET_BASE_DIRS: Dict[str, Path] = {
     "common-voice": DATA_DIR / "common_voice_valid_dev",
-    "cv-valid-dev": DATA_DIR / "common_voice_valid_dev", 
+    "cv-valid-dev": DATA_DIR / "common_voice_valid_dev",
     "ravdess": DATA_DIR / "ravdess_subset",
+    "l2-arctic": DATA_DIR / "L2_ARCTIC_dataset" / "audio",
+    "saa": DATA_DIR / "SAA_dataset" / "audio",
+}
+
+# SAA's `filename` column has no extension (e.g. "arabic1"); the audio files on
+# disk are .mp3. Datasets needing this normalization go here.
+DATASETS_WITH_EXTENSIONLESS_FILENAMES: Dict[str, str] = {
+    "saa": ".mp3",
 }
 
 
@@ -91,7 +102,11 @@ def load_metadata(dataset: str, session_id: Optional[str] = None) -> List[Dict[s
             for row in reader:
                 # normalize keys to lowercase; strip whitespace
                 normalized = {str(k).strip().lower(): (v.strip() if isinstance(v, str) else v) for k, v in row.items()}
-                
+
+                ext = DATASETS_WITH_EXTENSIONLESS_FILENAMES.get(ds)
+                if ext and normalized.get("filename") and "." not in normalized["filename"]:
+                    normalized["filename"] += ext
+
                 rows.append(normalized)
     except Exception:
         # Re-raise to let the route map to a 500
@@ -154,7 +169,17 @@ def resolve_file(dataset: str, file_path: str, session_id: Optional[str] = None)
     safe_name = Path(file_path).name
     audio_path = base_dir / safe_name
     if not audio_path.exists() or not audio_path.is_file():
-        raise FileNotFoundError(f"Dataset file not found: {safe_name}")
+        # Docker Desktop's Windows bind-mount layer can transiently report an
+        # existing file as missing under a burst of concurrent reads from
+        # multiple worker processes (observed with FR-10 dispatching ~20
+        # shards at once). A short retry absorbs that without masking a
+        # genuinely missing file, which will still fail after these retries.
+        for _ in range(3):
+            time.sleep(0.1)
+            if audio_path.exists() and audio_path.is_file():
+                break
+        else:
+            raise FileNotFoundError(f"Dataset file not found: {safe_name}")
 
     return audio_path
 

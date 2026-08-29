@@ -170,7 +170,7 @@ export const AudioDataTable = ({ selectedRow, onRowSelect, searchQuery, apiData,
         } else {
           // This is a dataset file (DatasetRow)
           const data = row.original as DatasetRow;
-          return <span className="text-xs">{getFrom(data, ["sentence", "transcript", "text", "emotion", "label"], "")}</span>;
+          return <span className="text-xs">{getFrom(data, ["sentence", "transcript", "text", "reading_passage", "emotion", "label"], "")}</span>;
         }
       },
     },
@@ -221,8 +221,8 @@ export const AudioDataTable = ({ selectedRow, onRowSelect, searchQuery, apiData,
   // Helper function to determine if ground truth should be shown
   const shouldShowGroundTruth = useMemo(() => {
     if (model.startsWith("whisper")) {
-      // Whisper models can show ground truth only for common-voice (has transcript)
-      return dataset === "common-voice";
+      // Whisper models can show ground truth for datasets with a reference transcript
+      return dataset === "common-voice" || dataset === "l2-arctic" || dataset === "saa";
     } else if (model === "wav2vec2") {
       // Wav2Vec2 models can show ground truth only for RAVDESS (has emotion labels)
       return dataset === "ravdess";
@@ -277,8 +277,8 @@ export const AudioDataTable = ({ selectedRow, onRowSelect, searchQuery, apiData,
         header: model.startsWith("whisper") ? "Ground Truth Transcript" : "Ground Truth Emotion",
         cell: ({ row }) => {
           const data = row.original as DatasetRow;
-          const groundTruthValue = model.startsWith("whisper") 
-            ? getFrom(data, ["sentence", "transcript", "text"], "")
+          const groundTruthValue = model.startsWith("whisper")
+            ? getFrom(data, ["sentence", "transcript", "text", "reading_passage"], "")
             : getFrom(data, ["emotion", "label"], "");
           return <span className="text-xs">{groundTruthValue}</span>;
         },

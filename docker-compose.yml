@@ -34,6 +34,27 @@ x-worker-common: &worker-common
     MKL_NUM_THREADS: "1"
     NUMEXPR_NUM_THREADS: "1"
     NUMBA_NUM_THREADS: "1"
+    # NUMBA_NUM_THREADS=1 alone doesn't stop numba's default threading layer
+    # (auto-picks TBB, falling back to OpenMP) from lazily initializing a
+    # native thread pool the first time a jitted ufunc runs (e.g. librosa's
+    # beat_track). If that init races a Celery prefork fork, the child's copy
+    # of that thread pool is corrupt and segfaults on first use (signal 11,
+    # no Python traceback). "workqueue" is numba's pure-C threading layer with
+    # no native thread pool to corrupt across fork -- forcing it here removes
+    # the crash class regardless of thread count.
+    NUMBA_THREADING_LAYER: "workqueue"
+    # The actual root cause of the librosa/numba SIGSEGVs (beat_track, yin):
+    # numba auto-detects this host's exact CPU feature set (confirmed via
+    # llvmlite.binding.get_host_cpu_features() -- Raptor Lake w/ AVX2/FMA/
+    # BMI2/etc, no AVX-512) and JIT-compiles machine code using those
+    # instructions. That code segfaults when actually executed in this
+    # container/virtualization environment -- reproduced in complete
+    # isolation (single-threaded, no fork, no concurrency, first call ever),
+    # which rules out the fork/threading-layer theory above entirely.
+    # Forcing a generic target with no exotic feature codegen fixed it
+    # (verified directly: beat_track and yin both ran clean under this pair).
+    NUMBA_CPU_NAME: "generic"
+    NUMBA_CPU_FEATURES: ""
     TOKENIZERS_PARALLELISM: "false"
     # Turns a future native crash into a Python traceback naming the offending
     # module, instead of just "signal 11 (SIGSEGV)".
@@ -41,6 +62,12 @@ x-worker-common: &worker-common
   volumes:
     - ./Backend/app:/app/app
     - ./Backend/shared-storage:/app/shared-storage
+    # FR-10 shards read built-in dataset audio (SAA/L2-ARCTIC/Common Voice/RAVDESS)
+    # and custom per-session datasets directly off disk via app.services.dataset_service
+    # / custom_dataset_service, the same way the API container already does (it
+    # mounts both below). Without these, a worker resolving a dataset file 404s.
+    - ./Backend/data:/app/data:ro
+    - ./Backend/uploads:/app/uploads
     - hf-cache:/home/appuser/.cache/huggingface
   depends_on:
     redis:
