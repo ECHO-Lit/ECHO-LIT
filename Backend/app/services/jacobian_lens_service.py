@@ -97,10 +97,13 @@ def _seq2seq_states(model: Any, inputs: dict[str, Any], transcript: str, process
     encoder_states = getattr(outputs, "encoder_hidden_states", None)
     decoder_states = getattr(outputs, "decoder_hidden_states", None)
     cross_attentions = getattr(outputs, "cross_attentions", None)
+    logits = getattr(outputs, "logits", None)
     if not encoder_states or not decoder_states or not cross_attentions or cross_attentions[-1] is None:
         raise JacobianLensError(
             "Seq2seq model did not return encoder/decoder states and cross-attention needed for a calibrated lens"
         )
+    if logits is None:
+        raise JacobianLensError("Seq2seq model did not return output logits")
     # Hugging Face includes the pre-transformer embedding state at index zero.
     # A lens is fitted for each actual encoder block, not that input embedding.
     if len(encoder_states) < 2:
@@ -108,7 +111,7 @@ def _seq2seq_states(model: Any, inputs: dict[str, Any], transcript: str, process
     # [batch, heads, decoder tokens, encoder frames].  The last decoder layer
     # is the closest available alignment to the vocabulary projection.
     alignment = cross_attentions[-1].mean(dim=1)
-    return tuple(encoder_states[1:]), decoder_states[-1], alignment
+    return tuple(encoder_states[1:]), logits, alignment
 
 
 def _ctc_states(model: Any, inputs: dict[str, Any]):
@@ -142,14 +145,15 @@ def _aligned_fit_pairs(
 ) -> tuple[list[Any], Any]:
     """Return equally timed encoder representations and frozen verbal targets."""
     if architecture == "seq2seq":
-        encoder_states, decoder_states, alignment = _seq2seq_states(model, inputs, transcript, processor)
+        encoder_states, logits, alignment = _seq2seq_states(model, inputs, transcript, processor)
         indices = _frame_indices(encoder_states[0].shape[1], frame_samples, encoder_states[0].device)
         sources = [state.index_select(1, indices).squeeze(0) for state in encoder_states]
-        # Distribute each teacher-forced decoder state over the encoder frames
-        # it attended to, then renormalise each selected frame.
+        # Logits are [batch, decoder_tokens, vocab].  Distribute per-decoder-token
+        # logits over the encoder frames each token attends to, then renormalise.
         selected_attention = alignment.index_select(2, indices).transpose(1, 2)
-        targets = selected_attention @ decoder_states
+        targets = selected_attention @ logits
         targets = targets / selected_attention.sum(dim=-1, keepdim=True).clamp_min(1e-6)
+        # Logits live in ℝ^vocab.  The lens predicts logits directly in vocab space.
         return sources, targets.squeeze(0)
     if architecture == "ctc":
         encoder_states, final_states = _ctc_states(model, inputs)
@@ -278,7 +282,6 @@ def fit_encoder_jacobian_lens(
         source_means.append(source_mean.float())
         target_means.append(target_mean.float())
 
-    projection_weight = projection.weight.detach().float().cpu()
     quality = [{"cosine_similarity_sum": 0.0, "top1_agreement_sum": 0.0, "frame_count": 0} for _ in weights]
     for index, (audio_path, transcript) in enumerate(validation_samples, start=len(train_samples) + 1):
         sources, targets = fit_pairs(audio_path, transcript)
@@ -287,8 +290,8 @@ def fit_encoder_jacobian_lens(
             values = source.detach().float().cpu()
             predicted = (values - source_means[layer]) @ weights[layer] + target_means[layer]
             cosine = torch.nn.functional.cosine_similarity(predicted, targets, dim=-1)
-            predicted_ids = (predicted @ projection_weight.T).argmax(dim=-1)
-            teacher_ids = (targets @ projection_weight.T).argmax(dim=-1)
+            predicted_ids = predicted.argmax(dim=-1)
+            teacher_ids = targets.argmax(dim=-1)
             quality[layer]["cosine_similarity_sum"] += float(cosine.sum())
             quality[layer]["top1_agreement_sum"] += float((predicted_ids == teacher_ids).sum())
             quality[layer]["frame_count"] += int(values.shape[0])
@@ -311,8 +314,8 @@ def fit_encoder_jacobian_lens(
         for layer, values in enumerate(quality)
     ]
     return {
-        "format_version": 2,
-        "method": "teacher_aligned_ridge_readout",
+        "format_version": 3,
+        "method": "teacher_aligned_logit_readout",
         "architecture": architecture,
         "model_id": adapter.model_id,
         "model_revision": adapter.jacobian_lens_revision(),
@@ -353,7 +356,7 @@ def apply_encoder_jacobian_lens(
     top_k: int,
     max_frames: int,
 ) -> dict[str, Any]:
-    if artifact.get("format_version") != 2 or artifact.get("method") != "teacher_aligned_ridge_readout":
+    if artifact.get("format_version") not in (2, 3) or artifact.get("method") not in ("teacher_aligned_ridge_readout", "teacher_aligned_logit_readout"):
         raise JacobianLensError("This is a legacy uncalibrated J-Lens. Refit it before interpreting its readout.")
     import torch
 
@@ -362,8 +365,8 @@ def apply_encoder_jacobian_lens(
         raise JacobianLensError("Lens was fitted for a different model revision")
     if artifact.get("architecture") != architecture:
         raise JacobianLensError("Lens architecture does not match this model")
+    format_version = artifact.get("format_version", 1)
     processor, model = adapter.jacobian_lens_components(resource)
-    projection = _output_projection(model)
     inputs, duration = _prepare_audio(processor, audio_path, max_audio_seconds=60.0)
     inputs = _move_to_device(inputs, _device_of(model))
     with torch.no_grad():
@@ -390,8 +393,7 @@ def apply_encoder_jacobian_lens(
         target_mean = target_mean.to(_device_of(model), dtype=torch.float32)
         frames = _pool_frames(state.squeeze(0), max_frames)
         frame_values = torch.stack([value for value, _, _ in frames]).float()
-        verbal_state = (frame_values - source_mean) @ weight + target_mean
-        logits = verbal_state @ projection.weight.to(verbal_state.device, dtype=torch.float32).T
+        logits = (frame_values - source_mean) @ weight + target_mean
         raw_logits = logits.clone()
         if token_prior_log_probs is not None:
             logits = logits - token_prior_log_probs.to(logits.device, dtype=torch.float32)

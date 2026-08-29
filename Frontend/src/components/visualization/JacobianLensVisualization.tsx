@@ -83,12 +83,13 @@ export const JacobianLensVisualization = ({
     );
   }, [result, hideStuckLayers]);
 
-  const readyLenses = useMemo(
-    () => lenses.filter((lens) => lens.status === "ready" && lens.format_version === 2),
+const readyLenses = useMemo(
+    () => lenses.filter((lens) => lens.status === "ready" && (lens.format_version === 2 || lens.format_version === 3)),
     [lenses],
   );
+
   const hasLegacyLenses = useMemo(
-    () => lenses.some((lens) => lens.status === "ready" && lens.format_version !== 2),
+    () => lenses.some((lens) => lens.status === "ready" && lens.format_version !== 2 && lens.format_version !== 3),
     [lenses],
   );
 
