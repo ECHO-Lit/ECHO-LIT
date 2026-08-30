@@ -384,6 +384,15 @@ class GenericHuggingFaceAdapter(AudioModelAdapter):
         matrix = layer[0, head_index].float().cpu().numpy()
         token_ids = generated_ids[0].tolist()
         tokenizer = getattr(processor, "tokenizer", processor)
+        # Exclude special tokens (SOT, language, task, EOT) from the matrix
+        # before any aggregation; they are attention sinks and would otherwise
+        # saturate the pair statistics and the timeline view.
+        special_ids = set(getattr(tokenizer, "all_special_ids", None) or [])
+        content_positions = [i for i, tid in enumerate(token_ids) if tid not in special_ids]
+        if not content_positions:
+            content_positions = list(range(len(token_ids)))
+        matrix = matrix[content_positions][:, content_positions]
+        token_ids = [token_ids[i] for i in content_positions]
         convert_ids = getattr(tokenizer, "convert_ids_to_tokens", None)
         raw_tokens = convert_ids(token_ids) if callable(convert_ids) else [str(token) for token in token_ids]
         count = min(len(raw_tokens), matrix.shape[0], matrix.shape[1], 64)

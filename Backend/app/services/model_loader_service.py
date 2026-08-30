@@ -176,6 +176,17 @@ def transcribe_whisper(model_id, audio_file, chunk_length_s=30, batch_size=8, re
                 logger.info("Method 1: Using generated IDs for attention...")
                 decoder_input_ids = generated_ids[:, :-1]  # Remove last token
                 logger.info(f"Decoder input shape: {decoder_input_ids.shape}")
+
+                # Special tokens (SOT, language, task, EOT, timestamps) act as
+                # attention sinks: nearly every row dumps mass onto them, which
+                # saturates any downstream mean/aggregate. Drop their rows/cols
+                # here so matrices only contain content tokens.
+                special_ids = set(processor.tokenizer.all_special_ids)
+                decoder_token_ids = generated_ids[0, :-1].tolist()
+                content_positions = [i for i, tid in enumerate(decoder_token_ids) if tid not in special_ids]
+                logger.info(
+                    f"Attention masking: excluding {len(decoder_token_ids) - len(content_positions)}/{len(decoder_token_ids)} special-token positions"
+                )
                 
                 outputs = model(
                     input_features,
@@ -195,14 +206,20 @@ def transcribe_whisper(model_id, audio_file, chunk_length_s=30, batch_size=8, re
                         if hasattr(attr_value, '__len__') and len(attr_value) > 0:
                             first_layer = attr_value[0]
                             logger.info(f"{attr} first layer shape: {first_layer.shape if hasattr(first_layer, 'shape') else 'No shape'}")
-                            
+
+                            mask_rows = attr in ('decoder_attentions', 'cross_attentions')
+                            mask_cols = attr == 'decoder_attentions'
+
                             # Convert to list format
                             for layer_idx, layer_att in enumerate(attr_value):
                                 if layer_att is not None and hasattr(layer_att, 'shape'):
-                                    # Take first batch item and convert to list
-                                    att_matrix = layer_att[0].cpu().numpy().tolist()
-                                    attention_data.append(att_matrix)
-                                    logger.info(f"Added layer {layer_idx} with shape {layer_att.shape}")
+                                    att_matrix = layer_att[0].cpu().numpy()
+                                    if mask_rows and content_positions:
+                                        att_matrix = att_matrix[content_positions]
+                                        if mask_cols:
+                                            att_matrix = att_matrix[:, content_positions]
+                                    attention_data.append(att_matrix.tolist())
+                                    logger.info(f"Added layer {layer_idx} with shape {att_matrix.shape}")
                             break
                     else:
                         logger.info(f"No {attr} found")
