@@ -262,6 +262,8 @@ def test_decoder_jacobian_lens_fit_matches_linear_closed_form(monkeypatch):
     pytest.importorskip("torch")
     import torch
 
+    torch.manual_seed(7)
+
     from app.services import jacobian_lens_service as service
 
     model = _TinyModel()
@@ -285,25 +287,28 @@ def test_decoder_jacobian_lens_fit_matches_linear_closed_form(monkeypatch):
         _TinyAdapter(),
         (processor, model),
         samples=[("unused.wav", "abc"), ("unused.wav", "def")],
-        probe_count=256,
+        probe_count=512,
         max_audio_seconds=30.0,
     )
     assert artifact["format_version"] == 2
     assert artifact["architecture"] == "decoder"
     assert artifact["sample_count"] == 2
-    assert artifact["probe_count"] == 256
+    assert artifact["probe_count"] == 512
     assert "baselines" not in artifact
     assert len(artifact["matrices"]) == 2
     for matrix, expected in zip(artifact["matrices"], expected_matrices):
         assert matrix.shape == (model.dim, model.dim)
-        deviation = (matrix - expected).abs().max()
-        scale = expected.abs().max()
-        assert deviation / scale < 0.15
+        # Frobenius-relative error aggregates every entry, so the residual
+        # probe noise concentrates instead of swinging a per-entry maximum.
+        relative_error = (matrix - expected).norm() / expected.norm()
+        assert relative_error < 0.1
 
 
 def test_decoder_jacobian_lens_apply_ranks_through_model_head(monkeypatch):
     pytest.importorskip("torch")
     import torch
+
+    torch.manual_seed(11)
 
     from app.services import jacobian_lens_service as service
 

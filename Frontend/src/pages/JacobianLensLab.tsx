@@ -129,7 +129,11 @@ export default function JacobianLensLab() {
       signal: controller.signal,
     })
       .then(async (response) => {
-        if (!response.ok) throw new Error(`Could not load dataset metadata (${response.status})`);
+        if (!response.ok) {
+          const detail = await response.json().catch(() => null);
+          const hint = typeof detail?.detail === "string" ? `: ${detail.detail}` : "";
+          throw new Error(`Could not load dataset metadata (${response.status})${hint}`);
+        }
         return response.json() as Promise<DatasetRow[]>;
       })
       .then(setRows)

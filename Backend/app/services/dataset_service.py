@@ -82,7 +82,11 @@ def load_metadata(dataset: str, session_id: Optional[str] = None) -> List[Dict[s
 
     csv_path = DATASET_PATHS[ds]
     if not csv_path.exists():
-        raise FileNotFoundError(f"Dataset metadata not found for: {dataset}")
+        raise FileNotFoundError(
+            f"Dataset files for '{dataset}' are not provisioned in this deployment "
+            f"(expected metadata at {csv_path}). Upload a custom dataset via "
+            "Manage Datasets, or provision Backend/data."
+        )
 
     csv_mtime = csv_path.stat().st_mtime
     cached = _metadata_cache.get(ds)
