@@ -28,7 +28,6 @@ interface LensFrame {
   start_time: number;
   end_time: number;
   tokens: LensToken[];
-  raw_tokens?: LensToken[];
 }
 
 interface LensLayer {
@@ -48,8 +47,7 @@ interface JacobianLensResult {
   lens_id: string;
   architecture: "seq2seq" | "ctc";
   duration_seconds: number;
-  method: string;
-  prior_correction?: boolean;
+  method?: string;
   quality?: { layers?: LensLayerQuality[] };
   layers: LensLayer[];
 }
@@ -84,12 +82,7 @@ export const JacobianLensVisualization = ({
   }, [result, hideStuckLayers]);
 
 const readyLenses = useMemo(
-    () => lenses.filter((lens) => lens.status === "ready" && (lens.format_version === 2 || lens.format_version === 3)),
-    [lenses],
-  );
-
-  const hasLegacyLenses = useMemo(
-    () => lenses.some((lens) => lens.status === "ready" && lens.format_version !== 2 && lens.format_version !== 3),
+    () => lenses.filter((lens) => lens.status === "ready"),
     [lenses],
   );
 
@@ -186,7 +179,6 @@ const readyLenses = useMemo(
           {!readyLenses.length && !loadError && (
             <p className="text-xs text-muted-foreground">No calibrated lens is available for this model in this session.</p>
           )}
-          {hasLegacyLenses && <p className="text-xs text-amber-700">An earlier uncalibrated lens is saved in this session. Refit it in J-Lens Lab before using its readout.</p>}
           {lensJob.isRunning && <p className="text-xs text-muted-foreground">{lensJob.status?.progress.message || "Reading encoder states…"}</p>}
           {(loadError || lensJob.error) && <p className="text-xs text-destructive">{loadError || lensJob.error}</p>}
         </CardContent>
@@ -201,12 +193,7 @@ const readyLenses = useMemo(
             </div>
           </CardHeader>
           <CardContent className="space-y-2">
-            <p className="text-[11px] text-muted-foreground">Frequemcy-corrected (PMI) readout: subtracts each token's training-set prior so that low-frequency content words with encoder evidence outrank common special tokens. Use the rank slider to change which rank is shown in the grid. Click a cell to inspect all top-{result.layers[0]?.frames[0]?.tokens.length || 5} tokens.</p>
-            {result.quality?.layers?.some((item) => item.validation_frames > 0) ? (
-              <p className="text-[11px] text-muted-foreground">Held-out calibration is shown per layer: cosine similarity compares the readout with the frozen teacher representation; token agreement compares their top vocabulary token.</p>
-            ) : (
-              <p className="text-[11px] text-amber-700">This lens has no held-out calibration because it was fitted with fewer than 10 samples. Treat the readout as exploratory.</p>
-            )}
+            <p className="text-[11px] text-muted-foreground">Each cell shows the #{topK + 1} most probable token for one pooled audio interval. Select a cell to inspect alternatives.</p>
             <div className="flex items-center gap-3 px-1 pb-1">
               <Label className="text-[11px] shrink-0">Token rank</Label>
               <Slider
@@ -257,9 +244,8 @@ const readyLenses = useMemo(
                 {result.layers.find((layer) => layer.layer === selectedCell.layer)?.quality?.cosine_similarity != null && (
                   <p className="text-muted-foreground">Held-out calibration: cosine {result.layers.find((layer) => layer.layer === selectedCell.layer)?.quality?.cosine_similarity?.toFixed(2)} · top-token agreement {((result.layers.find((layer) => layer.layer === selectedCell.layer)?.quality?.top1_agreement || 0) * 100).toFixed(0)}%</p>
                 )}
-                {result.prior_correction && <p className="text-[10px] text-muted-foreground">Frequency-corrected (PMI) — subtracts token prior so low-frequency content words with encoder evidence outrank common special tokens.</p>}
                 <div>
-                  <p className="text-[10px] font-medium mb-1">Corrected top tokens:</p>
+                  <p className="text-[10px] font-medium mb-1">Top tokens:</p>
                   <div className="flex flex-wrap gap-1">
                     {selectedCell.frame.tokens.map((token) => (
                       <Badge key={token.token_id} variant="secondary" className="text-[10px] font-mono">
@@ -268,18 +254,6 @@ const readyLenses = useMemo(
                     ))}
                   </div>
                 </div>
-                {selectedCell.frame.raw_tokens && selectedCell.frame.raw_tokens.some((t, i) => t.token_id !== selectedCell.frame.tokens[i]?.token_id) && (
-                  <div>
-                    <p className="text-[10px] font-medium mb-1">Raw (uncorrected) top tokens:</p>
-                    <div className="flex flex-wrap gap-1">
-                      {selectedCell.frame.raw_tokens.map((token) => (
-                        <Badge key={token.token_id} variant="outline" className="text-[10px] font-mono">
-                          {token.token} <span className="ml-1 text-muted-foreground">{token.probability != null ? `${(token.probability * 100).toFixed(1)}%` : token.score.toFixed(2)}</span>
-                        </Badge>
-                      ))}
-                    </div>
-                  </div>
-                )}
               </div>
             )}
           </CardContent>
