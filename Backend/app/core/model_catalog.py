@@ -36,7 +36,6 @@ CUSTOM_MODEL_CAPABILITIES: dict[ModelKind, frozenset[str]] = {
     }),
     ModelKind.CTC_ASR: frozenset({
         "prediction", "embedding", "saliency", "hidden_states", "layer_probe",
-        "jacobian_lens_fit", "jacobian_lens_apply",
     }),
     ModelKind.AUDIO_CLASSIFICATION: frozenset({
         "prediction", "embedding", "saliency", "hidden_states", "layer_probe",

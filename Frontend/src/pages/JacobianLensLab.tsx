@@ -213,7 +213,7 @@ export default function JacobianLensLab() {
           <FlaskConical className="h-5 w-5 text-primary" />
           <div>
             <h1 className="text-sm font-semibold">J-Lens Lab</h1>
-            <p className="text-[11px] text-muted-foreground">Fit and manage encoder Jacobian lenses for supported speech-to-text models.</p>
+            <p className="text-[11px] text-muted-foreground">Fit and manage decoder Jacobian lenses for supported speech-to-text models.</p>
           </div>
         </div>
         <Button asChild size="sm" variant="outline" className="text-xs"><Link to="/"><ArrowLeft className="mr-1 h-3.5 w-3.5" />Analysis workspace</Link></Button>
@@ -246,8 +246,8 @@ export default function JacobianLensLab() {
           </Card>
 
           <Card>
-            <CardHeader><CardTitle className="text-base">3. Fit the lens</CardTitle><CardDescription>The model remains frozen. Each layer learns a regularised, teacher-aligned readout and is checked on held-out samples when at least 10 are selected.</CardDescription></CardHeader>
-            <CardContent className="flex flex-wrap items-center gap-3"><Button onClick={() => void fitLens()} disabled={selectedSamples.length < 2 || fitJob.isRunning}>{fitJob.isRunning ? "Fitting encoder lenses…" : `Fit with ${selectedSamples.length} samples`}</Button>{fitJob.isRunning && <Button variant="outline" onClick={() => void fitJob.cancel()}>Cancel</Button>}{fitJob.isRunning && <span className="text-sm text-muted-foreground">{fitJob.status?.progress.message || "Preparing worker…"}</span>}{(error || fitJob.error) && <span className="text-sm text-destructive">{error || fitJob.error}</span>}{completedLensId && <span className="text-sm text-emerald-700">Lens {completedLensId} is ready. Open the analysis workspace and choose J-Lens.</span>}</CardContent>
+            <CardHeader><CardTitle className="text-base">3. Fit the lens</CardTitle><CardDescription>The model stays frozen. Each decoder layer gets one averaged, position-resolved Jacobian estimated with random probes and read out through the model's own output head.</CardDescription></CardHeader>
+            <CardContent className="flex flex-wrap items-center gap-3"><Button onClick={() => void fitLens()} disabled={selectedSamples.length < 2 || fitJob.isRunning}>{fitJob.isRunning ? "Fitting decoder lenses…" : `Fit with ${selectedSamples.length} samples`}</Button>{fitJob.isRunning && <Button variant="outline" onClick={() => void fitJob.cancel()}>Cancel</Button>}{fitJob.isRunning && <span className="text-sm text-muted-foreground">{fitJob.status?.progress.message || "Preparing worker…"}</span>}{(error || fitJob.error) && <span className="text-sm text-destructive">{error || fitJob.error}</span>}{completedLensId && <span className="text-sm text-emerald-700">Lens {completedLensId} is ready. Open the analysis workspace and choose J-Lens.</span>}</CardContent>
           </Card>
         </section>
 

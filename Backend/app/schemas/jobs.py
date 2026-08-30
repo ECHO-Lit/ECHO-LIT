@@ -109,7 +109,10 @@ class JacobianLensFitParameters(OperationParameters):
 class JacobianLensApplyParameters(OperationParameters):
     lens_id: str = Field(min_length=1, max_length=128)
     top_k: int = Field(default=5, ge=1, le=20)
-    max_frames: int = Field(default=96, ge=8, le=256)
+    # Positions to read come from the model's own greedy transcript unless a
+    # reference transcript is provided for a teacher-forced reading.
+    transcript: str | None = Field(default=None, max_length=4096)
+    max_new_tokens: int = Field(default=64, ge=8, le=256)
 
 
 class HiddenStatesParameters(OperationParameters):

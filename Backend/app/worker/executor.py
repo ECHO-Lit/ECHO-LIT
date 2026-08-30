@@ -377,7 +377,7 @@ async def _execute_jacobian_lens_fit(
 
     from app.repositories.jacobian_lenses import JacobianLensRepository
     from app.schemas.jacobian_lens import JacobianLensStatus
-    from app.services.jacobian_lens_service import fit_encoder_jacobian_lens
+    from app.services.jacobian_lens_service import fit_decoder_jacobian_lens
     from app.worker.model_adapters import get_model_adapter
     from app.worker.model_registry import model_registry
 
@@ -407,7 +407,7 @@ async def _execute_jacobian_lens_fit(
             progress=JobProgress(
                 current=completed,
                 total=total,
-                message=f"Fitting encoder Jacobian lenses ({completed}/{total})",
+                message=f"Fitting decoder Jacobian lenses ({completed}/{total})",
             ),
         )
         asyncio.run_coroutine_threadsafe(update, event_loop).result()
@@ -415,7 +415,7 @@ async def _execute_jacobian_lens_fit(
     # Fitting is CPU-bound. Keeping it in a worker thread lets the event loop
     # publish progress after each fitted or held-out sample.
     artifact = await asyncio.to_thread(
-        fit_encoder_jacobian_lens,
+        fit_decoder_jacobian_lens,
         adapter,
         resource,
         samples,
@@ -431,7 +431,7 @@ async def _execute_jacobian_lens_fit(
     metadata = {
         key: value
         for key, value in artifact.items()
-        if key not in {"matrices", "baselines"}
+        if key not in {"matrices"}
     }
     metadata.update({"lens_id": lens_id, "layer_count": len(artifact["matrices"])})
     storage.put_json(metadata_key, metadata)
@@ -451,7 +451,7 @@ async def _execute_jacobian_lens_apply(
 ) -> dict[str, Any]:
     from app.repositories.jacobian_lenses import JacobianLensRepository
     from app.schemas.jacobian_lens import JacobianLensStatus
-    from app.services.jacobian_lens_service import apply_encoder_jacobian_lens
+    from app.services.jacobian_lens_service import apply_decoder_jacobian_lens
     from app.worker.model_adapters import get_model_adapter
     from app.worker.model_registry import model_registry
 
@@ -462,10 +462,11 @@ async def _execute_jacobian_lens_apply(
     artifact = _load_torch_artifact(storage, record.artifact_key, temp_root / "lens.pt")
     adapter = get_model_adapter(envelope.model or "", envelope.model_spec)
     resource = model_registry.prepare(adapter, "jacobian_lens_apply")
-    output = apply_encoder_jacobian_lens(
+    output = apply_decoder_jacobian_lens(
         adapter, resource, artifact, str(audio_path),
         top_k=int(envelope.parameters["top_k"]),
-        max_frames=int(envelope.parameters["max_frames"]),
+        transcript=envelope.parameters.get("transcript"),
+        max_new_tokens=int(envelope.parameters.get("max_new_tokens", 64)),
     )
     return {"lens_id": lens_id, **output}
 
@@ -550,7 +551,7 @@ async def execute(envelope_data: dict[str, Any], celery_task_id: str) -> None:
                 progress=JobProgress(
                     current=0,
                     total=len(envelope.audio),
-                    message="Fitting encoder Jacobian lenses",
+                    message="Fitting decoder Jacobian lenses",
                 ),
             )
             with tempfile.TemporaryDirectory(prefix=f"echo-{envelope.job_id}-") as temp_dir:
