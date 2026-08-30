@@ -10,7 +10,8 @@ export type JobOperation =
   | 'jacobian_lens_fit'
   | 'jacobian_lens_apply'
   | 'hidden_states'
-  | 'layer_probe';
+  | 'layer_probe'
+  | 'encoder_analysis';
 
 export type JobState = 'queued' | 'started' | 'processing' | 'success' | 'failure' | 'cancelled';
 

@@ -20,6 +20,7 @@ class JobOperation(str, Enum):
     jacobian_lens_apply = "jacobian_lens_apply"
     hidden_states = "hidden_states"
     layer_probe = "layer_probe"
+    encoder_analysis = "encoder_analysis"
 
 
 class JobStatus(str, Enum):
@@ -41,12 +42,14 @@ MODEL_REQUIRED_OPERATIONS = {
     JobOperation.jacobian_lens_apply,
     JobOperation.hidden_states,
     JobOperation.layer_probe,
+    JobOperation.encoder_analysis,
 }
 SINGLE_AUDIO_OPERATIONS = {
     JobOperation.saliency,
     JobOperation.attention,
     JobOperation.perturbation,
     JobOperation.jacobian_lens_apply,
+    JobOperation.encoder_analysis,
 }
 # A probe is a cross-file comparison; one file cannot be cross-validated.
 MIN_AUDIO_OPERATIONS = {JobOperation.layer_probe: 2}
@@ -163,6 +166,18 @@ class LayerProbeParameters(HiddenStatesParameters):
         return self
 
 
+class EncoderAnalysisParameters(OperationParameters):
+    """Structural encoder analysis: attention distance profiles + layer CKA.
+
+    `max_encoder_frames` bounds the attention memory (layers x heads x N^2);
+    512 positions is ~10 s of audio, enough for the profiles while keeping
+    whisper-large's transient allocation reasonable.
+    """
+
+    max_encoder_frames: int = Field(default=512, ge=64, le=1500)
+    n_bins: int = Field(default=64, ge=8, le=128)
+
+
 PARAMETER_MODELS: dict[JobOperation, type[OperationParameters]] = {
     JobOperation.prediction: PredictionParameters,
     JobOperation.saliency: SaliencyParameters,
@@ -174,6 +189,7 @@ PARAMETER_MODELS: dict[JobOperation, type[OperationParameters]] = {
     JobOperation.jacobian_lens_apply: JacobianLensApplyParameters,
     JobOperation.hidden_states: HiddenStatesParameters,
     JobOperation.layer_probe: LayerProbeParameters,
+    JobOperation.encoder_analysis: EncoderAnalysisParameters,
 }
 
 

@@ -79,7 +79,7 @@ class WhisperAdapter(AudioModelAdapter):
             return "eager-attention"
         if operation == "saliency":
             return "gradient"
-        if operation in {"embedding", "hidden_states", "layer_probe"}:
+        if operation in {"embedding", "hidden_states", "layer_probe", "encoder_analysis"}:
             return "encoder"
         return "generation"
 
@@ -129,6 +129,15 @@ class WhisperAdapter(AudioModelAdapter):
             if result.get("error"):
                 raise RuntimeError(f"Attention extraction failed: {result['error']}")
             return result
+        if operation == "encoder_analysis":
+            from app.services.encoder_analysis_service import run_encoder_analysis
+
+            return run_encoder_analysis(
+                audio_path,
+                model_size="large" if self.model_id == "whisper-large" else "base",
+                max_encoder_frames=int(parameters.get("max_encoder_frames", 512)),
+                n_bins=int(parameters.get("n_bins", 64)),
+            )
         if operation == "embedding":
             from app.services.model_loader_service import extract_whisper_embeddings
 
