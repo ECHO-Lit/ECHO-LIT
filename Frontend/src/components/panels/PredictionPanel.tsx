@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { SaliencyVisualization } from "../visualization/SaliencyVisualization";
 import { AttentionVisualization } from "../visualization/AttentionVisualization";
+import { EncoderAnalysisVisualization } from "../visualization/EncoderAnalysisVisualization";
 import { JacobianLensVisualization } from "../visualization/JacobianLensVisualization";
 import { PerturbationTools } from "../analysis/PerturbationTools";
 import { useState, useEffect } from "react";
@@ -319,8 +320,9 @@ export const PredictionPanel = ({ selectedFile, selectedEmbeddingFile, model, da
   }, [selectedFile, selectedEmbeddingFile, model, dataset, originalDataset]);
 
   const hasAttention = !!model && (model.includes('whisper') || customModelHasAttention);
+  const hasEncoderAnalysis = !!model && model.includes('whisper');
   const hasJacobianLens = !!model && (model.includes('whisper') || customModelHasJacobianLens);
-  const tabCount = 2 + Number(hasAttention) + Number(hasJacobianLens);
+  const tabCount = 2 + Number(hasAttention) + Number(hasEncoderAnalysis) + Number(hasJacobianLens);
 
   return (
     <div className="h-full bg-panel-background border-t border-border">
@@ -329,6 +331,7 @@ export const PredictionPanel = ({ selectedFile, selectedEmbeddingFile, model, da
           <TabsList className="h-7 grid w-full bg-muted" style={{ gridTemplateColumns: `repeat(${tabCount}, minmax(0, 1fr))` }}>
             <TabsTrigger value="saliency" className="text-xs">Saliency</TabsTrigger>
             {hasAttention && <TabsTrigger value="attention" className="text-xs">Attention</TabsTrigger>}
+            {hasEncoderAnalysis && <TabsTrigger value="encoder-analysis" className="text-xs">Encoder</TabsTrigger>}
             {hasJacobianLens && <TabsTrigger value="jacobian-lens" className="text-xs">J-Lens</TabsTrigger>}
             <TabsTrigger value="perturbation" className="text-xs">Perturbation</TabsTrigger>
           </TabsList>
@@ -350,6 +353,18 @@ export const PredictionPanel = ({ selectedFile, selectedEmbeddingFile, model, da
             <TabsContent value="attention" className="m-0 h-full">
               <div className="p-3">
                 <AttentionVisualization
+                  selectedFile={selectedFile || selectedEmbeddingFile}
+                  model={model}
+                  dataset={originalDataset && originalDataset !== 'custom' ? originalDataset : dataset}
+                />
+              </div>
+            </TabsContent>
+          )}
+
+          {hasEncoderAnalysis && (
+            <TabsContent value="encoder-analysis" className="m-0 h-full">
+              <div className="p-3">
+                <EncoderAnalysisVisualization
                   selectedFile={selectedFile || selectedEmbeddingFile}
                   model={model}
                   dataset={originalDataset && originalDataset !== 'custom' ? originalDataset : dataset}
