@@ -15,19 +15,21 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { 
-  Upload, 
-  Plus, 
-  Trash2, 
-  FolderPlus, 
-  File, 
+import {
+  Upload,
+  Plus,
+  Trash2,
+  FolderPlus,
+  File,
   FileText,
   Database,
   AlertCircle,
   CheckCircle,
+  Tags,
   X
 } from "lucide-react";
 import { API_BASE } from '@/lib/api';
+import { DatasetLabelsTab } from './DatasetLabelsTab';
 
 interface CustomDataset {
   dataset_name: string;
@@ -308,7 +310,7 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
         </DialogHeader>
         
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1">
-          <TabsList className="grid w-full grid-cols-3">
+          <TabsList className="grid w-full grid-cols-4">
             <TabsTrigger value="list" className="flex items-center gap-2">
               <Database className="h-4 w-4" />
               My Datasets
@@ -320,6 +322,10 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
             <TabsTrigger value="upload" className="flex items-center gap-2">
               <Upload className="h-4 w-4" />
               Upload Files
+            </TabsTrigger>
+            <TabsTrigger value="labels" className="flex items-center gap-2">
+              <Tags className="h-4 w-4" />
+              Labels
             </TabsTrigger>
           </TabsList>
           
@@ -533,6 +539,10 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
                   )}
                 </Button>
               </div>
+            </TabsContent>
+
+            <TabsContent value="labels" className="space-y-4">
+              <DatasetLabelsTab datasets={datasets} />
             </TabsContent>
           </div>
         </Tabs>

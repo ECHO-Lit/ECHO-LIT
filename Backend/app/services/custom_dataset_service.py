@@ -3,10 +3,15 @@ import logging
 import csv
 import io
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 import hashlib
 from app.core.audio_probe import probe_audio
+from app.services.dataset_labels_service import (
+    attach_duration_bands,
+    label_columns,
+    merge_labels,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +19,11 @@ logger = logging.getLogger(__name__)
 SESSIONS_BASE_DIR = Path("uploads/sessions")
 MANIFEST_FILENAME_FIELDS = ("filename", "file", "filepath", "path")
 MANIFEST_TRANSCRIPT_FIELDS = ("transcript", "sentence", "text", "statement")
+
+# Answer key for the layer probes, stored beside the audio.  Held as the parsed
+# table rather than the uploaded CSV so that a filename-derived table and an
+# uploaded one are the same shape downstream.
+LABELS_FILENAME = "labels.json"
 
 class CustomDatasetManager:
     """Manages session-based custom datasets"""
@@ -246,12 +256,76 @@ class CustomDatasetManager:
         
         return file_path
     
+    # ------------------------------------------------------------------
+    # Labels -- the answer key the layer probes are graded against
+    # ------------------------------------------------------------------
+
+    def _labels_path(self, dataset_name: str) -> Path:
+        return self.datasets_dir / dataset_name / LABELS_FILENAME
+
+    def set_labels(
+        self,
+        dataset_name: str,
+        table: Dict[str, Dict[str, str]],
+        source: str,
+        warnings: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Store a filename -> {property: label} table for this dataset.
+
+        Replaces any existing table rather than merging into it: a user
+        re-uploading a corrected CSV expects the old labels gone, and a silent
+        union of two answer keys is impossible to reason about.
+        """
+        dataset_dir = self.datasets_dir / dataset_name
+        if not dataset_dir.exists():
+            raise ValueError(f"Dataset '{dataset_name}' does not exist")
+
+        record = {
+            "source": source,
+            "table": table,
+            "columns": sorted({column for labels in table.values() for column in labels}),
+            "n_labelled": len({key for key in table}),
+            "warnings": warnings or [],
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+        with self._labels_path(dataset_name).open("w", encoding="utf-8") as handle:
+            json.dump(record, handle, indent=2)
+        logger.info(
+            "Stored %d label rows (%s) for dataset '%s'",
+            len(table), source, dataset_name,
+        )
+        return record
+
+    def get_labels(self, dataset_name: str) -> Optional[Dict[str, Any]]:
+        path = self._labels_path(dataset_name)
+        if not path.exists():
+            return None
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                return json.load(handle)
+        except Exception as e:
+            logger.error(f"Could not read labels for dataset {dataset_name}: {e}")
+            return None
+
+    def clear_labels(self, dataset_name: str) -> bool:
+        path = self._labels_path(dataset_name)
+        if not path.exists():
+            return False
+        path.unlink()
+        return True
+
     def get_dataset_files_as_csv_format(self, dataset_name: str) -> List[Dict[str, str]]:
-        """Get dataset files in the same format as global datasets (for compatibility)"""
+        """Get dataset files in the same format as global datasets (for compatibility).
+
+        Beyond the file facts, this is where a custom dataset acquires the
+        columns the layer probes need: `duration_band` is derived for free from
+        what upload already measured, and any stored answer key is joined on.
+        Both are additive, so callers that only wanted filenames are unaffected.
+        """
         metadata = self.get_dataset_metadata(dataset_name)
         if not metadata:
             return []
-        
+
         csv_format_files = []
         transcripts = metadata.get("transcripts", {})
         for file_info in metadata["files"]:
@@ -263,8 +337,17 @@ class CustomDatasetManager:
                 "uploaded_at": file_info["uploaded_at"],
                 "transcript": transcripts.get(file_info["filename"], ""),
             })
-        
+
+        attach_duration_bands(csv_format_files)
+        stored = self.get_labels(dataset_name)
+        if stored and stored.get("table"):
+            merge_labels(csv_format_files, stored["table"])
+
         return csv_format_files
+
+    def get_label_columns(self, dataset_name: str) -> List[str]:
+        """Probeable columns this dataset currently offers."""
+        return label_columns(self.get_dataset_files_as_csv_format(dataset_name))
 
 
 def get_custom_dataset_manager(session_id: str) -> CustomDatasetManager:
