@@ -79,6 +79,10 @@ class WhisperAdapter(AudioModelAdapter):
             return "eager-attention"
         if operation == "saliency":
             return "gradient"
+        if operation == "saliency_faithfulness":
+            # Needs the decoder to score a transcript, which the gradient-only
+            # encoder variant does not carry.
+            return "jacobian-lens"
         if operation in {"embedding", "hidden_states", "layer_probe"}:
             return "encoder"
         return "generation"
@@ -137,7 +141,22 @@ class WhisperAdapter(AudioModelAdapter):
             )
         if operation in {"hidden_states", "layer_probe"}:
             return self._extract_hidden_states(audio_path, parameters)
+        if operation == "saliency_faithfulness":
+            return self._evaluate_faithfulness(audio_path, parameters)
         raise ValueError(f"{self.model_id} does not yet implement {operation}")
+
+    def _evaluate_faithfulness(self, audio_path: str, parameters: dict[str, Any]) -> Any:
+        """Score the saliency map against the transcript the model actually produces."""
+        from app.services.faithfulness_runner import run_faithfulness, seq2seq_transcript_scorer
+
+        # The J-lens resource is the processor plus the full generation model,
+        # which is exactly what teacher forcing needs; reusing it avoids holding
+        # a second copy of whisper-large in worker memory.
+        processor, model = self.load_resource("jacobian-lens")
+        return run_faithfulness(
+            audio_path, self.model_id, parameters,
+            seq2seq_transcript_scorer(model, processor),
+        )
 
     def _extract_hidden_states(self, audio_path: str, parameters: dict[str, Any]) -> Any:
         """Per-layer encoder activations for the layer-probing feature."""
@@ -200,6 +219,14 @@ class Wav2Vec2ClassificationAdapter(AudioModelAdapter):
             return extract_wav2vec2_embeddings(audio_path)
         if operation in {"hidden_states", "layer_probe"}:
             return self._extract_hidden_states(audio_path, parameters)
+        if operation == "saliency_faithfulness":
+            from app.services.faithfulness_runner import classification_scorer, run_faithfulness
+
+            feature_extractor, emo_model = self.load_resource("eager")
+            return run_faithfulness(
+                audio_path, self.model_id, parameters,
+                classification_scorer(emo_model, feature_extractor),
+            )
         raise ValueError(f"{self.model_id} does not yet implement {operation}")
 
     def _extract_hidden_states(self, audio_path: str, parameters: dict[str, Any]) -> Any:
@@ -270,11 +297,16 @@ class GenericHuggingFaceAdapter(AudioModelAdapter):
         return processor, model
 
     def execute(self, operation: str, audio_path: str, parameters: dict[str, Any], resource: Any = None) -> Any:
-        if operation not in {"prediction", "embedding", "saliency", "attention", "hidden_states", "layer_probe"}:
+        if operation not in {
+            "prediction", "embedding", "saliency", "saliency_faithfulness",
+            "attention", "hidden_states", "layer_probe",
+        }:
             raise ValueError(f"{self.model_id} does not yet implement {operation}")
         if resource is None:
             resource = self.load_resource("generic")
         processor, model = resource
+        if operation == "saliency_faithfulness":
+            return self._evaluate_faithfulness(processor, model, audio_path, parameters)
         if operation in {"hidden_states", "layer_probe"}:
             # Delegated before the shared audio preparation below: the service
             # owns loading so it can run the encoder twice for the noise probe.
@@ -437,6 +469,33 @@ class GenericHuggingFaceAdapter(AudioModelAdapter):
         text = str(token).replace("Ġ", " ").replace("▁", " ").strip()
         return text if text else f"token_{index + 1}"
 
+    def _evaluate_faithfulness(
+        self, processor: Any, model: Any, audio_path: str, parameters: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Score a custom model's saliency map, tracking whatever it outputs."""
+        from app.services.faithfulness_runner import (
+            classification_scorer,
+            ctc_transcript_scorer,
+            run_faithfulness,
+            seq2seq_transcript_scorer,
+        )
+
+        if self.kind == ModelKind.SEQ2SEQ_ASR:
+            scorer = seq2seq_transcript_scorer(model, processor)
+        elif self.kind == ModelKind.CTC_ASR:
+            scorer = ctc_transcript_scorer(model, processor)
+        else:
+            feature_extractor = getattr(processor, "feature_extractor", processor)
+            scorer = classification_scorer(model, feature_extractor)
+
+        def saliency_fn(path: str, method: str) -> dict[str, Any]:
+            # Route back through `execute` so the map comes from exactly the same
+            # code path as a standalone saliency job -- `generate_saliency` only
+            # knows the built-in models.
+            return self.execute("saliency", path, {"method": method}, (processor, model))
+
+        return run_faithfulness(audio_path, self.model_id, parameters, scorer, saliency_fn)
+
     def _generate_saliency(self, model: Any, inputs: dict[str, Any], audio: Any, sample_rate: int, parameters: dict[str, Any]) -> dict[str, Any]:
         """Produce input-gradient saliency for a standard Transformers audio model.
 
@@ -485,6 +544,9 @@ class GenericHuggingFaceAdapter(AudioModelAdapter):
         return {
             "model": self.model_id,
             "method": parameters.get("method", "gradcam"),
+            # This adapter always uses input x gradient regardless of `method`;
+            # saying so keeps the field meaningful across model kinds.
+            "attribution_source": "input_gradient",
             "segments": self._time_segments(series, total_duration),
             "total_duration": total_duration,
             "series": series.tolist(),
