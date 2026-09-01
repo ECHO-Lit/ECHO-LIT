@@ -31,15 +31,16 @@ class ModelDefinition:
 
 CUSTOM_MODEL_CAPABILITIES: dict[ModelKind, frozenset[str]] = {
     ModelKind.SEQ2SEQ_ASR: frozenset({
-        "prediction", "embedding", "saliency", "attention", "hidden_states",
-        "layer_probe", "jacobian_lens_fit", "jacobian_lens_apply",
+        "prediction", "embedding", "saliency", "saliency_faithfulness", "attention",
+        "hidden_states", "layer_probe", "jacobian_lens_fit", "jacobian_lens_apply",
     }),
     ModelKind.CTC_ASR: frozenset({
-        "prediction", "embedding", "saliency", "hidden_states", "layer_probe",
-        "jacobian_lens_fit", "jacobian_lens_apply",
+        "prediction", "embedding", "saliency", "saliency_faithfulness",
+        "hidden_states", "layer_probe", "jacobian_lens_fit", "jacobian_lens_apply",
     }),
     ModelKind.AUDIO_CLASSIFICATION: frozenset({
-        "prediction", "embedding", "saliency", "hidden_states", "layer_probe",
+        "prediction", "embedding", "saliency", "saliency_faithfulness",
+        "hidden_states", "layer_probe",
     }),
 }
 
@@ -62,6 +63,7 @@ MODEL_DEFINITIONS: dict[str, ModelDefinition] = {
             "embedding",
             "attention",
             "saliency",
+            "saliency_faithfulness",
             "hidden_states",
             "layer_probe",
             "decoder_activations",
@@ -78,6 +80,7 @@ MODEL_DEFINITIONS: dict[str, ModelDefinition] = {
             "embedding",
             "attention",
             "saliency",
+            "saliency_faithfulness",
             "hidden_states",
             "layer_probe",
             "decoder_activations",
@@ -93,6 +96,7 @@ MODEL_DEFINITIONS: dict[str, ModelDefinition] = {
             "prediction",
             "embedding",
             "saliency",
+            "saliency_faithfulness",
             "hidden_states",
             "layer_probe",
         }),
