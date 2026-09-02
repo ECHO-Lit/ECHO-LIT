@@ -58,7 +58,7 @@ const PropertyRow: React.FC<{ preview: PropertyPreview }> = ({ preview }) => {
 
       {preview.skipped_reason && (
         <div className="text-[11px] text-amber-700 dark:text-amber-500">
-          Will be skipped — {preview.skipped_reason}
+          Will be skipped - {preview.skipped_reason}
         </div>
       )}
 
@@ -149,7 +149,7 @@ export const DatasetLabelsTab: React.FC<DatasetLabelsTabProps> = ({ datasets }) 
         <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
         <span>
           Layer probing grades a classifier against known labels. Uploaded audio has none, so
-          attach an answer key here — from the filenames, or from your own CSV. Clip length is
+          attach an answer key here - from the filenames, or from your own CSV. Clip length is
           always available without any labels at all.
         </span>
       </div>
@@ -188,7 +188,7 @@ export const DatasetLabelsTab: React.FC<DatasetLabelsTabProps> = ({ datasets }) 
               <option value="">Choose a corpus pattern...</option>
               {patterns.map((pattern) => (
                 <option key={pattern.pattern_id} value={pattern.pattern_id}>
-                  {pattern.label} — {pattern.example}
+                  {pattern.label} - {pattern.example}
                 </option>
               ))}
             </select>
