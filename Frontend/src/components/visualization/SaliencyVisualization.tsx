@@ -7,6 +7,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { API_BASE } from '@/lib/api';
 import { firstJobResult, resolveAudioId } from '@/lib/jobs';
 import { useJob } from '@/hooks/use-job';
+import { FaithfulnessPanel } from './FaithfulnessPanel';
 
 interface SaliencySegment {
   start_time: number;
@@ -19,6 +20,8 @@ interface SaliencySegment {
 interface SaliencyData {
   model: string;
   method: string;
+  /** Set to `energy_fallback` when attribution failed and an energy map stood in. */
+  attribution_source?: string;
   segments: SaliencySegment[];
   total_duration: number;
   emotion?: string;
@@ -483,6 +486,11 @@ export const SaliencyVisualization = ({ selectedFile, model, dataset, originalDa
               </div>
             )}
             <div className="text-muted-foreground">
+              {saliencyData?.attribution_source === 'energy_fallback' && (
+                <span className="text-amber-600 dark:text-amber-500 mr-2">
+                  Attribution failed for this clip — showing an encoder energy map instead.
+                </span>
+              )}
               {selectedMethod === 'shap' && 'SHAP: additive feature attributions (dense, more stable).'}
               {selectedMethod === 'lime' && 'LIME: local perturbation explanations (can be noisy).'}
               {selectedMethod === 'gradcam' && 'Grad-CAM: gradient-weighted attention (coarser focus).'}
@@ -509,6 +517,14 @@ export const SaliencyVisualization = ({ selectedFile, model, dataset, originalDa
                 ))}
             </div>
           )}
+
+          {/* Does this map reflect what the model actually uses? */}
+          <FaithfulnessPanel
+            selectedFile={selectedFile}
+            model={model}
+            dataset={originalDataset && originalDataset !== "custom" ? originalDataset : dataset}
+            method={selectedMethod}
+          />
         </CardContent>
       </Card>
     </div>
