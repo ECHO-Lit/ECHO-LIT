@@ -178,7 +178,7 @@ export const FaithfulnessComparison = ({ result }: FaithfulnessComparisonProps) 
       </div>
 
       <Row
-        title="Before — original audio"
+        title="Before - original audio"
         caption={
           result.target.label
             ? `model output: "${result.target.label}"`
@@ -191,7 +191,7 @@ export const FaithfulnessComparison = ({ result }: FaithfulnessComparisonProps) 
       </Row>
 
       <Row
-        title={`After — top ${percentRemoved}% most salient removed`}
+        title={`After - top ${percentRemoved}% most salient removed`}
         caption="the audio the saliency map called important"
         score={comparison.masked_score}
         delta={comparison.masked_score - comparison.clean_score}
@@ -206,7 +206,7 @@ export const FaithfulnessComparison = ({ result }: FaithfulnessComparisonProps) 
       </Row>
 
       <Row
-        title={`Control — a random ${percentRemoved}% removed`}
+        title={`Control - a random ${percentRemoved}% removed`}
         caption="same amount of audio, chosen at random"
         score={comparison.random_score}
         delta={comparison.random_score - comparison.clean_score}
