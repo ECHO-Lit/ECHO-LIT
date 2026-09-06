@@ -12,11 +12,18 @@ router = APIRouter()
 
 @router.get("/metrics")
 async def metrics():
-    job_counts = await redis_module.job_redis.hgetall("metrics:jobs")
-    queue_depth = {
-        queue: await redis_module.broker_redis.llen(queue)
-        for queue in ("cpu", "gpu-fast", "gpu-large")
-    }
+    # A monitoring endpoint is needed most during an outage, so it degrades the
+    # way /health does rather than surfacing the dependency error as a 500.
+    try:
+        job_counts = await redis_module.job_redis.hgetall("metrics:jobs")
+        queue_depth = {
+            queue: await redis_module.broker_redis.llen(queue)
+            for queue in ("cpu", "gpu-fast", "gpu-large")
+        }
+    except Exception as exc:
+        return JSONResponse(
+            {"status": "degraded", "detail": f"metrics unavailable: {exc}"}, status_code=503
+        )
     return {
         "jobs": {key: int(value) for key, value in job_counts.items()},
         "queue_depth": queue_depth,

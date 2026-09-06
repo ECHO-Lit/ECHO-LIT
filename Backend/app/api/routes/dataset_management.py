@@ -95,9 +95,14 @@ async def upload_files_to_dataset(
     
     try:
         manager = get_custom_dataset_manager(session_id)
+        # Check the dataset exists before the per-file loop: inside it, the
+        # broad except below turns "no such dataset" into a per-file error and
+        # the client gets a 207 describing nothing instead of a 404.
+        if manager.get_dataset_metadata(dataset_name) is None:
+            raise ValueError(f"Dataset '{dataset_name}' does not exist")
         uploaded_files = []
         errors = []
-        
+
         for file in files:
             try:
                 # Read file data
