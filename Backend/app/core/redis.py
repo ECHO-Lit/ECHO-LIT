@@ -1,8 +1,9 @@
-import json, uuid
+import json, logging, uuid
 from typing import Any
 from redis.asyncio import from_url
-from redis.exceptions import RedisError
 from .settings import settings
+
+logger = logging.getLogger(__name__)
 
 # Initialize Redis connection with connection pool
 redis = from_url(
@@ -45,9 +46,26 @@ async def ensure_session(sid: str | None) -> str:
     await p.execute()
     return sid
 
+def _empty_queue() -> dict[str, Any]:
+    return {"items": [], "processing": None, "completed": []}
+
 async def get_queue(sid: str) -> dict[str, Any]:
     raw = await redis.get(k_queue(sid))
-    return json.loads(raw) if raw else {"items": [], "processing": None, "completed": []}
+    if not raw:
+        return _empty_queue()
+    try:
+        state = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        # A truncated or otherwise unreadable queue must not brick the session.
+        # add_item and set_progress both read before writing, so raising here
+        # would make /queue, /queue/add and /queue/progress fail for the whole
+        # 24h TTL with no way back except direct Redis access.
+        logger.warning("Discarding unreadable queue state for session %s", sid)
+        return _empty_queue()
+    if not isinstance(state, dict):
+        logger.warning("Discarding non-object queue state for session %s", sid)
+        return _empty_queue()
+    return state
 
 async def put_queue(sid: str, state: dict[str, Any]) -> None:
     await redis.set(k_queue(sid), json.dumps(state), ex=settings.SESSION_TTL_SECONDS)
@@ -57,4 +75,11 @@ async def cache_result(model: str, h: str, payload: dict, ttl: int = 6*60*60) ->
 
 async def get_result(model: str, h: str) -> dict | None:
     raw = await redis.get(k_result(model, h))
-    return json.loads(raw) if raw else None
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        # A corrupt cache entry is a miss, not an error: the caller recomputes.
+        logger.warning("Discarding unreadable cached result for %s:%s", model, h)
+        return None

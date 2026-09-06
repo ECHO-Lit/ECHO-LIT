@@ -89,7 +89,16 @@ class JobRepository:
                     record.cache_hit = cache_hit
                 if child_task_ids is not None:
                     record.child_task_ids = child_task_ids
-                record.error = error
+                # Only an explicit error overwrites the stored one. Updates that
+                # say nothing about failure -- a task_id stamp, a progress tick --
+                # must not silently erase why a job failed.
+                if error is not None:
+                    record.error = error
+                # A job that reached success carries no error, even if an earlier
+                # attempt recorded a retryable one (see the transient-failure path
+                # in worker/executor.py, which sets an error and then retries).
+                if record.status == JobStatus.success:
+                    record.error = None
                 record.updated_at = datetime.now(timezone.utc)
                 pipe.multi()
                 pipe.set(key, record.model_dump_json(), ex=settings.JOB_TTL_SECONDS)

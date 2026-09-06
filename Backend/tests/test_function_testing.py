@@ -14,6 +14,25 @@ from httpx import AsyncClient
 import tempfile
 import os
 
+from app.core.settings import settings
+from app.core.storage import get_storage
+
+
+@pytest.fixture(autouse=True)
+def isolated_storage(tmp_path, monkeypatch):
+    """Keep uploads out of the developer's real object store.
+
+    STORAGE_LOCAL_ROOT defaults to the relative path "shared-storage", and
+    get_storage is lru_cached, so without this every /upload in this module
+    writes real audio into Backend/shared-storage/ and leaves it there.
+    """
+    monkeypatch.setattr(settings, "STORAGE_BACKEND", "local")
+    monkeypatch.setattr(settings, "STORAGE_LOCAL_ROOT", str(tmp_path / "objects"))
+    get_storage.cache_clear()
+    yield
+    get_storage.cache_clear()
+
+
 # Test ML Model Integration (Critical Priority)
 class TestMLModelIntegration:
     """Test ML model loading, inference, and integration."""

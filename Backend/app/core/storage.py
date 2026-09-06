@@ -15,6 +15,12 @@ class StorageError(RuntimeError):
 
 
 def _safe_key(key: str) -> str:
+    # Backslashes are rejected before parsing: PurePosixPath treats "\" as an
+    # ordinary character, so "a\..\..\b" would survive the traversal check below
+    # and then mean different things on Windows and POSIX. Object keys are always
+    # built with forward slashes, so a backslash is never legitimate here.
+    if "\\" in key:
+        raise StorageError("Invalid object key")
     path = PurePosixPath(key)
     if path.is_absolute() or ".." in path.parts or not path.parts:
         raise StorageError("Invalid object key")
@@ -40,10 +46,14 @@ class ObjectStorage(ABC):
     def put_json(self, key: str, value: Any) -> None:
         import tempfile
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as handle:
-            json.dump(value, handle, allow_nan=False, separators=(",", ":"))
-            temp_path = Path(handle.name)
+        # temp_path is bound before anything can raise, so a rejected payload
+        # (allow_nan=False turns a NaN into a ValueError) still gets cleaned up
+        # instead of leaking the temp file into the system temp directory.
+        handle = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+        temp_path = Path(handle.name)
         try:
+            with handle:
+                json.dump(value, handle, allow_nan=False, separators=(",", ":"))
             self.put_file(key, temp_path, "application/json")
         finally:
             temp_path.unlink(missing_ok=True)

@@ -25,6 +25,43 @@ MANIFEST_TRANSCRIPT_FIELDS = ("transcript", "sentence", "text", "statement")
 # uploaded one are the same shape downstream.
 LABELS_FILENAME = "labels.json"
 
+
+def _write_json_atomic(path: Path, payload: Any) -> None:
+    """Write JSON so a crash mid-write cannot leave a truncated file.
+
+    Metadata and labels are read back on every subsequent operation, so a torn
+    write silently removes the dataset from the UI (the read paths treat an
+    unparseable file as absent). Writing to a sibling temp file and renaming
+    makes the replacement atomic on both POSIX and Windows.
+    """
+    temporary = path.with_name(path.name + ".tmp")
+    try:
+        with temporary.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+        temporary.replace(path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def _read_json_or_raise(path: Path, dataset_name: str) -> Dict:
+    """Read dataset JSON, turning corruption into the error the routes expect.
+
+    Read-only paths treat an unreadable file as "dataset absent". The mutating
+    paths cannot do that -- they would write a fresh document over whatever is
+    there -- so they surface a ValueError, which the upload routes already
+    translate into a 4xx rather than letting a JSONDecodeError escape as a 500.
+    """
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except json.JSONDecodeError as exc:
+        logger.error("Corrupt metadata for dataset '%s': %s", dataset_name, exc)
+        raise ValueError(
+            f"Dataset '{dataset_name}' has unreadable metadata and cannot be modified"
+        ) from exc
+
+
 class CustomDatasetManager:
     """Manages session-based custom datasets"""
     
@@ -55,9 +92,8 @@ class CustomDatasetManager:
         }
         
         metadata_file = dataset_dir / "dataset_metadata.json"
-        with metadata_file.open("w") as f:
-            json.dump(metadata, f, indent=2)
-        
+        _write_json_atomic(metadata_file, metadata)
+
         logger.info(f"Created custom dataset '{dataset_name}' for session {self.session_id}")
         return metadata
     
@@ -70,9 +106,8 @@ class CustomDatasetManager:
             raise ValueError(f"Dataset '{dataset_name}' does not exist")
         
         # Load existing metadata
-        with metadata_file.open("r") as f:
-            metadata = json.load(f)
-        
+        metadata = _read_json_or_raise(metadata_file, dataset_name)
+
         # Generate unique filename to avoid conflicts
         file_path = dataset_dir / filename
         counter = 1
@@ -115,9 +150,8 @@ class CustomDatasetManager:
             metadata["manifest"]["unmatched_filenames"] = unmatched[:20]
         
         # Save updated metadata
-        with metadata_file.open("w") as f:
-            json.dump(metadata, f, indent=2)
-        
+        _write_json_atomic(metadata_file, metadata)
+
         logger.info(f"Added file '{filename}' to dataset '{dataset_name}' in session {self.session_id}")
         return file_metadata
 
@@ -168,8 +202,7 @@ class CustomDatasetManager:
         if not transcripts:
             raise ValueError("Dataset manifest contains no filename/transcript pairs")
 
-        with metadata_file.open("r", encoding="utf-8") as handle:
-            metadata = json.load(handle)
+        metadata = _read_json_or_raise(metadata_file, dataset_name)
         stored_files = {file_info["filename"] for file_info in metadata.get("files", [])}
         matched = sum(name in stored_files for name in transcripts)
         unmatched = sorted(name for name in transcripts if name not in stored_files)
@@ -183,8 +216,7 @@ class CustomDatasetManager:
             "matched_audio_count": matched,
             "unmatched_filenames": unmatched[:20],
         }
-        with metadata_file.open("w", encoding="utf-8") as handle:
-            json.dump(metadata, handle, indent=2)
+        _write_json_atomic(metadata_file, metadata)
         return {
             "filename": Path(filename).name,
             "pair_count": len(transcripts),
@@ -288,8 +320,7 @@ class CustomDatasetManager:
             "warnings": warnings or [],
             "updated_at": datetime.utcnow().isoformat(),
         }
-        with self._labels_path(dataset_name).open("w", encoding="utf-8") as handle:
-            json.dump(record, handle, indent=2)
+        _write_json_atomic(self._labels_path(dataset_name), record)
         logger.info(
             "Stored %d label rows (%s) for dataset '%s'",
             len(table), source, dataset_name,

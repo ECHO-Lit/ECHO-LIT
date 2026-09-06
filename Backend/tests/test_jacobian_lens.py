@@ -2,6 +2,24 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.core.settings import settings
+from app.core.storage import get_storage
+
+
+@pytest.fixture(autouse=True)
+def isolated_storage(tmp_path, monkeypatch):
+    """Keep uploads out of the developer's real object store.
+
+    STORAGE_LOCAL_ROOT defaults to the relative path "shared-storage", and
+    get_storage is lru_cached, so without this every /upload in this module
+    writes real audio into Backend/shared-storage/ and leaves it there.
+    """
+    monkeypatch.setattr(settings, "STORAGE_BACKEND", "local")
+    monkeypatch.setattr(settings, "STORAGE_LOCAL_ROOT", str(tmp_path / "objects"))
+    get_storage.cache_clear()
+    yield
+    get_storage.cache_clear()
+
 
 def test_jacobian_lens_job_contract_requires_paired_owned_audio():
     from pydantic import ValidationError
