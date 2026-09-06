@@ -44,6 +44,24 @@ def _write_json_atomic(path: Path, payload: Any) -> None:
         raise
 
 
+def _validated_dataset_name(dataset_name: str) -> str:
+    """Reject names that would resolve outside the session's own directory.
+
+    The name arrives from a user-supplied form field and is joined straight onto
+    `datasets_dir`, so a separator or a parent reference in it escapes the
+    session tree entirely -- which is the boundary every FR-2 isolation
+    guarantee rests on. Names are a single path segment, nothing more.
+    """
+    name = (dataset_name or "").strip()
+    if not name or name in {".", ".."}:
+        raise ValueError("Dataset name must not be empty")
+    if "/" in name or "\\" in name or "\x00" in name:
+        raise ValueError("Dataset name must not contain path separators")
+    if Path(name).name != name:
+        raise ValueError("Dataset name must be a single path segment")
+    return name
+
+
 def _read_json_or_raise(path: Path, dataset_name: str) -> Dict:
     """Read dataset JSON, turning corruption into the error the routes expect.
 
@@ -75,8 +93,9 @@ class CustomDatasetManager:
     
     def create_dataset(self, dataset_name: str) -> Dict:
         """Create a new custom dataset"""
+        dataset_name = _validated_dataset_name(dataset_name)
         dataset_dir = self.datasets_dir / dataset_name
-        
+
         if dataset_dir.exists():
             raise ValueError(f"Dataset '{dataset_name}' already exists in this session")
         
