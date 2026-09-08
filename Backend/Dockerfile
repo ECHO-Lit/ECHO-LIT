@@ -19,7 +19,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-![1785920988055](image/Dockerfile/1785920988055.png)![1785920992363](image/Dockerfile/1785920992363.png)![1785920999888](image/Dockerfile/1785920999888.png)# Installed per role/variant, because ffmpeg's dependency closure is ~230 packages
+# Installed per role/variant, because ffmpeg's dependency closure is ~230 packages
 # and neither it nor gcc is needed everywhere:
 #   libsndfile1 - everywhere; soundfile loads it at import time, including in the API.
 #   ffmpeg      - workers only; the API never decodes audio.

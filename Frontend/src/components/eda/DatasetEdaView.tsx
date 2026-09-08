@@ -60,7 +60,7 @@ const CORRELATION_FEATURE_LIMIT = 8;
 const OUTLIER_Z_THRESHOLD = 3;
 const OUTLIER_LIST_LIMIT = 10;
 // Datasets with a server-side metadata EDA endpoint, i.e. those that can be compared.
-const COMPARABLE_DATASETS = ["common-voice", "ravdess"];
+const COMPARABLE_DATASETS = ["common-voice", "ravdess", "l2-arctic", "saa"];
 
 async function fetchEdaFor(dataset: string, signal?: AbortSignal): Promise<MetadataEda> {
   const res = await fetch(`${API_BASE}/${dataset}/eda`, { credentials: "include", signal });

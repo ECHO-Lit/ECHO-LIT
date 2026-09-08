@@ -34,7 +34,7 @@ celery_app.conf.update(
 
 
 def queue_for(operation: str, model: str | None) -> str:
-    if operation in {"perturbation", "audio_features"}:
+    if operation in {"perturbation", "audio_features", "linguistic_acoustic", "fairness"}:
         return "cpu"
     # Faithfulness is a saliency run plus dozens of extra forward passes, so it
     # belongs on the same queue as saliency rather than the fast one.

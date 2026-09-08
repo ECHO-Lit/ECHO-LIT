@@ -11,20 +11,32 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
+from app.core.celery_app import celery_app
 from app.core.settings import settings
 from app.core.audio_probe import probe_audio
 from app.core.storage import LocalObjectStorage, StorageError, get_storage
 from app.repositories.audio import AudioRepository
-from app.schemas.jobs import AudioAsset
+from app.schemas.jobs import AudioAsset, JobOperation, TaskEnvelope
 
 
 router = APIRouter()
 ALLOWED_EXTENSIONS = {".wav", ".mp3", ".m4a", ".flac"}
 
+# Mirrors `app.services.perturbation_service.OPERATORS` keys. Not imported directly:
+# that module pulls in librosa at import time, which is deliberately absent from the
+# API image (DSP/inference only ever runs on workers -- see analyses.py's docstring).
+_RENDERABLE_PROPERTIES = {"identity", "pitch", "speed", "noise", "time_mask", "freq_mask"}
+
 
 class MaterializeAudioRequest(BaseModel):
     dataset: str
     filename: str
+
+
+class VariantAudioRequest(BaseModel):
+    property: str
+    theta: float | tuple[float, float]
+    repeat: int = 0
 
 
 def _asset_response(asset: AudioAsset) -> dict:
@@ -197,3 +209,55 @@ async def serve_audio(audio_id: str, request: Request):
 @router.get("/upload/file/{audio_id}", deprecated=True)
 async def serve_audio_compatibility(audio_id: str, request: Request):
     return await _serve_audio(audio_id, request)
+
+
+@router.post("/audio/{audio_id}/variant")
+async def render_variant_audio(audio_id: str, payload: VariantAudioRequest, request: Request):
+    """On-demand playback render for one sensitivity-curve point.
+
+    FR-7 sweep results are cached across sessions by content hash (see
+    `linguistic_acoustic_service.sweep_cache_key`), and that cache copy strips
+    `playback_url`/`variant_audio_id` because those point at a session-owned
+    AudioAsset the cache hit's session may not own. `render_variant` is a pure
+    function of (baseline bytes, property, theta, repeat), so re-rendering it
+    reproduces the same audio on demand instead of leaving playback dead.
+
+    The actual DSP runs on the cpu worker (`fr7_render_variant`/`render_and_register`,
+    the same task the original sweep uses) -- the API process never imports librosa.
+    """
+    session_id = request.state.sid
+    asset = await AudioRepository().get_owned(audio_id, session_id)
+    if not asset:
+        raise HTTPException(status_code=404, detail="Audio not found")
+    if payload.property not in _RENDERABLE_PROPERTIES:
+        raise HTTPException(status_code=400, detail=f"Unknown property: {payload.property}")
+
+    job_id = uuid.uuid4().hex
+    envelope = TaskEnvelope(
+        job_id=job_id, session_id=session_id, operation=JobOperation.linguistic_acoustic,
+        audio=[], result_schema_version=settings.RESULT_SCHEMA_VERSION, code_version=settings.CODE_VERSION,
+    )
+    spec_data = {
+        "variant_id": f"ondemand-{uuid.uuid4().hex[:8]}", "property": payload.property,
+        "theta": payload.theta, "repeat": payload.repeat, "is_control": False,
+        "audio_id": asset.audio_id, "object_key": asset.object_key,
+        "filename": asset.filename, "baseline_sha256": asset.sha256,
+    }
+
+    try:
+        task_handle = celery_app.send_task(
+            "app.worker.tasks.fr7_render_variant",
+            args=[envelope.model_dump(mode="json"), spec_data], queue="cpu",
+        )
+        rendered = await asyncio.to_thread(task_handle.get, timeout=45)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Variant render failed") from exc
+
+    if not rendered.get("applicable"):
+        raise HTTPException(
+            status_code=422, detail=rendered.get("reason") or "Variant not applicable at this parameter"
+        )
+    return {
+        "variant_audio_id": rendered["variant_audio_id"],
+        "playback_url": rendered["playback_url"],
+    }

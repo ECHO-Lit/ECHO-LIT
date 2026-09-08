@@ -39,7 +39,7 @@ def compute_metadata_eda(dataset: str, session_id: Optional[str] = None) -> dict
     labels = [r.get("emotion") or r.get("label") for r in rows]
     labels = [l for l in labels if l]
 
-    sentences = [r.get("sentence") or r.get("transcript") or r.get("text") or "" for r in rows]
+    sentences = [r.get("sentence") or r.get("transcript") or r.get("text") or r.get("reading_passage") or "" for r in rows]
     word_counts = [len(s.split()) for s in sentences if s]
 
     sample_rates = [r.get("sample_rate") or r.get("samplerate") for r in rows]

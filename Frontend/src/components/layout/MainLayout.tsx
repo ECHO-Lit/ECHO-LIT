@@ -1,4 +1,4 @@
-import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import { Panel, PanelGroup, PanelResizeHandle, ImperativePanelHandle } from "react-resizable-panels";
 import { Toolbar } from "./Toolbar";
 import { EmbeddingPanel } from "../panels/EmbeddingPanel";
 import { AudioDatasetPanel } from "../panels/AudioDatasetPanel";
@@ -334,6 +334,35 @@ export const MainLayout = () => {
   // Filenames the Dataset EDA tab wants the file table restricted to (or null).
   const [edaFilter, setEdaFilter] = useState<string[] | null>(null);
 
+  // Side/bottom panel visibility (Visual Studio-style panel toggles)
+  const leftPanelRef = useRef<ImperativePanelHandle>(null);
+  const rightPanelRef = useRef<ImperativePanelHandle>(null);
+  const bottomPanelRef = useRef<ImperativePanelHandle>(null);
+  const [leftPanelOpen, setLeftPanelOpen] = useState(true);
+  const [rightPanelOpen, setRightPanelOpen] = useState(true);
+  const [bottomPanelOpen, setBottomPanelOpen] = useState(true);
+
+  const toggleLeftPanel = useCallback(() => {
+    const panel = leftPanelRef.current;
+    if (!panel) return;
+    if (panel.isCollapsed()) panel.expand();
+    else panel.collapse();
+  }, []);
+
+  const toggleRightPanel = useCallback(() => {
+    const panel = rightPanelRef.current;
+    if (!panel) return;
+    if (panel.isCollapsed()) panel.expand();
+    else panel.collapse();
+  }, []);
+
+  const toggleBottomPanel = useCallback(() => {
+    const panel = bottomPanelRef.current;
+    if (!panel) return;
+    if (panel.isCollapsed()) panel.expand();
+    else panel.collapse();
+  }, []);
+
   const handlePredictionUpdate = (fileId: string, prediction: string) => {
     setPredictionMap(prev => {
       const updated = { ...prev, [fileId]: prediction };
@@ -506,13 +535,27 @@ export const MainLayout = () => {
           dataset={dataset}
           setDataset={setDataset}
           onBatchInference={handleBatchInference}
+          leftPanelOpen={leftPanelOpen}
+          rightPanelOpen={rightPanelOpen}
+          bottomPanelOpen={bottomPanelOpen}
+          onToggleLeftPanel={toggleLeftPanel}
+          onToggleRightPanel={toggleRightPanel}
+          onToggleBottomPanel={toggleBottomPanel}
         />
 
         {/* Main Content Area */}
         <div className="flex-1 overflow-hidden bg-background">
           <PanelGroup direction="horizontal" className="h-full">
             {/* Left Panel: Embeddings & Scalar Plots */}
-            <Panel defaultSize={25} minSize={20}>
+            <Panel
+              ref={leftPanelRef}
+              defaultSize={25}
+              minSize={20}
+              collapsible
+              collapsedSize={0}
+              onCollapse={() => setLeftPanelOpen(false)}
+              onExpand={() => setLeftPanelOpen(true)}
+            >
               <EmbeddingPanel
                 model={model}
                 dataset={dataset}
@@ -544,7 +587,15 @@ export const MainLayout = () => {
                 <PanelResizeHandle className="h-1 bg-border hover:bg-primary/20 transition-colors" />
 
                 {/* Bottom Panel: Audio Dataset Table */}
-                <Panel defaultSize={30} minSize={20}>
+                <Panel
+                  ref={bottomPanelRef}
+                  defaultSize={30}
+                  minSize={20}
+                  collapsible
+                  collapsedSize={0}
+                  onCollapse={() => setBottomPanelOpen(false)}
+                  onExpand={() => setBottomPanelOpen(true)}
+                >
                   <AudioDatasetPanel
                     apiData={apiData}
                     uploadedFiles={uploadedFiles}
@@ -571,8 +622,16 @@ export const MainLayout = () => {
             <PanelResizeHandle className="w-1 bg-border hover:bg-primary/20 transition-colors" />
             
             {/* Right Panel: Audio Player & Label Editor */}
-            <Panel defaultSize={25} minSize={20}>
-              <DatapointEditorPanel 
+            <Panel
+              ref={rightPanelRef}
+              defaultSize={25}
+              minSize={20}
+              collapsible
+              collapsedSize={0}
+              onCollapse={() => setRightPanelOpen(false)}
+              onExpand={() => setRightPanelOpen(true)}
+            >
+              <DatapointEditorPanel
                 selectedFile={selectedFile}
                 selectedEmbeddingFile={selectedEmbeddingFile}
                 dataset={effectiveDataset}
