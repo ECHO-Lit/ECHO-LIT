@@ -1,4 +1,5 @@
 import { API_BASE, AudioReference } from './api';
+import { describeHttpError } from './httpError';
 
 export type JobOperation =
   | 'prediction'
@@ -38,14 +39,9 @@ export interface CreateJobInput {
   parameters?: Record<string, unknown>;
 }
 
-async function parseError(response: Response): Promise<Error> {
-  try {
-    const body = await response.json();
-    return new Error(body.detail || `Request failed (${response.status})`);
-  } catch {
-    return new Error(`Request failed (${response.status})`);
-  }
-}
+// Delegates to the single US-4 error describer. Kept as a local name so the
+// call sites below read unchanged.
+const parseError = (response: Response): Promise<Error> => describeHttpError(response);
 
 export async function materializeAudio(
   dataset: string,
