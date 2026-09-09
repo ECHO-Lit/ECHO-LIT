@@ -18,8 +18,8 @@ export const ChartCard = ({ title, explanation, children, resize = "y", actions 
       <span className="text-xs font-medium text-foreground">{title}</span>
       {explanation && (
         <Tooltip>
-          <TooltipTrigger>
-            <HelpCircle className="h-3 w-3 text-muted-foreground" />
+          <TooltipTrigger aria-label="More information">
+            <HelpCircle className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
           </TooltipTrigger>
           <TooltipContent className="max-w-xs text-xs">{explanation}</TooltipContent>
         </Tooltip>

@@ -144,7 +144,7 @@ export function FairnessPanel({ model, dataset, originalDataset }: FairnessPanel
               <InfoTooltip text="The metadata column that defines the groups being compared, e.g. native_language or accent." />
             </Label>
             <Select value={groupingColumn} onValueChange={setGroupingColumn} disabled={job.isRunning}>
-              <SelectTrigger className="h-8 text-xs">
+              <SelectTrigger className="h-8 text-xs" aria-label="Group by">
                 <SelectValue placeholder={columnsQuery.isLoading ? "Loading columns…" : "Select a column"} />
               </SelectTrigger>
               <SelectContent>
@@ -172,7 +172,7 @@ export function FairnessPanel({ model, dataset, originalDataset }: FairnessPanel
               onValueChange={(v) => setReferenceGroup(v === "__auto__" ? "" : v)}
               disabled={job.isRunning || !groupingColumn}
             >
-              <SelectTrigger className="h-8 text-xs">
+              <SelectTrigger className="h-8 text-xs" aria-label="Reference group">
                 <SelectValue placeholder="Auto (largest group)" />
               </SelectTrigger>
               <SelectContent>
@@ -188,22 +188,24 @@ export function FairnessPanel({ model, dataset, originalDataset }: FairnessPanel
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label className="text-xs flex items-center gap-1">
+              <Label htmlFor="fairness-min-group-size" className="text-xs flex items-center gap-1">
                 Min group size
                 <InfoTooltip text={FR10_GLOSSARY.minGroupSize} />
               </Label>
               <Input
+                id="fairness-min-group-size"
                 type="number" min={2} max={1000} value={minGroupSize} disabled={job.isRunning}
                 onChange={(e) => setMinGroupSize(Math.max(2, Number(e.target.value) || 2))}
                 className="h-8 text-xs"
               />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs flex items-center gap-1">
+              <Label htmlFor="fairness-min-speakers" className="text-xs flex items-center gap-1">
                 Min speakers
                 <InfoTooltip text={FR10_GLOSSARY.minSpeakers} />
               </Label>
               <Input
+                id="fairness-min-speakers"
                 type="number" min={1} max={100} value={minSpeakers} disabled={job.isRunning}
                 onChange={(e) => setMinSpeakers(Math.max(1, Number(e.target.value) || 1))}
                 className="h-8 text-xs"
@@ -264,7 +266,7 @@ export function FairnessPanel({ model, dataset, originalDataset }: FairnessPanel
           </div>
 
           {job.isRunning && job.progress && (
-            <div className="space-y-1">
+            <div className="space-y-1" role="status" aria-live="polite">
               <Progress value={progressPct} />
               <p className="text-xs text-muted-foreground">{job.progress.message}</p>
             </div>

@@ -196,14 +196,15 @@ export default function JacobianLensLab() {
 
       <div className="mx-auto grid max-w-7xl gap-5 p-6 lg:grid-cols-[minmax(0,1fr)_340px]">
         <section className="space-y-5">
+          <h2 className="sr-only">Fit a Jacobian lens</h2>
           <Card>
             <CardHeader>
               <CardTitle className="text-base">1. Choose a model and dataset</CardTitle>
               <CardDescription>The dataset must contain an audio filename plus a transcript field (`sentence`, `transcript`, `text`, or RAVDESS `statement`). For a custom dataset, upload audio and `metadata.csv` in Manage Datasets first.</CardDescription>
             </CardHeader>
             <CardContent className="grid gap-4 md:grid-cols-2">
-              <div className="space-y-2"><Label>Speech-to-text model</Label><Select value={model} onValueChange={setModel}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{modelOptions.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectContent></Select></div>
-              <div className="space-y-2"><Label>Transcript dataset</Label><Select value={dataset} onValueChange={setDataset}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="common-voice">Common Voice</SelectItem><SelectItem value="ravdess">RAVDESS</SelectItem>{customDatasets.map((item) => <SelectItem key={item.formatted_name} value={item.formatted_name}>{item.dataset_name}</SelectItem>)}</SelectContent></Select></div>
+              <div className="space-y-2"><Label>Speech-to-text model</Label><Select value={model} onValueChange={setModel}><SelectTrigger aria-label="Speech-to-text model"><SelectValue /></SelectTrigger><SelectContent>{modelOptions.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectContent></Select></div>
+              <div className="space-y-2"><Label>Transcript dataset</Label><Select value={dataset} onValueChange={setDataset}><SelectTrigger aria-label="Transcript dataset"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="common-voice">Common Voice</SelectItem><SelectItem value="ravdess">RAVDESS</SelectItem>{customDatasets.map((item) => <SelectItem key={item.formatted_name} value={item.formatted_name}>{item.dataset_name}</SelectItem>)}</SelectContent></Select></div>
             </CardContent>
           </Card>
 
@@ -226,7 +227,7 @@ export default function JacobianLensLab() {
           </Card>
         </section>
 
-        <aside><Card><CardHeader><div className="flex items-center justify-between"><CardTitle className="text-base">Saved lenses</CardTitle><Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => void refreshLenses()}><RefreshCw className="h-3.5 w-3.5" /></Button></div><CardDescription>Available for {model} in this session.</CardDescription></CardHeader><CardContent className="space-y-2">{!lenses.length ? <p className="text-sm text-muted-foreground">No lenses fitted yet.</p> : lenses.map((lens) => <div key={lens.lens_id} className="rounded border p-2 text-xs"><div className="flex items-center justify-between gap-2"><span className="font-mono">{lens.lens_id.slice(-8)}</span><Badge variant={lens.status === "ready" && lens.format_version === 2 ? "secondary" : "outline"}>{lens.status === "ready" && lens.format_version !== 2 ? "refit required" : lens.status}</Badge></div><p className="mt-1 text-muted-foreground">{lens.architecture || "ASR"} · {lens.layer_count ?? "?"} layers · {lens.sample_count} samples</p>{lens.status === "ready" && lens.format_version !== 2 && <p className="mt-1 text-amber-700">Legacy uncalibrated readout. Refit before interpreting.</p>}{lens.error && <p className="mt-1 text-destructive">{lens.error}</p>}</div>)}</CardContent></Card></aside>
+        <aside><h2 className="sr-only">Saved lenses</h2><Card><CardHeader><div className="flex items-center justify-between"><CardTitle className="text-base">Saved lenses</CardTitle><Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => void refreshLenses()}><RefreshCw className="h-3.5 w-3.5" /></Button></div><CardDescription>Available for {model} in this session.</CardDescription></CardHeader><CardContent className="space-y-2">{!lenses.length ? <p className="text-sm text-muted-foreground">No lenses fitted yet.</p> : lenses.map((lens) => <div key={lens.lens_id} className="rounded border p-2 text-xs"><div className="flex items-center justify-between gap-2"><span className="font-mono">{lens.lens_id.slice(-8)}</span><Badge variant={lens.status === "ready" && lens.format_version === 2 ? "secondary" : "outline"}>{lens.status === "ready" && lens.format_version !== 2 ? "refit required" : lens.status}</Badge></div><p className="mt-1 text-muted-foreground">{lens.architecture || "ASR"} · {lens.layer_count ?? "?"} layers · {lens.sample_count} samples</p>{lens.status === "ready" && lens.format_version !== 2 && <p className="mt-1 text-amber-700">Legacy uncalibrated readout. Refit before interpreting.</p>}{lens.error && <p className="mt-1 text-destructive">{lens.error}</p>}</div>)}</CardContent></Card></aside>
       </div>
     </main>
   );

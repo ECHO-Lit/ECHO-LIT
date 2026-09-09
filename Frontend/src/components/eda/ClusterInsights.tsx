@@ -99,8 +99,8 @@ export const ClusterInsights = ({
           </span>
           <span className="text-xs font-medium">{band.label} separation</span>
           <Tooltip>
-            <TooltipTrigger>
-              <HelpCircle className="h-3 w-3 text-muted-foreground" />
+            <TooltipTrigger aria-label="More information">
+              <HelpCircle className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
             </TooltipTrigger>
             <TooltipContent className="max-w-xs text-xs">
               {EDA_CHART_EXPLANATIONS.silhouette_score}
@@ -160,8 +160,8 @@ export const ClusterInsights = ({
           <Network className="h-3 w-3 text-primary" />
           <span className="text-xs font-medium">Clusters</span>
           <Tooltip>
-            <TooltipTrigger>
-              <HelpCircle className="h-3 w-3 text-muted-foreground" />
+            <TooltipTrigger aria-label="More information">
+              <HelpCircle className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
             </TooltipTrigger>
             <TooltipContent className="max-w-xs text-xs">
               {EDA_CHART_EXPLANATIONS.clustering_scatter}
@@ -233,8 +233,8 @@ export const ClusterInsights = ({
             <AlertTriangle className="h-3 w-3 text-amber-500" />
             <span className="text-xs font-medium">Unclustered (noise)</span>
             <Tooltip>
-              <TooltipTrigger>
-                <HelpCircle className="h-3 w-3 text-muted-foreground" />
+              <TooltipTrigger aria-label="More information">
+                <HelpCircle className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
               </TooltipTrigger>
               <TooltipContent className="max-w-xs text-xs">
                 {EDA_CHART_EXPLANATIONS.cluster_noise}

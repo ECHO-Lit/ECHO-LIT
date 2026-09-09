@@ -367,8 +367,9 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
                           size="sm"
                           onClick={() => deleteDataset(dataset.dataset_name)}
                           className="text-red-600 hover:text-red-700"
+                          aria-label={`Delete dataset ${dataset.dataset_name}`}
                         >
-                          <Trash2 className="h-4 w-4" />
+                          <Trash2 className="h-4 w-4" aria-hidden="true" />
                         </Button>
                       </div>
                     </div>
@@ -500,9 +501,12 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
                 </div>
                 
                 {uploadLoading && (
-                  <div className="space-y-2">
-                    <Progress value={uploadProgress} className="w-full" />
-                    <p className="text-sm text-center">Uploading files...</p>
+                  <div className="space-y-2" role="status" aria-live="polite">
+                    <Progress className="w-full" />
+                    <p className="text-sm text-center">
+                      Uploading {selectedFiles?.length ?? 0} file
+                      {(selectedFiles?.length ?? 0) === 1 ? "" : "s"}…
+                    </p>
                   </div>
                 )}
                 

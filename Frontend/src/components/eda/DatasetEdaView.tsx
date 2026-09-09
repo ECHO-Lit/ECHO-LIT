@@ -317,8 +317,8 @@ export const DatasetEdaView = ({
               ))}
             </select>
             <Tooltip>
-              <TooltipTrigger>
-                <HelpCircle className="h-3 w-3 text-muted-foreground" />
+              <TooltipTrigger aria-label="More information">
+                <HelpCircle className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
               </TooltipTrigger>
               <TooltipContent className="max-w-xs text-xs">
                 {EDA_CHART_EXPLANATIONS.dataset_comparison}
@@ -589,8 +589,8 @@ export const DatasetEdaView = ({
                   <AlertTriangle className="h-3 w-3 text-amber-500" />
                   <span className="text-xs font-medium">Statistical outliers</span>
                   <Tooltip>
-                    <TooltipTrigger>
-                      <HelpCircle className="h-3 w-3 text-muted-foreground" />
+                    <TooltipTrigger aria-label="More information">
+                      <HelpCircle className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
                     </TooltipTrigger>
                     <TooltipContent className="max-w-xs text-xs">
                       Files where a feature value sits more than {OUTLIER_Z_THRESHOLD} standard deviations from the dataset mean. This flags statistical anomalies, not confirmed defects — click a row to inspect the file.

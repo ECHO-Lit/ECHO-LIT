@@ -431,17 +431,17 @@ export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice
     <TooltipProvider>
       <div className="h-full bg-white border-r border-gray-200 flex flex-col">
         <div className="panel-header p-3 border-b border-gray-200">
-          <h3 className="font-bold text-sm text-gray-800 flex items-center gap-1.5">
+          <h2 className="font-bold text-sm text-gray-800 flex items-center gap-1.5">
         Audio Embeddings
         <Tooltip>
-          <TooltipTrigger>
-            <HelpCircle className="h-3.5 w-3.5 text-muted-foreground" />
+          <TooltipTrigger aria-label="More information">
+            <HelpCircle className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
           </TooltipTrigger>
           <TooltipContent className="font-normal">
             Visualize high-dimensional audio features in 2D/3D space
           </TooltipContent>
         </Tooltip>
-          </h3>
+          </h2>
         </div>
 
       <Tabs defaultValue="embeddings" className="flex-1 flex flex-col overflow-hidden">
@@ -755,8 +755,8 @@ export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice
                           <div className="text-sm-tight font-medium flex items-center gap-2">
                             Top 5 Most Common Features
                             <Tooltip>
-                              <TooltipTrigger>
-                                <HelpCircle className="h-3 w-3 text-muted-foreground" />
+                              <TooltipTrigger aria-label="More information">
+                                <HelpCircle className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
                               </TooltipTrigger>
                               <TooltipContent className="max-w-xs">
                                 Features ranked by prevalence and stability across selected audio files
@@ -772,8 +772,8 @@ export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice
                                       {feature.feature.replace(/_/g, ' ').toUpperCase()}
                                     </span>
                                     <Tooltip>
-                                      <TooltipTrigger>
-                                        <HelpCircle className="h-3 w-3 text-gray-400 hover:text-gray-600" />
+                                      <TooltipTrigger aria-label="More information">
+                                        <HelpCircle className="h-3 w-3 text-gray-400 hover:text-gray-600" aria-hidden="true" />
                                       </TooltipTrigger>
                                       <TooltipContent className="max-w-sm">
                                         <div className="space-y-1">
@@ -802,8 +802,8 @@ export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice
                           <div className="text-sm-tight font-medium flex items-center gap-2">
                             Feature Categories
                             <Tooltip>
-                              <TooltipTrigger>
-                                <HelpCircle className="h-3 w-3 text-muted-foreground" />
+                              <TooltipTrigger aria-label="More information">
+                                <HelpCircle className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
                               </TooltipTrigger>
                               <TooltipContent className="max-w-xs">
                                 Audio features grouped by type: spectral (frequency-based), temporal (time-based), and harmonic (pitch-based)

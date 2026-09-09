@@ -46,7 +46,10 @@ export const AudioUploader = ({ onUploadSuccess, model }: AudioUploaderProps) =>
     }
   };
 
-  const onDrop = useCallback((acceptedFiles: File[]) => {
+  const onDrop = useCallback((acceptedFiles: File[], fileRejections: { file: File }[] = []) => {
+    fileRejections.forEach(({ file }) => {
+      toast.error(`Invalid file type: ${file.name}. Supported formats: WAV, MP3, M4A, FLAC`);
+    });
     acceptedFiles.forEach(async (file) => {
       
       // Check both MIME type and file extension for better .flac support
@@ -97,6 +100,9 @@ export const AudioUploader = ({ onUploadSuccess, model }: AudioUploaderProps) =>
                 <h3 className="font-medium">Drop files here</h3>
                 <p className="text-sm text-muted-foreground mt-1">
                   Supports WAV, MP3, M4A, FLAC
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Up to 100 MB and 10 minutes per file
                 </p>
               </div>
             </div>

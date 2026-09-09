@@ -49,8 +49,8 @@ export const NearestNeighborsPanel = ({ selectedFile, onFileSelect }: NearestNei
       <Search className="h-3 w-3 text-primary" />
       <span className="text-xs font-medium">Most similar clips</span>
       <Tooltip>
-        <TooltipTrigger>
-          <HelpCircle className="h-3 w-3 text-muted-foreground" />
+        <TooltipTrigger aria-label="More information">
+          <HelpCircle className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
         </TooltipTrigger>
         <TooltipContent className="max-w-xs text-xs">
           {EDA_CHART_EXPLANATIONS.nearest_neighbors}
