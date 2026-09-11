@@ -7,6 +7,9 @@ torch's OpenMP runtime and numba's LLVM runtime (via umap) into the same forked
 child is a known SIGSEGV. Importing only librosa and numpy here keeps that worker
 free of both.
 
+librosa's numba stencil kernels also segfault in the container on their own, so the
+two this module reaches (zero crossings, local maxima) are reimplemented in numpy.
+
 Do not add a torch/transformers/umap import to this module.
 """
 
@@ -32,6 +35,30 @@ def _zero_crossing_rate(y: np.ndarray, frame_length: int = 2048, hop_length: int
     crossings = sign[1:, :] != sign[:-1, :]
     full = np.vstack([np.zeros((1, crossings.shape[1]), dtype=bool), crossings])
     return np.mean(full, axis=0, keepdims=True)[0]
+
+
+def _localmax(x: np.ndarray, *, axis: int = 0) -> np.ndarray:
+    """Drop-in replacement for `librosa.util.localmax`.
+
+    librosa's version runs the `_localmax` numba stencil+guvectorize kernel -- the same
+    kernel shape as `_zc_wrapper` above, and it segfaults in this container the same way
+    (SIGSEGV inside `chroma_stft -> estimate_tuning -> piptrack -> localmax`). Same
+    semantics in plain numpy: interior points are `x[i] > x[i-1] and x[i] >= x[i+1]`,
+    the first point is never a maximum, the last is `x[-1] > x[-2]`.
+    """
+    xi = x.swapaxes(-1, axis)
+    lmax = np.zeros_like(x, dtype=bool)
+    lmaxi = lmax.swapaxes(-1, axis)
+    lmaxi[..., 1:-1] = (xi[..., 1:-1] > xi[..., :-2]) & (xi[..., 1:-1] >= xi[..., 2:])
+    lmaxi[..., -1] = xi[..., -1] > xi[..., -2]
+    return lmax
+
+
+# chroma_stft, tonnetz (via chroma_cqt) and beat_track all reach localmax through the
+# `librosa.util` module attribute, so patching it there covers every call below without
+# giving up tuning estimation. Output is unchanged, so other librosa users in the same
+# worker process are unaffected apart from no longer crashing.
+librosa.util.localmax = _localmax
 
 
 def extract_audio_frequency_features(audio_file_path: str) -> dict:
