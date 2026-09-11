@@ -1,10 +1,14 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request, Depends
 from fastapi.responses import JSONResponse, FileResponse
 from typing import List, Optional
+import asyncio
 import logging
 from pathlib import Path
 import json
+import tempfile
+import weakref
 
+from app.core.settings import settings
 from app.services.custom_dataset_service import (
     get_custom_dataset_manager,
     format_custom_dataset_name,
@@ -23,6 +27,41 @@ logger = logging.getLogger(__name__)
 # An uploaded answer key is text, and a large one is a mistake rather than a
 # use case: one row per audio file, and the audio itself is capped elsewhere.
 MAX_LABEL_CSV_BYTES = 4 * 1024 * 1024
+
+
+# One lock per (session, dataset), held while a request rewrites that dataset's
+# metadata. Weak values: a lock lives only while some request holds or waits on
+# it, so the table does not grow with every dataset ever touched.
+_dataset_locks: "weakref.WeakValueDictionary[tuple[str, str], asyncio.Lock]" = weakref.WeakValueDictionary()
+
+
+def _dataset_lock(session_id: str, dataset_name: str) -> asyncio.Lock:
+    key = (session_id, dataset_name)
+    lock = _dataset_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _dataset_locks[key] = lock
+    return lock
+
+
+async def _stage_upload(file: UploadFile, destination: Path) -> bool:
+    """Copy an upload to disk in bounded chunks; False if it exceeds the size cap.
+
+    Mirrors POST /upload: never more than 1 MiB of a file in memory, and the
+    same MAX_UPLOAD_BYTES limit (PE-3). Reading the whole file with
+    `file.read()` held up to 100 MB per file in the API process.
+    """
+    size = 0
+    with destination.open("wb") as handle:
+        while chunk := await file.read(1024 * 1024):
+            size += len(chunk)
+            if size > settings.MAX_UPLOAD_BYTES:
+                break
+            handle.write(chunk)
+    if size > settings.MAX_UPLOAD_BYTES:
+        destination.unlink(missing_ok=True)
+        return False
+    return True
 
 
 def get_session_id(request: Request) -> str:
@@ -94,35 +133,38 @@ async def upload_files_to_dataset(
             )
     
     try:
-        manager = get_custom_dataset_manager(session_id)
+        manager = await asyncio.to_thread(get_custom_dataset_manager, session_id)
         # Check the dataset exists before the per-file loop: inside it, the
         # broad except below turns "no such dataset" into a per-file error and
         # the client gets a 207 describing nothing instead of a 404.
-        if manager.get_dataset_metadata(dataset_name) is None:
+        if await asyncio.to_thread(manager.get_dataset_metadata, dataset_name) is None:
             raise ValueError(f"Dataset '{dataset_name}' does not exist")
-        uploaded_files = []
-        errors = []
+        errors: List[str] = []
 
-        for file in files:
-            try:
-                # Read file data
-                file_data = await file.read()
-                
-                # Add file to dataset
-                file_metadata = manager.add_file_to_dataset(
-                    dataset_name, 
-                    file.filename, 
-                    file_data
+        with tempfile.TemporaryDirectory(prefix="echo-dataset-upload-") as staging:
+            staged = []
+            for index, file in enumerate(files):
+                staged_path = Path(staging) / f"{index}{Path(file.filename).suffix.lower()}"
+                if await _stage_upload(file, staged_path):
+                    staged.append((file.filename, staged_path))
+                else:
+                    errors.append(f"Failed to upload {file.filename}: Audio exceeds the 100 MB upload limit")
+
+            # The per-file work -- move, probe, one metadata rewrite -- is
+            # blocking. On the loop it froze every user of the API for the
+            # whole batch (PE-2). Off the loop, two requests for one dataset
+            # could interleave their read-modify-write of its metadata, so the
+            # batch holds that dataset's lock.
+            async with _dataset_lock(session_id, dataset_name):
+                uploaded_files, add_errors = await asyncio.to_thread(
+                    manager.add_files_to_dataset, dataset_name, staged
                 )
-                uploaded_files.append(file_metadata)
-                
-            except Exception as e:
-                error_msg = f"Failed to upload {file.filename}: {str(e)}"
-                errors.append(error_msg)
-                logger.error(error_msg)
-        
+        errors.extend(add_errors)
+        for error_msg in errors:
+            logger.error(error_msg)
+
         # Get updated dataset metadata
-        dataset_metadata = manager.get_dataset_metadata(dataset_name)
+        dataset_metadata = await asyncio.to_thread(manager.get_dataset_metadata, dataset_name)
         formatted_name = format_custom_dataset_name(session_id, dataset_name)
         
         response_data = {
@@ -158,11 +200,13 @@ async def upload_dataset_manifest(
     """Attach a generic CSV manifest so this custom dataset can train J-Lens."""
     session_id = get_session_id(request)
     try:
-        details = get_custom_dataset_manager(session_id).add_manifest_to_dataset(
-            dataset_name,
-            manifest.filename or "metadata.csv",
-            await manifest.read(),
-        )
+        data = await manifest.read()
+        manager = await asyncio.to_thread(get_custom_dataset_manager, session_id)
+        # Rewrites the same metadata document as a file upload does.
+        async with _dataset_lock(session_id, dataset_name):
+            details = await asyncio.to_thread(
+                manager.add_manifest_to_dataset, dataset_name, manifest.filename or "metadata.csv", data
+            )
         return JSONResponse(content={
             "message": "Dataset manifest uploaded",
             "dataset_name": format_custom_dataset_name(session_id, dataset_name),
@@ -393,9 +437,11 @@ async def delete_custom_dataset(request: Request, dataset_name: str):
     session_id = get_session_id(request)
     
     try:
-        manager = get_custom_dataset_manager(session_id)
-        success = manager.delete_dataset(dataset_name)
-        
+        manager = await asyncio.to_thread(get_custom_dataset_manager, session_id)
+        # rmtree is blocking, and must not run under an in-flight upload.
+        async with _dataset_lock(session_id, dataset_name):
+            success = await asyncio.to_thread(manager.delete_dataset, dataset_name)
+
         if not success:
             raise HTTPException(status_code=404, detail=f"Dataset '{dataset_name}' not found")
         

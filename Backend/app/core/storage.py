@@ -27,6 +27,22 @@ def _safe_key(key: str) -> str:
     return path.as_posix()
 
 
+def _without_extended_prefix(path: Path) -> Path:
+    r"""Drop Windows' `\\?\` extended-length prefix from a resolved path.
+
+    On Windows, `Path.resolve()` intermittently returns the `\\?\C:\...` form
+    for a path while another thread is creating files in the same directory.
+    That path has no `C:\...` ancestors, so the containment check below read a
+    legitimate key as escaping the root -- and concurrent workers writing the
+    shared `cache-items/` directory failed items with StorageError. POSIX paths
+    and UNC (`\\?\UNC\...`) paths pass through unchanged.
+    """
+    text = str(path)
+    if text.startswith("\\\\?\\") and not text.startswith("\\\\?\\UNC\\"):
+        return Path(text[4:])
+    return path
+
+
 class ObjectStorage(ABC):
     @abstractmethod
     def put_file(self, key: str, source: Path, content_type: str | None = None) -> None: ...
@@ -64,11 +80,11 @@ class ObjectStorage(ABC):
 
 class LocalObjectStorage(ObjectStorage):
     def __init__(self, root: str | Path):
-        self.root = Path(root).resolve()
+        self.root = _without_extended_prefix(Path(root).resolve())
         self.root.mkdir(parents=True, exist_ok=True)
 
     def path_for(self, key: str) -> Path:
-        candidate = (self.root / _safe_key(key)).resolve()
+        candidate = _without_extended_prefix((self.root / _safe_key(key)).resolve())
         if self.root not in candidate.parents:
             raise StorageError("Object key escapes storage root")
         return candidate
