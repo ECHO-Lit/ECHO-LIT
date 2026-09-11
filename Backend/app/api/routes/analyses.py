@@ -7,12 +7,13 @@ this endpoint deliberately does not introduce a parallel status API.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 import uuid
 
 from fastapi import APIRouter, HTTPException, Request
 
-from app.core.celery_app import celery_app
+from app.core.celery_app import celery_app, revoke_async, send_task_async
 from app.core.model_catalog import MODEL_DEFINITIONS, ModelKind, custom_model_capabilities
 from app.core.settings import settings
 from app.repositories.audio import AudioRepository
@@ -87,15 +88,12 @@ async def create_linguistic_acoustic_analysis(payload: LinguisticAcousticRequest
     if task == "classification" and kind != ModelKind.AUDIO_CLASSIFICATION:
         raise HTTPException(400, "A transcription model cannot run a classification analysis")
 
-    audio_repository = AudioRepository()
-    assets = []
-    for audio_id in payload.audio_ids:
-        asset = await audio_repository.get_owned(audio_id, session_id)
+    assets = await AudioRepository().get_owned_many(payload.audio_ids, session_id)
+    for audio_id, asset in zip(payload.audio_ids, assets):
         if not asset:
             raise HTTPException(404, f"Audio not found: {audio_id}")
         if asset.duration_seconds < 0.5:
             raise HTTPException(422, f"{asset.filename} is too short for perturbation analysis")
-        assets.append(asset)
 
     now = datetime.now(timezone.utc)
     job_id = uuid.uuid4().hex
@@ -133,7 +131,7 @@ async def create_linguistic_acoustic_analysis(payload: LinguisticAcousticRequest
         code_version=settings.CODE_VERSION,
     )
     try:
-        task_handle = celery_app.send_task(
+        task_handle = await send_task_async(
             "app.worker.tasks.fr7_orchestrate",
             args=[envelope.model_dump(mode="json")], queue="cpu",
         )
@@ -161,7 +159,8 @@ async def get_fairness_groupable_columns(dataset: str, request: Request):
     if not _dataset_visible(dataset, session_id):
         raise HTTPException(404, f"Dataset not available: {dataset}")
     try:
-        return groupable_columns(dataset, session_id)
+        # Reads (and on a cold cache, probes) the whole dataset: off the loop.
+        return await asyncio.to_thread(groupable_columns, dataset, session_id)
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(404, str(exc)) from exc
 
@@ -243,7 +242,7 @@ async def create_fairness_analysis(payload: FairnessRequest, request: Request):
         result_schema_version=settings.RESULT_SCHEMA_VERSION, code_version=settings.CODE_VERSION,
     )
     try:
-        task_handle = celery_app.send_task(
+        task_handle = await send_task_async(
             "app.worker.tasks.fr10_orchestrate",
             args=[envelope.model_dump(mode="json")], queue="cpu",
         )
@@ -283,10 +282,7 @@ async def cancel_all_fairness_analyses(request: Request):
         if not record or record.operation != JobOperation.fairness or record.status in TERMINAL_STATES:
             continue
         await jobs.request_cancel(job_id)
-        if record.task_id:
-            celery_app.control.revoke(record.task_id, terminate=False)
-        for child_task_id in record.child_task_ids:
-            celery_app.control.revoke(child_task_id, terminate=False)
+        await revoke_async([record.task_id, *record.child_task_ids])
         if record.status == JobStatus.queued:
             await jobs.update(
                 job_id, status=JobStatus.cancelled,
