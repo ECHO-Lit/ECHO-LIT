@@ -211,52 +211,8 @@ class TestSessionCookieSecurity:
         assert final_check.json()["sid"] == legit_sid
 
 
-# Test Cookie Performance (Normal Priority)
-class TestSessionCookiePerformance:
-    """Test session cookie performance characteristics."""
-    
-    @pytest.mark.asyncio
-    async def test_rapid_session_creation(self, client):
-        """Test rapid session creation performance."""
-        start_time = time.time()
-        
-        # Create multiple sessions rapidly
-        sessions = []
-        for i in range(10):
-            response = await client.get("/session")
-            assert response.status_code == 200
-            sessions.append(response.json()["sid"])
-        
-        end_time = time.time()
-        creation_time = end_time - start_time
-        
-        # Should complete reasonably quickly
-        assert creation_time < 5.0  # Should take less than 5 seconds
-        
-        # All sessions should be valid (may reuse IDs)
-        assert all(len(sid) > 0 for sid in sessions)
-    
-    @pytest.mark.asyncio
-    async def test_session_memory_efficiency(self, client):
-        """Test session storage doesn't consume excessive memory."""
-        initial_sessions = []
-        
-        # Create several sessions
-        for i in range(20):
-            response = await client.get("/session")
-            initial_sessions.append({
-                "sid": response.json()["sid"],
-                "cookies": response.cookies
-            })
-        
-        # All should be created successfully
-        assert len(initial_sessions) == 20
-        
-        # Verify each session works
-        for session_data in initial_sessions[:5]:  # Test first 5 to avoid too many requests
-            verify_response = await client.get("/session", cookies=session_data["cookies"])
-            assert verify_response.status_code == 200
-            assert verify_response.json()["sid"] == session_data["sid"]
+# Session creation cost is profiled against SRS PE-1 in
+# test_perf_control_plane.py (PP-01); see tests/plans/3.1.4-performance-profiling.md.
 
 
 # Test Cookie Edge Cases (Normal Priority)

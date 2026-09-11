@@ -199,6 +199,16 @@ def test_model_registry_reuses_and_evicts_variants(monkeypatch):
     fake_device.INFERENCE_DEVICE = "cpu"
     monkeypatch.setitem(sys.modules, "app.services.model_loader_service", fake_models)
     monkeypatch.setitem(sys.modules, "app.core.device", fake_device)
+    # `from app.services import model_loader_service` reads the PACKAGE
+    # attribute first and only falls back to sys.modules when it is absent. If
+    # any earlier test imported the real module, the sys.modules swap alone is
+    # bypassed and prepare() loads -- and downloads -- a real Whisper
+    # checkpoint. Found by the 3.1.5 reverse-order run.
+    import app.core
+    import app.services
+
+    monkeypatch.setattr(app.services, "model_loader_service", fake_models, raising=False)
+    monkeypatch.setattr(app.core, "device", fake_device, raising=False)
 
     registry = ModelRegistry()
     registry.max_entries = 1
