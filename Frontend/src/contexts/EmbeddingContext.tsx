@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
-import { materializeAudio, runJob } from '@/lib/jobs';
+import { materializeAll, runJob } from '@/lib/jobs';
 import { readEdaCache, writeEdaCache } from '@/lib/edaCache';
 
 export interface EmbeddingPoint {
@@ -105,7 +105,7 @@ export const EmbeddingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setError(null);
 
     try {
-      const assets = await Promise.all(files.map((filename) => materializeAudio(dataset, filename)));
+      const assets = await materializeAll(dataset, files);
       const result: any = await runJob({
         operation: 'embedding',
         model,

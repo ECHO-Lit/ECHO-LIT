@@ -18,7 +18,7 @@ import { useEmbedding } from "../../contexts/EmbeddingContext";
 import { RefreshCw, Eye, Box, Square, BarChart3, HelpCircle } from "lucide-react";
 import { getFeatureExplanation } from "@/lib/audioFeatures";
 import { API_BASE } from "@/lib/api";
-import { materializeAudio, runJob } from '@/lib/jobs';
+import { materializeAll, runJob } from '@/lib/jobs';
 
 interface EmbeddingPanelProps {
   model?: string;
@@ -346,7 +346,7 @@ export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice
         requestBody.dataset = dataset;
       }
 
-      const assets = await Promise.all(filenames.map((filename) => materializeAudio(dataset, filename)));
+      const assets = await materializeAll(dataset, filenames);
       const analysis = await runJob<AudioFrequencyAnalysis>({
         operation: 'audio_features', audio_ids: assets.map((asset) => asset.audio_id),
       });
@@ -378,7 +378,7 @@ export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice
         requestBody.dataset = dataset;
       }
 
-      const assets = await Promise.all(filenames.map((filename) => materializeAudio(dataset, filename)));
+      const assets = await materializeAll(dataset, filenames);
       const prediction = await runJob<BatchPredictionAnalysis>({
         operation: 'prediction', model: 'wav2vec2', audio_ids: assets.map((asset) => asset.audio_id),
       });
@@ -411,7 +411,7 @@ export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice
         requestBody.dataset = dataset;
       }
 
-      const assets = await Promise.all(filenames.map((filename) => materializeAudio(dataset, filename)));
+      const assets = await materializeAll(dataset, filenames);
       const analysis = await runJob<WhisperAnalysis>({
         operation: 'prediction', model, audio_ids: assets.map((asset) => asset.audio_id),
       });

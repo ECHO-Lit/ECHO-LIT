@@ -13,6 +13,10 @@ const Progress = React.forwardRef<
       "relative h-4 w-full overflow-hidden rounded-full bg-secondary",
       className
     )}
+    // Forwarded, not just used for the fill: Radix derives aria-valuenow and
+    // data-state from it. Without it every bar was announced as indeterminate
+    // however full it looked.
+    value={value}
     {...props}
   >
     <ProgressPrimitive.Indicator

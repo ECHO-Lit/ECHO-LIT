@@ -4,6 +4,12 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Upload, FileAudio } from "lucide-react";
 import { toast } from "sonner";
 import { API_BASE, AudioReference } from '@/lib/api';
+import { isAcceptedAudioFile } from '@/lib/audioFiles';
+import { mapWithConcurrency } from '@/lib/concurrency';
+import { describeHttpError } from '@/lib/httpError';
+
+/** Simultaneous uploads from one drop; uploads are bandwidth-bound, so more buys nothing. */
+const UPLOAD_CONCURRENCY = 2;
 
 interface AudioUploaderProps {
   onUploadSuccess?: (uploadResponse: AudioReference) => void;
@@ -26,8 +32,7 @@ export const AudioUploader = ({ onUploadSuccess, model }: AudioUploaderProps) =>
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Upload failed');
+        throw await describeHttpError(response);
       }
 
       const data = await response.json();
@@ -50,18 +55,14 @@ export const AudioUploader = ({ onUploadSuccess, model }: AudioUploaderProps) =>
     fileRejections.forEach(({ file }) => {
       toast.error(`Invalid file type: ${file.name}. Supported formats: WAV, MP3, M4A, FLAC`);
     });
-    acceptedFiles.forEach(async (file) => {
-      
-      // Check both MIME type and file extension for better .flac support
-      const allowedExtensions = ['.wav', '.mp3', '.m4a', '.flac'];
-      const fileExtension = file.name.toLowerCase().substring(file.name.lastIndexOf('.'));
-      const isValidFile = file.type.startsWith('audio/') || allowedExtensions.includes(fileExtension);
-      
-      if (isValidFile) {
+    // Bounded, not `forEach(async …)`: dropping a folder of 50 recordings used
+    // to open 50 simultaneous uploads of up to 100 MB each.
+    void mapWithConcurrency(acceptedFiles, UPLOAD_CONCURRENCY, async (file) => {
+      if (isAcceptedAudioFile(file)) {
         try {
           await uploadFile(file);
         } catch {
-          // Error already handled in uploadFile
+          // Error already handled in uploadFile; one failure must not stop the rest.
         }
       } else {
         console.warn('Invalid file type:', file.type);

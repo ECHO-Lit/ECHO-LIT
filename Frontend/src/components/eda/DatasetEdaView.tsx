@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { HelpCircle, RefreshCw, BarChart3, Download, AlertTriangle } from "lucide-react";
 import { API_BASE } from "@/lib/api";
-import { materializeAudio, runJob } from "@/lib/jobs";
+import { materializeAll, runJob } from "@/lib/jobs";
 import { EDA_CHART_EXPLANATIONS, getFeatureExplanation } from "@/lib/audioFeatures";
 import { correlationMatrix, topCorrelatedPairs, quartiles, zScores, bucketize, recomputeHistogram, type Quartiles } from "@/lib/edaStats";
 import { exportAcousticFeaturesCsv, exportEdaJson } from "@/lib/edaExport";
@@ -175,7 +175,7 @@ export const DatasetEdaView = ({
     setAcousticsError(null);
     setAcousticsProgress({ current: 0, total: availableFiles.length });
     try {
-      const assets = await Promise.all(availableFiles.map((f) => materializeAudio(dataset, f)));
+      const assets = await materializeAll(dataset, availableFiles);
       const analysis = await runJob<AcousticEda>(
         { operation: "audio_features", audio_ids: assets.map((a) => a.audio_id) },
         { onProgress: (status) => setAcousticsProgress({ current: status.progress?.current ?? 0, total: availableFiles.length }) },

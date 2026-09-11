@@ -9,7 +9,8 @@ import { AudioUploader } from "../audio/AudioUploader";
 import { AudioDataTable } from "../audio/AudioDataTable";
 import { toast } from "sonner";
 import { API_BASE } from '@/lib/api';
-import { materializeAudio, runJob } from '@/lib/jobs';
+import { materializeAll, materializeAudio, runJob } from '@/lib/jobs';
+import { isAcceptedAudioFile } from '@/lib/audioFiles';
 
 interface UploadedFile {
   audio_id?: string;
@@ -256,9 +257,7 @@ export const AudioDatasetPanel = ({
         setInferenceStatus(Object.fromEntries(entries.map((entry) => [entry.fileId, 'loading' as const])));
         onBatchInferenceStart?.();
 
-        const assets = await Promise.all(
-          entries.map((entry) => materializeAudio(datasetToUse, entry.filename, signal)),
-        );
+        const assets = await materializeAll(datasetToUse, entries.map((entry) => entry.filename), signal);
         const result: any = await runJob({
           operation: 'prediction',
           model: model || 'whisper-base',
@@ -436,13 +435,8 @@ export const AudioDatasetPanel = ({
     if (files) {
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        
-        // Check both MIME type and file extension for better .flac support
-        const allowedExtensions = ['.wav', '.mp3', '.m4a', '.flac'];
-        const fileExtension = file.name.toLowerCase().substring(file.name.lastIndexOf('.'));
-        const isValidFile = file.type.startsWith('audio/') || allowedExtensions.includes(fileExtension);
-        
-        if (isValidFile) {
+
+        if (isAcceptedAudioFile(file)) {
           try {
             await uploadFile(file, model ?? "");
           } catch (error) {

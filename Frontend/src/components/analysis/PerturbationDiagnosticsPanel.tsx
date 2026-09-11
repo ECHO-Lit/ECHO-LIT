@@ -150,7 +150,7 @@ export function PerturbationDiagnosticsPanel({
 
           {job.isRunning && job.progress && (
             <div className="space-y-1" role="status" aria-live="polite">
-              <Progress value={progressPct} />
+              <Progress value={progressPct} aria-label="Sensitivity analysis progress" />
               <p className="text-xs text-muted-foreground">{job.progress.message}</p>
             </div>
           )}

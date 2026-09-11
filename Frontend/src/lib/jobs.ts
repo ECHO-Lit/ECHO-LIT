@@ -1,4 +1,5 @@
 import { API_BASE, AudioReference } from './api';
+import { mapWithConcurrency } from './concurrency';
 import { describeHttpError } from './httpError';
 
 export type JobOperation =
@@ -57,6 +58,24 @@ export async function materializeAudio(
   });
   if (!response.ok) throw await parseError(response);
   return response.json();
+}
+
+/**
+ * At most this many materialise requests per batch are in flight at once. The
+ * API probes, hashes and copies each file on a thread pool shared by every
+ * user, so one dashboard loading a dataset should not claim all of it.
+ */
+export const MATERIALIZE_CONCURRENCY = 4;
+
+/** Materialise many dataset files, bounded and in input order. */
+export function materializeAll(
+  dataset: string,
+  filenames: readonly string[],
+  signal?: AbortSignal,
+): Promise<AudioReference[]> {
+  return mapWithConcurrency(filenames, MATERIALIZE_CONCURRENCY, (filename) =>
+    materializeAudio(dataset, filename, signal),
+  );
 }
 
 export async function resolveAudioId(

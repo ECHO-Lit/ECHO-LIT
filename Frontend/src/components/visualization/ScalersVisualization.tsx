@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { HelpCircle } from "lucide-react";
 import { API_BASE } from '@/lib/api';
-import { materializeAudio, runJob } from '@/lib/jobs';
+import { materializeAll, runJob } from '@/lib/jobs';
 import { getFeatureExplanation } from "@/lib/audioFeatures";
 
 interface ScalersVisualizationProps {
@@ -160,7 +160,7 @@ export const ScalersVisualization = ({ model, dataset }: ScalersVisualizationPro
         requestBody.dataset = dataset;
       }
 
-      const assets = await Promise.all(selectedPoints.map((filename) => materializeAudio(dataset || '', filename)));
+      const assets = await materializeAll(dataset || '', selectedPoints);
       const analysis = await runJob<AudioFrequencyAnalysis>({
         operation: 'audio_features', audio_ids: assets.map((asset) => asset.audio_id),
       });
@@ -190,7 +190,7 @@ export const ScalersVisualization = ({ model, dataset }: ScalersVisualizationPro
         requestBody.dataset = dataset;
       }
 
-      const assets = await Promise.all(selectedPoints.map((filename) => materializeAudio(dataset || '', filename)));
+      const assets = await materializeAll(dataset || '', selectedPoints);
       const analysis = await runJob<WhisperBatchAnalysis>({
         operation: 'prediction', model, audio_ids: assets.map((asset) => asset.audio_id),
       });
@@ -219,7 +219,7 @@ export const ScalersVisualization = ({ model, dataset }: ScalersVisualizationPro
         requestBody.dataset = dataset;
       }
 
-      const assets = await Promise.all(selectedPoints.map((filename) => materializeAudio(dataset || '', filename)));
+      const assets = await materializeAll(dataset || '', selectedPoints);
       const prediction = await runJob<Wav2Vec2BatchPrediction>({
         operation: 'prediction', model: 'wav2vec2', audio_ids: assets.map((asset) => asset.audio_id),
       });
