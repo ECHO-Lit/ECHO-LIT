@@ -1,9 +1,11 @@
 import asyncio
+import time
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from app.core import redis as redis_module
+from app.core.heartbeat import count_live_workers
 from app.core.storage import get_storage
 
 
@@ -53,13 +55,13 @@ async def health():
     except Exception as exc:
         details.append(f"storage: {exc}")
     try:
-        worker_keys = await redis_module.job_redis.keys("worker-heartbeat:*")
+        workers = await count_live_workers(redis_module.job_redis, time.time())
     except Exception:
-        worker_keys = []
+        workers = 0
     payload = {
         "status": "ok" if all(checks.values()) else "degraded",
         **checks,
-        "workers": len(worker_keys),
+        "workers": workers,
         "queue_depth": {
             queue: await redis_module.broker_redis.llen(queue) if checks["broker_redis"] else None
             for queue in ("cpu", "gpu-fast", "gpu-large")
