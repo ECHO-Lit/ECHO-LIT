@@ -49,7 +49,9 @@ Gap: no test imports a real component from the app source tree. This is scaffold
 
 ---
 
-## 3.1.4 & 3.1.5 Performance Profiling / Load Testing — IMPLEMENTED
+## 3.1.4 & 3.1.5 Performance Profiling / Load Testing — SUPERSEDED
+
+> **Superseded 2026-09-11** by `Backend/tests/plans/3.1.4-performance-profiling.md` and `Backend/tests/plans/3.1.5-load-testing.md`. `test_performance_load.py` described below was vacuous (it timed its own mocks' `sleep`) and has been deleted; 90 new cases and 15 fixed defects replace it. The analysis below is kept as the original record.
 
 `test_performance_load.py`:
 - `TestPerformanceProfiling` — Whisper/Wav2Vec2 inference timing, memory usage monitoring

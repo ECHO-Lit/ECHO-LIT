@@ -24,11 +24,26 @@ TEST_CATEGORIES = {
         "priority": "critical",
         "estimated_time": "30 minutes"
     },
-    "performance": {
-        "description": "Performance Profiling and Load Testing (Sections 3.1.4 & 3.1.5)",
-        "files": ["test_performance_load.py"],
+    "performance_profiling": {
+        "description": "Performance Profiling (Section 3.1.4)",
+        "files": [
+            "test_perf_control_plane.py",
+            "test_perf_event_loop.py",
+            "test_perf_worker_compute.py",
+        ],
         "priority": "important",
-        "estimated_time": "15 minutes"
+        "estimated_time": "1 minute"
+    },
+    "load_testing": {
+        "description": "Load Testing (Section 3.1.5)",
+        "files": [
+            "test_load_workload_profiles.py",
+            "test_load_background_workload.py",
+            "test_load_worker_scaling.py",
+            "test_load_capacity_growth.py",
+        ],
+        "priority": "important",
+        "estimated_time": "2 minutes"
     },
     "security": {
         "description": "Security and Access Control Testing (Section 3.1.6)",
@@ -38,15 +53,9 @@ TEST_CATEGORIES = {
     }
 }
 
-# Performance Thresholds (from Test Plan Section 3.1.4)
-PERFORMANCE_BENCHMARKS = {
-    "model_inference_max_time": 10.0,      # seconds - for 30-second audio clips
-    "audio_upload_max_time": 5.0,          # seconds - for files under 10MB  
-    "cache_retrieval_max_time": 0.05,      # seconds - Redis operations
-    "ui_response_max_time": 0.1,           # seconds - User interface response
-    "concurrent_user_limit": 10,           # Maximum concurrent users
-    "max_memory_usage_mb": 2048           # Maximum memory usage in MB
-}
+# Performance budgets live with the cases that assert them, sourced from SRS
+# PE-1..PE-3 -- see tests/plans/3.1.4-performance-profiling.md and
+# tests/plans/3.1.5-load-testing.md.
 
 # Test execution functions
 def run_category_tests(category: str, verbose: bool = True):
@@ -155,18 +164,9 @@ def run_performance_benchmarks():
     print("PERFORMANCE BENCHMARK TESTING")
     print("="*80)
     
-    # Run performance tests with benchmarking
-    pytest_args = [
-        "-v", "-s",
-        "--benchmark-only" if "--benchmark-only" in sys.argv else "",
-        "test_performance_load.py::TestPerformanceProfiling",
-        "-k", "performance"
-    ]
-    
-    # Remove empty args
-    pytest_args = [arg for arg in pytest_args if arg]
-    
-    result = pytest.main(pytest_args)
+    # Every 3.1.4 / 3.1.5 case carries the `performance` marker; -s prints the
+    # load reports.
+    result = pytest.main(["-v", "-s", "-m", "performance", str(Path(__file__).parent)])
     
     print(f"\nPerformance Benchmarks: {'PASS' if result == 0 else 'FAIL'}")
     return result == 0
