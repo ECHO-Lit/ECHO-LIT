@@ -81,12 +81,23 @@ describe("TestFilePicker", () => {
   });
 
   it("UI-54 accepts a FLAC whose MIME type the browser omits", async () => {
-    // The boundary the duplicated check exists for: Chrome reports an empty
-    // type for .flac, so extension has to be accepted as a fallback.
-    const src = readComponentSource("src/components/panels/AudioDatasetPanel.tsx");
-    expect(src).toContain(
-      "file.type.startsWith('audio/') || allowedExtensions.includes(fileExtension)",
-    );
+    // The boundary the check exists for: Chrome reports an empty type for
+    // .flac, so extension has to be accepted as a fallback. 3.1.5 resolved
+    // OBS-14 by extracting the once-duplicated check into lib/audioFiles.ts,
+    // so the boundary is now asserted at runtime, and both entry points are
+    // pinned to the one definition.
+    const { isAcceptedAudioFile } = await import("@/lib/audioFiles");
+    expect(isAcceptedAudioFile({ name: "take.FLAC", type: "" })).toBe(true);
+    expect(isAcceptedAudioFile({ name: "notes.txt", type: "text/plain" })).toBe(false);
+    expect(isAcceptedAudioFile({ name: "clip.bin", type: "audio/ogg" })).toBe(true);
+    for (const site of [
+      "src/components/panels/AudioDatasetPanel.tsx",
+      "src/components/audio/AudioUploader.tsx",
+    ]) {
+      const src = readComponentSource(site);
+      expect(src, site).toContain("isAcceptedAudioFile(file)");
+      expect(src, site).not.toContain("allowedExtensions");
+    }
   });
 
   it("UI-55 resets the picker so the same file can be chosen twice", async () => {

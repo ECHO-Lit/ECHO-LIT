@@ -265,12 +265,14 @@ describe("TestStatusAnnouncement", () => {
     // Guards BUG-22. The bar was set to 0, stayed at 0 for the entire transfer,
     // and jumped to 100 after it had already finished — reporting no progress
     // while presenting itself as a progress bar, so the user read 0% and
-    // assumed it was stuck. Replaced with an indeterminate indicator naming the
-    // file count. A real byte-level bar needs XMLHttpRequest upload events,
-    // which the Fetch API does not provide; deferred to 3.1.4.
+    // assumed it was stuck. Replaced in 3.1.3 with an indeterminate indicator;
+    // the byte-level bar over XMLHttpRequest landed in 3.1.4 (BUG-45) and is
+    // asserted at runtime in performance-feedback.test.tsx. Here: the bar is a
+    // named progressbar driven by transfer events.
     const src = readComponentSource("src/components/dataset/CustomDatasetManager.tsx");
-    expect(src).not.toContain("<Progress value={uploadProgress}");
-    expect(src).toContain("Uploading {selectedFiles?.length ?? 0} file");
+    expect(src).not.toContain("setUploadProgress(100)");
+    expect(src).toContain('aria-label="Upload progress"');
+    expect(src).toContain("uploadWithProgress");
   });
 });
 

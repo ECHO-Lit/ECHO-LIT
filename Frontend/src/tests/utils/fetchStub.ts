@@ -26,12 +26,17 @@ export interface RecordedCall {
   headers: HeadersInit | undefined;
 }
 
-/** A route value: a literal body (JSON-encoded), a Response, or a factory. */
+/**
+ * A route value: a literal body (JSON-encoded), a Response, or a factory. A
+ * factory may return a Promise, which holds the request open until it settles
+ * — how 3.1.4/3.1.5 observe what the UI shows while a request is in flight and
+ * how many requests are in flight at once.
+ */
 export type RouteValue =
   | { status?: number; json?: unknown; text?: string; headers?: Record<string, string> }
   | Response
   | Error
-  | ((request: RecordedCall) => RouteValue);
+  | ((request: RecordedCall) => RouteValue | Promise<RouteValue>);
 
 /** Key form: `"GET /jobs/abc"`, or `"POST *"` / `"GET /jobs/*"` for a prefix. */
 export type RouteTable = Record<string, RouteValue>;
@@ -60,8 +65,8 @@ function matches(key: string, method: string, path: string): boolean {
   return keyPath === path;
 }
 
-function toResponse(value: RouteValue, call: RecordedCall): Response {
-  if (typeof value === "function") return toResponse(value(call), call);
+async function toResponse(value: RouteValue, call: RecordedCall): Promise<Response> {
+  if (typeof value === "function") return toResponse(await value(call), call);
   if (value instanceof Error) throw value;
   if (value instanceof Response) return value;
   const { status = 200, json, text, headers } = value;

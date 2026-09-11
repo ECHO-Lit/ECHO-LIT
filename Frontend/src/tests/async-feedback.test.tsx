@@ -56,7 +56,7 @@ describe("TestProgressIndication", () => {
       "src/components/analysis/PerturbationDiagnosticsPanel.tsx",
     ]) {
       const src = readComponentSource(file);
-      expect(src).toContain("<Progress value={progressPct} />");
+      expect(src).toContain("<Progress value={progressPct}");
       expect(src).toContain("{job.progress.message}");
     }
   });
@@ -170,11 +170,15 @@ describe("TestUploadProgress", () => {
     // Guards BUG-22. The bar was set to 0, stayed at 0 for the whole transfer,
     // then jumped to 100 after it had already finished: it reported no progress
     // while presenting itself as a progress bar, so a user watching 0% would
-    // reasonably conclude the upload had stalled. Replaced with an
-    // indeterminate indicator that names the file count.
+    // reasonably conclude the upload had stalled. 3.1.3 replaced it with an
+    // indeterminate indicator; 3.1.4 (BUG-45) completed the fix with real
+    // byte-level progress over XMLHttpRequest, asserted at runtime in
+    // performance-feedback.test.tsx (PF-05…PF-08). This case now pins that the
+    // bar is driven by transfer events and never by a hard-coded value.
     const src = readComponentSource("src/components/dataset/CustomDatasetManager.tsx");
-    expect(src).not.toContain("<Progress value={uploadProgress}");
-    expect(src).toContain("Uploading {selectedFiles?.length ?? 0} file");
+    expect(src).not.toContain("setUploadProgress(100)");
+    expect(src).toContain("uploadWithProgress");
+    expect(src).toContain("value={uploadPercent ?? undefined}");
     expect(src).toContain('role="status"');
   });
 });
