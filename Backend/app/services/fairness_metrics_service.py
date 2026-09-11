@@ -313,17 +313,25 @@ def estimate_gap(
         use_speaker = any(i.speaker_id for i in ref_items) and any(i.speaker_id for i in other_items)
         ref_blocks = _block_map(ref_items, use_speaker)
         other_blocks = _block_map(other_items, use_speaker)
-        ref_keys, other_keys = list(ref_blocks.keys()), list(other_blocks.keys())
+        # The mean of a resample of whole blocks is (sum of the drawn blocks'
+        # sums) / (sum of their sizes), so each block reduces to two numbers up
+        # front. Rebuilding and concatenating Python lists per resample made
+        # this O(n_boot * items) in interpreted code -- ~14 s per gap at 2000
+        # items. The draws below are the same calls in the same order as before,
+        # so identical inputs and seed still give identical intervals (RE-3).
+        ref_sums = np.array([np.sum(values) for values in ref_blocks.values()])
+        ref_sizes = np.array([len(values) for values in ref_blocks.values()])
+        other_sums = np.array([np.sum(values) for values in other_blocks.values()])
+        other_sizes = np.array([len(values) for values in other_blocks.values()])
+        n_ref, n_other = len(ref_sums), len(other_sums)
         boot = np.empty(n_boot)
         for k in range(n_boot):
-            rk = [ref_keys[i] for i in rng.integers(0, len(ref_keys), size=len(ref_keys))]
-            ok = [other_keys[i] for i in rng.integers(0, len(other_keys), size=len(other_keys))]
-            rv = np.concatenate([ref_blocks[b] for b in rk])
-            ov = np.concatenate([other_blocks[b] for b in ok])
-            boot[k] = ov.mean() - rv.mean()
+            ri = rng.integers(0, n_ref, size=n_ref)
+            oi = rng.integers(0, n_other, size=n_other)
+            boot[k] = other_sums[oi].sum() / other_sizes[oi].sum() - ref_sums[ri].sum() / ref_sizes[ri].sum()
         method = "unpaired"
         block_unit = "speaker" if use_speaker else "utterance"
-        n_blocks = min(len(ref_keys), len(other_keys))
+        n_blocks = min(n_ref, n_other)
 
     ci = _percentile_ci(boot, alpha)
     p_value = _two_sided_p(boot, point)
