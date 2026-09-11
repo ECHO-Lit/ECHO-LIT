@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
+import time
 
 from celery.signals import heartbeat_sent
 from redis import from_url as sync_redis_from_url
@@ -11,6 +12,7 @@ from redis.exceptions import RedisError
 from celery import chord
 
 from app.core.celery_app import celery_app, queue_for
+from app.core.heartbeat import record_worker_heartbeat
 from app.core.storage import StorageError
 from app.core.settings import settings
 from app.repositories.jobs import JobRepository
@@ -19,6 +21,8 @@ from app.worker.executor import complete_batch_from_cache, execute, execute_batc
 
 
 _heartbeat_redis = sync_redis_from_url(settings.JOB_REDIS_URL, decode_responses=True)
+# Session keys live on the session database (DB0), not the job database.
+_session_redis = sync_redis_from_url(settings.REDIS_URL, decode_responses=True)
 
 # One persistent event loop per worker process. _run() creates and
 # closes a fresh loop per task, but the module-level redis.asyncio clients
@@ -31,11 +35,59 @@ def _run(coro):
     return _loop.run_until_complete(coro)
 
 
+# A child process that dies natively (SIGSEGV, OOM kill) never reaches the task's
+# except blocks, and task_reject_on_worker_lost puts the message straight back on the
+# queue -- so a deterministic native crash is redelivered forever, killing a fresh
+# pool child each time. Deliveries are counted per (task id, retry number) because
+# self.retry() reuses the task id; a crash redelivery repeats the same pair.
+MAX_DELIVERIES_PER_ATTEMPT = 3
+
+
+class RepeatedWorkerCrash(RuntimeError):
+    pass
+
+
+def _fail_if_redelivered_too_often(task, job_id: str) -> None:
+    key = f"task-deliveries:{task.request.id}:{task.request.retries}"
+    try:
+        pipe = _heartbeat_redis.pipeline()
+        pipe.incr(key)
+        pipe.expire(key, settings.JOB_TTL_SECONDS)
+        deliveries = pipe.execute()[0]
+    except RedisError:
+        # The guard is a backstop; an unreachable counter must not block the job itself.
+        return
+    if deliveries <= MAX_DELIVERIES_PER_ATTEMPT:
+        return
+
+    from app.schemas.jobs import JobError, JobStatus
+
+    _run(JobRepository().update(
+        job_id,
+        status=JobStatus.failure,
+        error=JobError(
+            code="worker_crashed",
+            message="The worker process crashed repeatedly while running this job",
+            retryable=False,
+        ),
+    ))
+    raise RepeatedWorkerCrash(
+        f"task {task.request.id} lost its worker {deliveries - 1} times; not running it again"
+    )
+
+
 @heartbeat_sent.connect
 def publish_worker_heartbeat(sender=None, **kwargs) -> None:
     del kwargs
-    hostname = getattr(sender, "hostname", None) or str(sender or "worker")
-    _heartbeat_redis.set(f"worker-heartbeat:{hostname}", "1", ex=90)
+    # The signal's sender is Celery's Heart, which has no .hostname of its own;
+    # its event dispatcher does. str(sender) would be an object repr carrying a
+    # memory address -- a new member on every restart.
+    hostname = (
+        getattr(sender, "hostname", None)
+        or getattr(getattr(sender, "eventer", None), "hostname", None)
+        or str(sender or "worker")
+    )
+    record_worker_heartbeat(_heartbeat_redis, hostname, time.time())
 
 
 @celery_app.task(
@@ -46,6 +98,7 @@ def publish_worker_heartbeat(sender=None, **kwargs) -> None:
     max_retries=3,
 )
 def execute_job(self, envelope: dict) -> None:
+    _fail_if_redelivered_too_often(self, envelope["job_id"])
     try:
         _run(execute(envelope, self.request.id))
     except (StorageError, RedisError) as exc:
@@ -98,6 +151,7 @@ def orchestrate_batch(self, envelope: dict) -> None:
     max_retries=3,
 )
 def execute_job_item(self, envelope: dict, asset_index: int) -> dict:
+    _fail_if_redelivered_too_often(self, envelope["job_id"])
     try:
         return _run(execute_batch_item(envelope, asset_index, self.request.id))
     except (StorageError, RedisError) as exc:
@@ -291,6 +345,19 @@ def fr10_aggregate(explain_results: list[dict], infer_results: list[dict], envel
             error=JobError(code="fr10_aggregate_failed", message=str(exc)[:500], retryable=False),
         ))
         raise
+
+
+@celery_app.task(name="app.worker.tasks.cleanup_expired_session_datasets")
+def cleanup_expired_session_datasets_task() -> int:
+    """PE-3: remove custom datasets whose owning session has expired.
+
+    A Redis error propagates and fails the run, so an unreachable Redis can
+    never be mistaken for "every session is gone".
+    """
+    from app.core.redis import k_meta
+    from app.services.custom_dataset_service import cleanup_expired_session_datasets
+
+    return cleanup_expired_session_datasets(lambda sid: bool(_session_redis.exists(k_meta(sid))))
 
 
 @celery_app.task(name="app.worker.tasks.cleanup_expired_local_objects")
