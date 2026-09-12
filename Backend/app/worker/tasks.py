@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 import logging
+import os
 from pathlib import Path
+import sys
 import time
 
 from celery.exceptions import TimeLimitExceeded
-from celery.signals import heartbeat_sent, task_failure
+from celery.signals import heartbeat_sent, task_failure, worker_process_init
 from kombu.exceptions import OperationalError
 from pydantic import ValidationError
 from redis import from_url as sync_redis_from_url
@@ -42,6 +44,39 @@ _loop = asyncio.new_event_loop()
 
 def _run(coro):
     return _loop.run_until_complete(coro)
+
+
+def numba_cache_dir_for_slot(index: int, base: str | None = None) -> Path:
+    """The numba cache directory owned by pool slot `index`."""
+    root = Path(base) if base else Path.home() / ".cache" / "numba"
+    return root / f"worker-{index}"
+
+
+@worker_process_init.connect
+def _private_numba_cache(**_kwargs) -> None:
+    """Give each pool child its own numba on-disk cache.
+
+    librosa's jitted functions are compiled with `cache=True`, and numba's
+    cache is not safe for concurrent writers: two pool children compiling the
+    same functions at once (a fresh container, concurrency 2) can tear its
+    index so that an entry points at another signature's machine code. Every
+    later load then segfaults the child (librosa beat_track, SIGSEGV), until
+    the cache is deleted. billiard numbers live children uniquely and gives a
+    replacement child the index of the one it replaces, so one directory per
+    index is never shared by two live processes and is reused across restarts.
+
+    Runs in the child before its first task; numba is imported lazily by the
+    services, so setting the environment here is in time.
+    """
+    from billiard.process import current_process
+
+    index = getattr(current_process(), "index", None)
+    if index is None:
+        return
+    directory = numba_cache_dir_for_slot(index, os.environ.get("NUMBA_CACHE_DIR"))
+    os.environ["NUMBA_CACHE_DIR"] = str(directory)
+    if "numba" in sys.modules:  # pragma: no cover - only if a library imported it early
+        logger.warning("numba was imported before the pool child set its cache directory")
 
 
 # A child process that dies natively (SIGSEGV, OOM kill) never reaches the task's
