@@ -84,7 +84,7 @@ No test simulates power interruption, network/DASD interruption, incomplete-cycl
 
 ## 3.1.8 Configuration Testing — SUPERSEDED
 
-> **Superseded 2026-09-12** by `Backend/tests/plans/3.1.8-configuration-testing.md`: 199 new cases (five `test_config_*.py` modules plus `Frontend/src/tests/configuration.test.tsx`), 17 fixed defects (BUG-61..77) and one fixed test-run defect (TEST-02). The analysis below is kept as the original record.
+> **Superseded 2026-09-12** by `Backend/tests/plans/3.1.8-configuration-testing.md`: 204 new cases (five `test_config_*.py` modules plus `Frontend/src/tests/configuration.test.tsx`), 18 fixed defects (BUG-61..78) and one fixed test-run defect (TEST-02). The analysis below is kept as the original record.
 
 No test varies hardware/software configuration combinations, cross-browser behavior, or concurrent non-target-software resource contention. `test_device.py` (CUDA/ROCm/MPS/CPU selection) is adjacent but is functional device-selection logic, not the template's multi-configuration deployment testing.
 
