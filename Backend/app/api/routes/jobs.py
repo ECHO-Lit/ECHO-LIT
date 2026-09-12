@@ -222,12 +222,8 @@ async def cancel_or_delete_job(job_id: str, request: Request, response: Response
         await jobs.delete(record)
         response.status_code = 204
         return None
-    await jobs.request_cancel(job_id)
+    # Queued jobs, and running jobs whose worker has gone silent, are cancelled
+    # at once; a live worker sees the request at its next cancel check.
+    await jobs.cancel(record)
     await revoke_async([record.task_id, *record.child_task_ids])
-    if record.status == JobStatus.queued:
-        await jobs.update(
-            job_id,
-            status=JobStatus.cancelled,
-            progress=JobProgress(current=0, total=record.progress.total, message="Cancelled"),
-        )
     return {"job_id": job_id, "status": "cancellation_requested"}

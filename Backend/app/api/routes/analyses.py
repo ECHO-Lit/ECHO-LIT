@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+import logging
 import uuid
 
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import ValidationError
 
 from app.core.celery_app import celery_app, revoke_async, send_task_async
 from app.core.model_catalog import MODEL_DEFINITIONS, ModelKind, custom_model_capabilities
@@ -37,6 +39,7 @@ from app.services.custom_dataset_service import is_custom_dataset, parse_custom_
 from app.services.fairness_service import groupable_columns
 from app.services.fr7_planning import estimate_cost, resolve_task
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/analyses")
 
 
@@ -278,16 +281,17 @@ async def cancel_all_fairness_analyses(request: Request):
 
     cancelled: list[str] = []
     for job_id in job_ids:
-        record = await jobs.get(job_id)
+        try:
+            record = await jobs.get(job_id)
+        except ValidationError:
+            # One unreadable record must not leave the rest of the session's
+            # analyses uncancellable.
+            logger.warning("cancel-all skipping unreadable job record %s", job_id)
+            continue
         if not record or record.operation != JobOperation.fairness or record.status in TERMINAL_STATES:
             continue
-        await jobs.request_cancel(job_id)
+        await jobs.cancel(record)
         await revoke_async([record.task_id, *record.child_task_ids])
-        if record.status == JobStatus.queued:
-            await jobs.update(
-                job_id, status=JobStatus.cancelled,
-                progress=JobProgress(current=0, total=record.progress.total, message="Cancelled"),
-            )
         cancelled.append(job_id)
 
     return {"cancelled_job_ids": cancelled, "count": len(cancelled)}
