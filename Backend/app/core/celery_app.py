@@ -24,6 +24,10 @@ celery_app.conf.update(
     result_expires=settings.JOB_TTL_SECONDS,
     task_soft_time_limit=settings.TASK_SOFT_TIME_LIMIT_SECONDS,
     task_time_limit=settings.TASK_TIME_LIMIT_SECONDS,
+    # kombu's Redis transport redelivers an unacknowledged task after this
+    # long. Its 3600 s default equalled the hard time limit, so a task still
+    # running near the limit was handed to a second worker.
+    broker_transport_options={"visibility_timeout": settings.BROKER_VISIBILITY_TIMEOUT_SECONDS},
     broker_connection_retry_on_startup=True,
     timezone="UTC",
     beat_schedule={
@@ -37,6 +41,12 @@ celery_app.conf.update(
             "task": "app.worker.tasks.cleanup_expired_session_datasets",
             "schedule": 60 * 60,
             "options": {"queue": "cpu"},
+        },
+        # Fails jobs whose worker stopped without recording an outcome.
+        "reap-stale-jobs": {
+            "task": "app.worker.tasks.reap_stale_jobs",
+            "schedule": settings.STALE_JOB_SWEEP_SECONDS,
+            "options": {"queue": "cpu", "expires": settings.STALE_JOB_SWEEP_SECONDS},
         },
     },
 )
