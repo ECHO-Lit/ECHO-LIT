@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass
-import os
 import time
 from typing import Any
 
+from app.core.settings import settings
 from app.worker.model_adapters import AudioModelAdapter, get_model_adapter
 
 
@@ -20,8 +20,10 @@ class ModelRegistry:
     """Per-worker lazy model registry with bounded LRU/idle eviction."""
 
     def __init__(self) -> None:
-        self.max_entries = int(os.getenv("MODEL_REGISTRY_MAX_ENTRIES", "3"))
-        self.idle_seconds = int(os.getenv("MODEL_REGISTRY_IDLE_SECONDS", "1800"))
+        # Validated settings (PE-3): a bound below one emptied the registry and
+        # then called popitem() on it, failing every model task.
+        self.max_entries = settings.MODEL_REGISTRY_MAX_ENTRIES
+        self.idle_seconds = settings.MODEL_REGISTRY_IDLE_SECONDS
         self._entries: OrderedDict[tuple[str, str, str, str], RegistryEntry] = OrderedDict()
 
     def prepare(self, model: str | AudioModelAdapter, purpose: str) -> Any:
