@@ -396,13 +396,40 @@ class TestSingleSource:
         """CF-21: guards BUG-64 and BUG-72 -- SRS 3.5, one validated source.
 
         `os.getenv` reads bypass every check `Settings` makes, and the keys
-        they read appear in no configuration file.
+        they read appear in no configuration file.  The one exception is a
+        third-party library's own variable, named literally (BUG-78 sets
+        numba's cache directory per pool child); anything else, including
+        passing `os.environ` around wholesale, is an offender.
         """
+
+        def is_os(node, attr):
+            return (
+                isinstance(node, ast.Attribute) and node.attr == attr
+                and isinstance(node.value, ast.Name) and node.value.id == "os"
+            )
+
+        def library_key(node) -> bool:
+            return isinstance(node, ast.Constant) and node.value in cfg.LIBRARY_VARS
+
         offenders = []
         for path in sorted((cfg.BACKEND / "app").rglob("*.py")):
             tree = ast.parse(path.read_text(encoding="utf-8"))
+            where = str(path.relative_to(cfg.BACKEND))
+            vetted: set[int] = set()
             for node in ast.walk(tree):
-                if isinstance(node, ast.Attribute) and node.attr in {"getenv", "environ"}:
-                    if isinstance(node.value, ast.Name) and node.value.id == "os":
-                        offenders.append(f"{path.relative_to(cfg.BACKEND)}:{node.lineno}")
+                if isinstance(node, ast.Call) and is_os(node.func, "getenv"):
+                    vetted.add(id(node.func))
+                    if not (node.args and library_key(node.args[0])):
+                        offenders.append(f"{where}:{node.lineno}")
+                elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and is_os(node.func.value, "environ"):
+                    vetted.add(id(node.func.value))
+                    if not (node.args and library_key(node.args[0])):
+                        offenders.append(f"{where}:{node.lineno}")
+                elif isinstance(node, ast.Subscript) and is_os(node.value, "environ"):
+                    vetted.add(id(node.value))
+                    if not library_key(node.slice):
+                        offenders.append(f"{where}:{node.lineno}")
+            for node in ast.walk(tree):
+                if (is_os(node, "environ") or is_os(node, "getenv")) and id(node) not in vetted:
+                    offenders.append(f"{where}:{node.lineno}")
         assert offenders == []

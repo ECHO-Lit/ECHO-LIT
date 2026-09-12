@@ -82,6 +82,8 @@ LIBRARY_VARS = {
     "NUMBA_CPU_NAME",
     "NUMBA_CPU_FEATURES",
     "TOKENIZERS_PARALLELISM",
+    # Set per pool child by app/worker/tasks.py (BUG-78), never by an operator.
+    "NUMBA_CACHE_DIR",
 }
 
 BACKEND_ENV_FILE = "./Backend/.env"

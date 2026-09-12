@@ -17,9 +17,11 @@ SRS PE-3: "The model registry shall evict idle model variants to cap memory."
 """
 from __future__ import annotations
 
+import os
 import sys
 import types
 from contextlib import ExitStack
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -272,3 +274,90 @@ class TestWorkerTunables:
         monkeypatch.setattr(settings, "MODEL_REGISTRY_IDLE_SECONDS", 60)
         registry = ModelRegistry()
         assert (registry.max_entries, registry.idle_seconds) == (5, 60)
+
+
+class TestPoolChildNumbaCache:
+    """worker-cpu runs two prefork children (SAD section 7: concurrency two).
+
+    librosa compiles its jitted functions with numba's on-disk cache, which is
+    not safe for concurrent writers: two children compiling at once can tear
+    the index, and every later load of it segfaults (measured in the worker
+    container: concurrent writers then a reader, exit 139; serial, exit 0).
+    """
+
+    @pytest.mark.parametrize(
+        ("index", "base", "expected"),
+        [(0, "/cache/numba", "/cache/numba/worker-0"), (1, "/cache/numba", "/cache/numba/worker-1"), (1, None, "worker-1")],
+    )
+    def test_each_pool_slot_gets_its_own_numba_cache(self, monkeypatch, index, base, expected):
+        """CF-81: guards BUG-78 -- no two live children share a numba cache."""
+        import billiard.process
+
+        from app.worker import tasks
+
+        # setenv first so the undo is recorded even when the variable is then
+        # removed: the handler writes os.environ directly.
+        monkeypatch.setenv("NUMBA_CACHE_DIR", base or "unset")
+        if base is None:
+            monkeypatch.delenv("NUMBA_CACHE_DIR")
+        monkeypatch.setattr(billiard.process, "current_process", lambda: types.SimpleNamespace(index=index))
+
+        tasks._private_numba_cache()
+        configured = os.environ["NUMBA_CACHE_DIR"].replace("\\", "/")
+        assert configured.endswith(expected)
+        if base is None:
+            assert configured.startswith(str(Path.home()).replace("\\", "/"))
+
+    def test_the_main_process_keeps_the_shared_default(self, monkeypatch):
+        """CF-82: guards BUG-78 -- only pool children (which carry an index) are moved.
+
+        The handler is connected to Celery's `worker_process_init`, which fires
+        in each child before its first task.
+        """
+        import billiard.process
+        from celery.signals import worker_process_init
+
+        from app.worker import tasks
+
+        import weakref
+
+        monkeypatch.setenv("NUMBA_CACHE_DIR", "unset")
+        monkeypatch.delenv("NUMBA_CACHE_DIR")
+        monkeypatch.setattr(billiard.process, "current_process", lambda: types.SimpleNamespace())
+        tasks._private_numba_cache()
+        assert "NUMBA_CACHE_DIR" not in os.environ
+        receivers = [
+            ref() if isinstance(ref, weakref.ReferenceType) else ref for _, ref in worker_process_init.receivers
+        ]
+        assert tasks._private_numba_cache in receivers
+
+    def test_a_pool_child_compiles_into_its_own_directory(self, tmp_path):
+        """CF-83: guards BUG-78 -- the setting is in time, in a real interpreter.
+
+        A fresh interpreter plays a pool child: it imports the task module as
+        the worker's main process does, gets a pool index, runs the handler,
+        and only then imports numba -- which must use the slot's directory.
+        """
+        import json
+        import subprocess
+
+        code = (
+            "import json, sys\n"
+            "from billiard.process import current_process\n"
+            "current_process().index = 1\n"
+            "import app.worker.tasks as tasks\n"
+            "early = 'numba' in sys.modules\n"
+            "tasks._private_numba_cache()\n"
+            "import numba\n"
+            "print('RESULT ' + json.dumps({'early': early, 'cache_dir': numba.config.CACHE_DIR}))\n"
+        )
+        env = {key: value for key, value in os.environ.items() if key.upper() not in cfg.SETTINGS_KEYS}
+        env.update(NUMBA_CACHE_DIR=str(tmp_path / "numba"), PYTHONDONTWRITEBYTECODE="1")
+        completed = subprocess.run(
+            [sys.executable, "-B", "-c", code], cwd=cfg.BACKEND, env=env, capture_output=True, text=True, timeout=300
+        )
+        line = next((l for l in completed.stdout.splitlines() if l.startswith("RESULT ")), None)
+        assert line, completed.stderr[-3000:]
+        result = json.loads(line.removeprefix("RESULT "))
+        assert result["early"] is False
+        assert Path(result["cache_dir"]) == tmp_path / "numba" / "worker-1"
