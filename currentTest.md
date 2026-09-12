@@ -82,7 +82,9 @@ No test simulates power interruption, network/DASD interruption, incomplete-cycl
 
 ---
 
-## 3.1.8 Configuration Testing — NOT IMPLEMENTED
+## 3.1.8 Configuration Testing — SUPERSEDED
+
+> **Superseded 2026-09-12** by `Backend/tests/plans/3.1.8-configuration-testing.md`: 199 new cases (five `test_config_*.py` modules plus `Frontend/src/tests/configuration.test.tsx`), 17 fixed defects (BUG-61..77) and one fixed test-run defect (TEST-02). The analysis below is kept as the original record.
 
 No test varies hardware/software configuration combinations, cross-browser behavior, or concurrent non-target-software resource contention. `test_device.py` (CUDA/ROCm/MPS/CPU selection) is adjacent but is functional device-selection logic, not the template's multi-configuration deployment testing.
 
@@ -110,7 +112,7 @@ No formal risk register exists. `Backend/tests/README.md` has an informal Troubl
 | 3.1.5 Load Testing | Implemented |
 | 3.1.6 Security & Access Control | Implemented |
 | 3.1.7 Failover & Recovery | Implemented (superseded 2026-09-12 — see `Backend/tests/plans/3.1.7-failover-and-recovery.md`) |
-| 3.1.8 Configuration Testing | Missing |
+| 3.1.8 Configuration Testing | Implemented (superseded 2026-09-12 — see `Backend/tests/plans/3.1.8-configuration-testing.md`) |
 | 4. Deliverables | Partial — reporting tooling claimed, coverage measurement absent |
 | 5. Risks/Dependencies | Missing formal doc — informal equivalent exists |
 
@@ -169,7 +171,7 @@ Grounded against actual repo shape, checked 2026-09-02:
   3. Corrupted-cache-entry test: write a malformed value under a known cache key and assert the read path detects and recomputes rather than crashing.
   (Full DASD/hardware-level failover from the literal template is not applicable to this architecture — no failover cluster exists — so this scope should be explicitly narrowed to worker/Redis/API resilience in the written plan.)
 
-## 3.1.8 Configuration Testing — gaps (fully missing)
+## 3.1.8 Configuration Testing — gaps (closed 2026-09-12, see `Backend/tests/plans/3.1.8-configuration-testing.md`)
 - `docker-compose.yml` + separate `Backend/Dockerfile` / `Frontend/Dockerfile` exist but nothing in the test suite runs against the containerized configuration — all current tests run against the local dev environment directly.
 - No test matrix across the device-backend permutations `test_device.py` already validates in isolation (CUDA/ROCm/MPS/CPU) combined with actual model inference — device selection logic is tested, but not "does inference actually run correctly on each detected backend."
 - No browser-compatibility pass for the frontend (template asks Chrome/Firefox/Safari/Edge — README claims this as a goal, nothing implements it; no Playwright/Cypress cross-browser config found).
