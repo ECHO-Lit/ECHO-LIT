@@ -74,7 +74,9 @@ Template's "system-level security" (login/remote-access gateway testing) is expl
 
 ---
 
-## 3.1.7 Failover and Recovery Testing — NOT IMPLEMENTED
+## 3.1.7 Failover and Recovery Testing — SUPERSEDED
+
+> **Superseded 2026-09-12** by `Backend/tests/plans/3.1.7-failover-and-recovery.md`: 159 new cases in five `test_failover_*.py` modules, 11 fixed defects (BUG-50..60). The analysis below is kept as the original record.
 
 No test simulates power interruption, network/DASD interruption, incomplete-cycle abort, or corrupted DB pointers/keys, and no recovery-procedure validation exists anywhere in the suite.
 
@@ -107,7 +109,7 @@ No formal risk register exists. `Backend/tests/README.md` has an informal Troubl
 | 3.1.4 Performance Profiling | Implemented |
 | 3.1.5 Load Testing | Implemented |
 | 3.1.6 Security & Access Control | Implemented |
-| 3.1.7 Failover & Recovery | Missing |
+| 3.1.7 Failover & Recovery | Implemented (superseded 2026-09-12 — see `Backend/tests/plans/3.1.7-failover-and-recovery.md`) |
 | 3.1.8 Configuration Testing | Missing |
 | 4. Deliverables | Partial — reporting tooling claimed, coverage measurement absent |
 | 5. Risks/Dependencies | Missing formal doc — informal equivalent exists |
@@ -156,7 +158,7 @@ Grounded against actual repo shape, checked 2026-09-02:
 - No dependency/package vulnerability scan wired into the suite (e.g. `pip-audit`, `npm audit` as a test-suite gate).
 - **To implement:** concurrent cross-session isolation test (race two sessions against shared cache namespace, assert no bleed); wire `pip-audit`/`npm audit` as a CI-gated test; explicit written decision in the plan on system-level security ownership.
 
-## 3.1.7 Failover and Recovery — gaps (fully missing)
+## 3.1.7 Failover and Recovery — gaps (closed 2026-09-12, see `Backend/tests/plans/3.1.7-failover-and-recovery.md`)
 - No power/communication-interruption simulation at any level (client, server, Redis).
 - No **incomplete-cycle abort** test (kill a job mid-worker-execution, verify job status lands in a consistent terminal state rather than stuck/corrupted) — closest existing coverage is `test_fr10_cancellation_and_failures.py`, which tests *requested* cancellation, not an unplanned crash/kill.
 - No test for **Redis connection loss mid-request** and recovery behavior (reconnect, retry, or fail cleanly).

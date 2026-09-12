@@ -47,9 +47,21 @@ TEST_CATEGORIES = {
     },
     "security": {
         "description": "Security and Access Control Testing (Section 3.1.6)",
-        "files": ["test_security.py"], 
+        "files": ["test_security.py"],
         "priority": "important",
         "estimated_time": "20 minutes"
+    },
+    "failover_recovery": {
+        "description": "Failover and Recovery Testing (Section 3.1.7)",
+        "files": [
+            "test_failover_redis_outage.py",
+            "test_failover_worker_recovery.py",
+            "test_failover_stuck_jobs.py",
+            "test_failover_corrupt_data.py",
+            "test_failover_under_load.py",
+        ],
+        "priority": "critical",
+        "estimated_time": "1 minute"
     }
 }
 
