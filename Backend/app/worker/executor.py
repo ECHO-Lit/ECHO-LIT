@@ -14,13 +14,14 @@ import uuid
 from app.core import redis as redis_module
 from app.core.model_catalog import MODEL_REVISIONS
 from app.core.settings import settings
-from app.core.storage import ObjectStorage, get_storage
+from app.core.storage import ObjectStorage, get_storage, is_item_entry, read_cache_entry
 from app.core.storage import StorageError
 from redis.exceptions import RedisError
 from app.repositories.audio import AudioRepository
 from app.repositories.jobs import JobRepository
 from app.schemas.jobs import AudioAsset, JobError, JobProgress, JobStatus, TaskEnvelope
 from app.worker.cache_policy import item_cache_identity
+from app.worker.recovery import describe_failure
 
 
 logger = logging.getLogger(__name__)
@@ -211,7 +212,9 @@ async def _cached_item_result(envelope: TaskEnvelope, sha256: str, storage: Obje
     pointer = f"analysis-item-cache:{item_cache_key(envelope, sha256)}"
     cached_key = await redis_module.redis.get(pointer)
     if cached_key and storage.exists(cached_key):
-        return storage.get_json(cached_key)["result"]
+        entry = read_cache_entry(storage, cached_key, valid=is_item_entry)
+        if entry is not None:
+            return entry["result"]
     return None
 
 
@@ -580,9 +583,12 @@ async def execute(envelope_data: dict[str, Any], celery_task_id: str) -> None:
             await redis_module.job_redis.hincrby("metrics:jobs", "success", 1)
             return
         cached_key = await redis_module.redis.get(cache_pointer_key) if cacheable else None
-        if cached_key and storage.exists(cached_key):
+        cached_payload = (
+            read_cache_entry(storage, cached_key, valid=lambda value: isinstance(value, dict))
+            if cached_key and storage.exists(cached_key) else None
+        )
+        if cached_payload is not None:
             job_result_key = f"results/{envelope.session_id}/{envelope.job_id}/result.json"
-            cached_payload = storage.get_json(cached_key)
             cached_payload["job_id"] = envelope.job_id
             cached_payload.setdefault("metadata", {})["cache_hit"] = True
             cached_payload["metadata"]["queue_latency_seconds"] = queue_latency
@@ -730,7 +736,7 @@ async def execute(envelope_data: dict[str, Any], celery_task_id: str) -> None:
         await jobs.update(
             envelope.job_id,
             status=JobStatus.failure,
-            error=JobError(code="execution_failed", message=str(exc)[:500], retryable=False),
+            error=describe_failure(exc, "execution_failed"),
         )
         await redis_module.job_redis.hincrby("metrics:jobs", "failure", 1)
         logger.exception("job_failed job_id=%s", envelope.job_id)
@@ -801,7 +807,7 @@ async def execute_batch_item(
         await jobs.update(
             envelope.job_id,
             status=JobStatus.failure,
-            error=JobError(code="batch_item_failed", message=str(exc)[:500], retryable=False),
+            error=describe_failure(exc, "batch_item_failed"),
         )
         raise
 
@@ -873,7 +879,9 @@ async def complete_batch_from_cache(envelope_data: dict[str, Any]) -> bool:
     storage = get_storage()
     if not cached_key or not storage.exists(cached_key):
         return False
-    payload = storage.get_json(cached_key)
+    payload = read_cache_entry(storage, cached_key, valid=lambda value: isinstance(value, dict))
+    if payload is None:
+        return False
     payload["job_id"] = envelope.job_id
     payload.setdefault("metadata", {})["cache_hit"] = True
     job_result_key = f"results/{envelope.session_id}/{envelope.job_id}/result.json"
