@@ -247,7 +247,7 @@ Backend/
 
 - **Result cache** keyed by `md5(file_path + size + mtime)` × model × method. Cache invalidates automatically when the audio file changes.
 - **Session state** is cookie-driven (`sid`), and every session has a Redis namespace.
-- Redis config in [docker-compose.yml](Backend/docker-compose.yml): 256 MB max, `allkeys-lru` eviction, `redis-cli ping` healthcheck.
+- Redis config in [docker-compose.yml](docker-compose.yml): append-only persistence, `noeviction` with a `maxmemory` bound (`REDIS_MAXMEMORY`, default 1 GB) so a full Redis refuses writes rather than dropping data, `redis-cli ping` healthcheck.
 - **Long-term artifacts** (audio, custom datasets, metadata CSVs) live on disk. No object store.
 
 Cache-key patterns to grep for when debugging:
