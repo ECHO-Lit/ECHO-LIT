@@ -165,7 +165,12 @@ async def materialize_dataset_audio(payload: MaterializeAudioRequest, request: R
         sha256=digest,
         created_at=datetime.now(timezone.utc),
     )
-    await AudioRepository().create(asset)
+    try:
+        await AudioRepository().create(asset)
+    except Exception:
+        # As in upload: an object with no record is unreachable, so remove it.
+        await asyncio.to_thread(storage.delete, object_key)
+        raise
     return _asset_response(asset)
 
 
