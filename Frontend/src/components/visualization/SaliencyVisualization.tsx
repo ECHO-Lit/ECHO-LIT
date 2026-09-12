@@ -504,7 +504,8 @@ export const SaliencyVisualization = ({ selectedFile, model, dataset, originalDa
           {!loading && !error && saliencyData && (
             <div className="text-xs space-y-2">
               <div className="font-medium">Top Salient Segments:</div>
-              {saliencyData.segments
+              {/* Copy first: sorting state in place reorders the time-ordered overlay bars on the next render. */}
+              {[...saliencyData.segments]
                 .sort((a, b) => b.intensity - a.intensity)
                 .slice(0, 5)
                 .map((segment, idx) => (

@@ -226,7 +226,8 @@ export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice
       // Use entire dataset for better visualization
       const filesToProcess = availableFiles;
       const nComponents = is3D ? 3 : 2;
-      fetchEmbeddings(model, dataset, filesToProcess, reductionMethod, nComponents, minClusterSize);
+      // Explicit refresh: skip the session cache so the job always re-runs.
+      fetchEmbeddings(model, dataset, filesToProcess, reductionMethod, nComponents, minClusterSize, true);
     }
   };
 
@@ -261,8 +262,8 @@ export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice
 
   const handleAngleRangeSelect = (selectedFiles: string[]) => {
     // Only update if the selection has actually changed
-    const currentSelection = selectedByAngle.sort().join(',');
-    const newSelection = selectedFiles.sort().join(',');
+    const currentSelection = [...selectedByAngle].sort().join(',');
+    const newSelection = [...selectedFiles].sort().join(',');
     
     if (currentSelection !== newSelection) {
       setSelectedByAngle(selectedFiles);
@@ -285,8 +286,8 @@ export const EmbeddingPanel = ({ model = "whisper-base", dataset = "common-voice
 
   const handle2DSelectionChange = (selectedFiles: string[]) => {
     // Only update if the selection has actually changed
-    const currentSelection = selectedPoints2D.sort().join(',');
-    const newSelection = selectedFiles.sort().join(',');
+    const currentSelection = [...selectedPoints2D].sort().join(',');
+    const newSelection = [...selectedFiles].sort().join(',');
     
     if (currentSelection !== newSelection) {
       setSelectedPoints2D(selectedFiles);
