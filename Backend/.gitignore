@@ -233,7 +233,4 @@ secrets.json
 *.crt
 *.cer
 
-# Docker
-.dockerignore
-
 /data
