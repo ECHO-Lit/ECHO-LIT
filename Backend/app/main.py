@@ -1,3 +1,4 @@
+import logging
 import os
 from pathlib import Path
 
@@ -5,6 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Response
 from fastapi.responses import JSONResponse
+from redis.exceptions import RedisError
 
 from .api.routes import (
     analyses as analyses_routes,
@@ -17,9 +19,11 @@ from .api.routes import (
     session as session_routes,
     upload as upload_routes,
 )
-from .core.session import SessionMiddleware
+from .core.session import SessionMiddleware, service_unavailable
 from .core.settings import settings
 
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="ECHO API", version="2.0")
 
@@ -30,14 +34,15 @@ origins = (
     else ["http://localhost:3000", "http://localhost:8080", "http://127.0.0.1:8080"]
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 app.add_middleware(SessionMiddleware)
+
+
+@app.exception_handler(RedisError)
+async def redis_unavailable(request: Request, exc: RedisError):
+    # A Redis failure inside a route gets the same readable 503 the session
+    # middleware returns, rather than a bare 500 the browser cannot use.
+    logger.warning("redis unavailable during %s %s: %s", request.method, request.url.path, exc)
+    return service_unavailable()
 
 
 LEGACY_PREFIXES = ("/inferences", "/saliency", "/perturb", "/results")
@@ -82,6 +87,19 @@ async def legacy_api_gate(request: Request, call_next):
         response.headers["Deprecation"] = "true"
         response.headers["Sunset"] = "one release after the /jobs migration"
     return response
+
+
+# Added last, so outermost: every response -- including the session
+# middleware's 503 and the gate's 410 -- carries the CORS headers a
+# cross-origin browser needs to read it, and a preflight is answered here
+# without ever reaching the session store.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 app.include_router(session_routes.router, tags=["Session"])
