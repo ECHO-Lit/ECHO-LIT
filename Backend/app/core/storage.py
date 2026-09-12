@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from functools import lru_cache
 import json
+import logging
 from pathlib import Path, PurePosixPath
 import shutil
 from typing import Any
+import uuid
 
 from .settings import settings
+
+
+logger = logging.getLogger(__name__)
 
 
 class StorageError(RuntimeError):
@@ -92,9 +98,16 @@ class LocalObjectStorage(ObjectStorage):
     def put_file(self, key: str, source: Path, content_type: str | None = None) -> None:
         destination = self.path_for(key)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        temporary = destination.with_suffix(destination.suffix + ".tmp")
-        shutil.copyfile(source, temporary)
-        temporary.replace(destination)
+        # A temporary name per write, not per key: two writers of one key (the
+        # per-file cache, when two users analyse the same clip) must not share
+        # a staging file, or the second rename finds the first already moved.
+        temporary = destination.with_name(f"{destination.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            shutil.copyfile(source, temporary)
+            temporary.replace(destination)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
 
     def download_file(self, key: str, destination: Path) -> None:
         source = self.path_for(key)
@@ -153,6 +166,34 @@ class S3ObjectStorage(ObjectStorage):
             return True
         except Exception:
             return False
+
+
+def read_cache_entry(
+    storage: ObjectStorage, key: str, *, valid: Callable[[Any], bool] | None = None
+) -> Any | None:
+    """Read a cache object, treating a damaged one as a miss.
+
+    A cache is an optimisation: an entry that no longer parses, or parses to
+    the wrong shape, must cost a recomputation rather than the job.  The entry
+    is deleted so the recomputation writes a sound one in its place -- every
+    reader checks `exists` first, so its pointer then reads as a miss too.
+    """
+    try:
+        value = storage.get_json(key)
+    except ValueError as exc:  # JSONDecodeError and UnicodeDecodeError are both ValueErrors
+        logger.warning("Discarding unreadable cache entry %s: %s", key, exc)
+        storage.delete(key)
+        return None
+    if valid is not None and not valid(value):
+        logger.warning("Discarding malformed cache entry %s", key)
+        storage.delete(key)
+        return None
+    return value
+
+
+def is_item_entry(value: Any) -> bool:
+    """The shape of a per-file cache entry: `{"result": ...}`."""
+    return isinstance(value, dict) and "result" in value
 
 
 @lru_cache(maxsize=1)
