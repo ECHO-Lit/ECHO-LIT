@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from app.core.celery_app import celery_app, send_task_async
 from app.core.settings import settings
 from app.core.audio_probe import probe_audio
-from app.core.storage import LocalObjectStorage, StorageError, get_storage
+from app.core.storage import LocalObjectStorage, StorageError, StorageUnavailable, get_storage
 from app.repositories.audio import AudioRepository
 from app.schemas.jobs import AudioAsset, JobOperation, TaskEnvelope
 
@@ -112,7 +112,9 @@ async def upload_audio_file(
             await asyncio.to_thread(storage.delete, object_key)
             raise
         return _asset_response(asset)
-    except HTTPException:
+    except (HTTPException, StorageUnavailable):
+        # An unreachable store is the service's failure, not the request's:
+        # main.py answers it with a 503 and a retry hint.
         raise
     except (StorageError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
