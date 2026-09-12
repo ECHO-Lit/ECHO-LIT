@@ -11,6 +11,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from app.core.model_catalog import ModelDefinition, ModelKind, get_model_definition
+from app.core.settings import settings
 from app.schemas.jobs import RuntimeModelSpec
 
 
@@ -276,7 +277,13 @@ class GenericHuggingFaceAdapter(AudioModelAdapter):
             ModelKind.AUDIO_CLASSIFICATION: AutoModelForAudioClassification,
         }[self.kind]
         processor = AutoProcessor.from_pretrained(self.revision, **options)
-        model = cls.from_pretrained(self.revision, **options).to(INFERENCE_DEVICE).eval()
+        # settings.ATTENTION_FORCE_CPU: eager attention on the GPU reaches a
+        # Triton kernel that segfaults the worker, so the eager-attention
+        # variant runs on the CPU, as built-in Whisper's does.  `execute` moves
+        # inputs to the model's own device.  (The registry key still records
+        # INFERENCE_DEVICE; it only has to be unique per variant.)
+        target = "cpu" if variant == "eager-attention" and settings.ATTENTION_FORCE_CPU else INFERENCE_DEVICE
+        model = cls.from_pretrained(self.revision, **options).to(target).eval()
         return processor, model
 
     def execute(self, operation: str, audio_path: str, parameters: dict[str, Any], resource: Any = None) -> Any:
