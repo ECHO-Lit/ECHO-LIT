@@ -94,7 +94,10 @@ if not rows:
   echo "  heartbeats: ${beats:-0}"
   docker exec "$REDIS" redis-cli -n $BROKER_DB client list 2>/dev/null >/dev/null
   printf '  consumers:  '
-  docker exec echo-worker-model-local \
+  # Workers carry no fixed container name (they can be scaled, and the GPU
+  # profiles run no worker-model-local at all), so the broadcast is sent from
+  # the scheduler: a singleton in every topology, with celery installed.
+  docker exec echo-scheduler \
     celery -A app.core.celery_app:celery_app inspect ping --timeout 5 2>/dev/null \
     | grep -o 'celery@[a-z0-9]*' | paste -sd' ' - || echo '(unreachable)'
 }

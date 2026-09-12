@@ -56,7 +56,7 @@ For S3 deployments, apply the included 24-hour lifecycle policy:
 
 ## Prerequisites
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows/Mac) or Docker Engine + Compose plugin (Linux)
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows/Mac) or Docker Engine + Compose plugin (Linux); Docker Compose 2.24 or later
 - **Windows**: enable the WSL 2 backend in Docker Desktop settings
 - **NVIDIA users**: driver 555+, then verify with `docker run --rm --gpus all nvidia/cuda:12.6.0-base-ubuntu22.04 nvidia-smi`
 - **AMD users**: Linux with a ROCm-supported GPU and host driver
@@ -81,6 +81,19 @@ First boot starts a CPU API control plane and a separate local worker. Model
 weights are downloaded only by the worker into `hf-cache`; the API image does
 not contain or import the ML runtime.
 
+`Backend/.env` configures the API, the scheduler and every worker: session and
+job TTLs, upload limits, cookie flags, CORS origins (`ALLOWED_ORIGINS`) and the
+worker tunables. Every key is documented in `Backend/.env.example`, including a
+production block. Compose itself pins only what depends on the container
+network and mounts (the Redis URLs and the storage root), so those lines stay
+commented. `Frontend/.env` is optional: with `VITE_API_BASE_URL` unset, the
+client calls port 8000 on whatever host served the page.
+
+To add workers, for throughput or so that queued work continues when one fails,
+scale them: `docker compose up -d --scale worker-cpu=2 --scale worker-model-local=2`.
+Redis refuses writes rather than evicting data once it reaches `REDIS_MAXMEMORY`
+(default `1gb`; set it in your shell or a root `.env`).
+
 - **Frontend**: http://localhost:8080
 - **API**: http://localhost:8000/health
 - **Redis**: localhost:6379
@@ -97,9 +110,11 @@ docker compose --profile amd up --build --scale worker-model-local=0 redis api s
 ```
 
 Docker Desktop on macOS cannot pass the Metal GPU into a Linux container. Keep
-the API in Compose and run the worker natively to use MPS:
+the API in Compose, without the local CPU model worker, and run the GPU-queue
+worker natively to use MPS:
 
 ```bash
+docker compose up -d --build --scale worker-model-local=0 redis api scheduler frontend worker-cpu
 cd Backend
 python3 -m venv .venv
 source .venv/bin/activate
