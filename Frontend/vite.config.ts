@@ -7,10 +7,10 @@ import { componentTagger } from "lovable-tagger";
 // https://vitejs.dev/config/
 //
 // `defineConfig` is imported from "vite", not "vitest/config", deliberately.
-// Importing it from vitest would make this file load vitest at config-resolution
-// time, which breaks `npm ci --omit=dev && npm run build` — exactly what the
-// Dockerfile does. The triple-slash reference above is types-only and is erased
-// at transpile, so it types the `test` block below without any runtime cost.
+// Importing it from vitest would make every vite command -- the dev server and
+// `npm run build`, not only the tests -- load vitest at config-resolution time.
+// The triple-slash reference above is types-only and is erased at transpile,
+// so it types the `test` block below without any runtime cost.
 export default defineConfig(({ mode }) => ({
   server: {
     host: "::",

@@ -21,9 +21,17 @@ CMD ["npm", "run", "dev"]
 
 # ── Production build ───────────────────────────────────────────
 FROM deps AS build
+# Vite bakes the API base into the bundle at build time, and .dockerignore
+# keeps .env out of the context, so the production API is a build argument:
+#   docker build --target prod --build-arg VITE_API_BASE_URL=https://api.example.org .
+# Left empty, the client calls port 8000 on the host that served the page.
+ARG VITE_API_BASE_URL=""
+ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 COPY . .
 RUN npm run build
 
 FROM nginx:alpine AS prod
+# SPA fallback: client-side routes such as /j-lens are served index.html.
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 80
