@@ -20,6 +20,23 @@ class StorageError(RuntimeError):
     pass
 
 
+class StorageUnavailable(StorageError):
+    """The backend could not be reached or refused the request.
+
+    Transient from the caller's point of view: the workers retry it (it is a
+    `StorageError`) and the API answers 503, as it does for Redis.
+    """
+
+
+def configured_backend() -> str:
+    """STORAGE_BACKEND, canonical.
+
+    Settings normalise it at startup; this also covers a value set past
+    validation, so `get_storage` and the retention sweep can never disagree.
+    """
+    return settings.STORAGE_BACKEND.strip().lower()
+
+
 def _safe_key(key: str) -> str:
     # Backslashes are rejected before parsing: PurePosixPath treats "\" as an
     # ordinary character, so "a\..\..\b" would survive the traversal check below
@@ -129,14 +146,28 @@ class LocalObjectStorage(ObjectStorage):
         return self.path_for(key).is_file()
 
 
+_NOT_FOUND_CODES = {"404", "NoSuchKey", "NotFound"}
+
+
 class S3ObjectStorage(ObjectStorage):
+    """The S3 configuration of the store, held to the same contract as the local one.
+
+    Callers are written against `StorageError`: a missing object is one, and
+    the workers retry it as transient.  botocore raises its own exception
+    types, so every call translates them -- a missing object into
+    `StorageError("Object not found")`, anything else (bad credentials, a
+    wrong bucket, an unreachable endpoint) into `StorageUnavailable`.
+    """
+
     def __init__(self) -> None:
         if not settings.S3_BUCKET:
             raise StorageError("S3_BUCKET is required for S3 storage")
         try:
             import boto3
+            from botocore.exceptions import BotoCoreError, ClientError
         except ImportError as exc:
             raise StorageError("boto3 is required for S3 storage") from exc
+        self._client_errors = (BotoCoreError, ClientError)
         self.bucket = settings.S3_BUCKET
         self.client = boto3.client(
             "s3",
@@ -146,26 +177,46 @@ class S3ObjectStorage(ObjectStorage):
             aws_secret_access_key=settings.S3_SECRET_ACCESS_KEY,
         )
 
+    @staticmethod
+    def _is_not_found(exc: BaseException) -> bool:
+        response = getattr(exc, "response", None) or {}
+        return str(response.get("Error", {}).get("Code")) in _NOT_FOUND_CODES
+
+    def _translate(self, exc: BaseException) -> StorageError:
+        if self._is_not_found(exc):
+            return StorageError("Object not found")
+        return StorageUnavailable(f"S3 storage unavailable: {exc}")
+
+    def _call(self, operation: Callable[[], Any]) -> Any:
+        try:
+            return operation()
+        except self._client_errors as exc:
+            raise self._translate(exc) from exc
+
     def put_file(self, key: str, source: Path, content_type: str | None = None) -> None:
         extra = {"ContentType": content_type} if content_type else None
-        self.client.upload_file(str(source), self.bucket, _safe_key(key), ExtraArgs=extra or {})
+        self._call(lambda: self.client.upload_file(str(source), self.bucket, _safe_key(key), ExtraArgs=extra or {}))
 
     def download_file(self, key: str, destination: Path) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
-        self.client.download_file(self.bucket, _safe_key(key), str(destination))
+        self._call(lambda: self.client.download_file(self.bucket, _safe_key(key), str(destination)))
 
     def get_bytes(self, key: str) -> bytes:
-        return self.client.get_object(Bucket=self.bucket, Key=_safe_key(key))["Body"].read()
+        return self._call(lambda: self.client.get_object(Bucket=self.bucket, Key=_safe_key(key))["Body"].read())
 
     def delete(self, key: str) -> None:
-        self.client.delete_object(Bucket=self.bucket, Key=_safe_key(key))
+        self._call(lambda: self.client.delete_object(Bucket=self.bucket, Key=_safe_key(key)))
 
     def exists(self, key: str) -> bool:
+        # Only "no such object" is an answer; a failure to ask is not.  Until
+        # this raised, wrong credentials made /health report storage healthy.
         try:
             self.client.head_object(Bucket=self.bucket, Key=_safe_key(key))
             return True
-        except Exception:
-            return False
+        except self._client_errors as exc:
+            if self._is_not_found(exc):
+                return False
+            raise self._translate(exc) from exc
 
 
 def read_cache_entry(
@@ -198,7 +249,7 @@ def is_item_entry(value: Any) -> bool:
 
 @lru_cache(maxsize=1)
 def get_storage() -> ObjectStorage:
-    backend = settings.STORAGE_BACKEND.strip().lower()
+    backend = configured_backend()
     if backend == "local":
         return LocalObjectStorage(settings.STORAGE_LOCAL_ROOT)
     if backend == "s3":

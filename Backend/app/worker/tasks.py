@@ -17,7 +17,7 @@ from celery import chord
 
 from app.core.celery_app import celery_app, queue_for
 from app.core.heartbeat import record_worker_heartbeat
-from app.core.storage import StorageError
+from app.core.storage import StorageError, configured_backend
 from app.core.settings import settings
 from app.repositories.jobs import TERMINAL_STATES, JobRepository
 from app.schemas.jobs import JobError, JobStatus
@@ -446,7 +446,9 @@ def cleanup_expired_session_datasets_task() -> int:
 
 @celery_app.task(name="app.worker.tasks.cleanup_expired_local_objects")
 def cleanup_expired_local_objects() -> int:
-    if settings.STORAGE_BACKEND.lower() != "local":
+    # The same canonical value get_storage() uses: " local" once stored
+    # objects here and then left them past the TTL forever (PE-3).
+    if configured_backend() != "local":
         return 0
     root = Path(settings.STORAGE_LOCAL_ROOT).resolve()
     if not root.exists():
