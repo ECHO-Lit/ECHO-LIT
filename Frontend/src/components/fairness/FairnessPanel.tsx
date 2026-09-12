@@ -229,7 +229,7 @@ export function FairnessPanel({ model, dataset, originalDataset }: FairnessPanel
 
           {job.error && <p className="text-xs text-destructive">{job.error}</p>}
 
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button
               size="sm"
               disabled={job.isRunning || job.isSubmitting || !groupingColumn}
