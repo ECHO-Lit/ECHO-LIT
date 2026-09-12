@@ -24,6 +24,8 @@ export interface RecordedCall {
   url: string;
   body: BodyInit | null | undefined;
   headers: HeadersInit | undefined;
+  /** `init.credentials` as sent — 3.1.8 asserts the session cookie travels. */
+  credentials?: RequestCredentials;
 }
 
 /**
@@ -100,6 +102,7 @@ export function stubFetch(routes: RouteTable): FetchStub {
         url,
         body: init?.body,
         headers: init?.headers,
+        credentials: init?.credentials,
       };
       calls.push(call);
 

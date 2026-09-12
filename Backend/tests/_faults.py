@@ -41,7 +41,7 @@ from app.core import redis as redis_module
 from app.main import app
 from tests._load import Profile, SimulatedWorker
 
-ORIGIN = "http://localhost:8080"  # an allowed CORS origin (app/main.py defaults)
+ORIGIN = "http://localhost:8080"  # an allowed CORS origin (Settings.ALLOWED_ORIGINS default)
 
 
 class FaultHarness:
