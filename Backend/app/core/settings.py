@@ -1,3 +1,4 @@
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
@@ -38,9 +39,37 @@ class Settings(BaseSettings):
     CODE_VERSION: str = "development"
     TASK_SOFT_TIME_LIMIT_SECONDS: int = 55 * 60
     TASK_TIME_LIMIT_SECONDS: int = 60 * 60
+    # A task lost with its worker is redelivered once the broker's visibility
+    # timeout passes; a job nothing has written to for longer than that is
+    # failed by the stale-job reaper. Unset, both derive from the hard time
+    # limit, so a task is never redelivered while it may still be running and
+    # never reaped before its redelivery had a chance.
+    BROKER_VISIBILITY_TIMEOUT_SECONDS: int | None = None
+    STALE_JOB_SECONDS: int | None = None
+    STALE_JOB_SWEEP_SECONDS: int = 5 * 60
 
     # FR-10: Accent and language fairness analysis (docs/FR10plan.md Part 1 S2.3)
     FR10_MIN_GROUP_SIZE: int = 8
     FR10_MIN_SPEAKERS_PER_GROUP: int = 2
+
+    @model_validator(mode="after")
+    def _order_recovery_timings(self) -> "Settings":
+        if self.BROKER_VISIBILITY_TIMEOUT_SECONDS is None:
+            self.BROKER_VISIBILITY_TIMEOUT_SECONDS = self.TASK_TIME_LIMIT_SECONDS + 10 * 60
+        if self.STALE_JOB_SECONDS is None:
+            self.STALE_JOB_SECONDS = self.BROKER_VISIBILITY_TIMEOUT_SECONDS + 30 * 60
+        timings = (
+            self.TASK_SOFT_TIME_LIMIT_SECONDS,
+            self.TASK_TIME_LIMIT_SECONDS,
+            self.BROKER_VISIBILITY_TIMEOUT_SECONDS,
+            self.STALE_JOB_SECONDS,
+        )
+        if not timings[0] < timings[1] < timings[2] < timings[3]:
+            raise ValueError(
+                "TASK_SOFT_TIME_LIMIT_SECONDS < TASK_TIME_LIMIT_SECONDS < "
+                "BROKER_VISIBILITY_TIMEOUT_SECONDS < STALE_JOB_SECONDS must be ordered, "
+                f"got {timings}"
+            )
+        return self
 
 settings = Settings()
