@@ -50,5 +50,17 @@ export default defineConfig(({ mode }) => ({
     // how many files are running in parallel. 10s proved too tight under
     // --sequence.shuffle; 30s leaves headroom without hiding a real hang.
     testTimeout: 30_000,
+    // Opt-in via `npm run test:coverage`. Thresholds are ratchet floors:
+    // floor(measured baseline) - 1, raised as coverage rises, never lowered
+    // without a recorded reason. This is the only place they are stated; the
+    // evaluation summary reports them.
+    coverage: {
+      provider: "v8",
+      include: ["src/**/*.{ts,tsx}"],
+      exclude: ["src/tests/**", "src/**/*.d.ts"],
+      reporter: ["text-summary", "html", "json-summary"],
+      reportsDirectory: "./coverage",
+      thresholds: { lines: 36, statements: 36, branches: 52, functions: 25 },
+    },
   },
 }));
