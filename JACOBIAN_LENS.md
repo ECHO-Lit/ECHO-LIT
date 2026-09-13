@@ -424,6 +424,8 @@ Key properties:
 
 ## References
 
+- [`JACOBIAN_LENS_INSIGHTS.md`](./JACOBIAN_LENS_INSIGHTS.md) — practical guide:
+  what the (position × layer) readout reveals, with worked examples.
 - Gurnee, W. et al. (2026). *Verbalizable Representations Form a Global
   Workspace in Language Models.* transformer-circuits.pub — the Jacobian-lens
   construction (`J_ℓ = E[∂h_final,t'/∂h_ℓ,t]` over t' ≥ t and a prompt corpus)
