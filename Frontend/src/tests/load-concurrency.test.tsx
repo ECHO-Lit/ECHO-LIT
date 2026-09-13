@@ -184,3 +184,92 @@ describe("TestClientBurst", () => {
     expect(uploader).toContain("mapWithConcurrency(acceptedFiles");
   });
 });
+
+/**
+ * A job a client abandons must not keep a worker. Saliency and attention share
+ * one single-process queue, so an orphan from a quick file switch made every
+ * later analysis sit at "Queued" behind it.
+ */
+describe("TestAbandonedJobs", () => {
+  const status = (job_id: string, state: string) => ({
+    json: {
+      job_id, operation: "saliency", status: state, cache_hit: false,
+      progress: { current: 0, total: 1, message: state },
+    },
+  });
+  const input = { operation: "saliency" as const, audio_ids: ["a1"] };
+
+  function jobRoutes(submit: RouteValue) {
+    return stubFetch({
+      "POST /jobs": submit,
+      "GET /jobs/job-a": status("job-a", "queued"),
+      "GET /jobs/job-b": status("job-b", "success"),
+      "GET /jobs/job-b/result": { json: { items: [{ result: { from: "b" } }] } },
+      "DELETE /jobs/*": { status: 202, json: {} },
+    });
+  }
+
+  it("LC-08 cancels the running job when a newer run replaces it", async () => {
+    const { renderHook, act } = await import("@testing-library/react");
+    const { useJob } = await import("@/hooks/use-job");
+    const ids = ["job-a", "job-b"];
+    const stub = jobRoutes(() => ({ json: { job_id: ids.shift() } }));
+    const { result } = renderHook(() => useJob());
+
+    let first!: Promise<unknown>;
+    act(() => { first = result.current.start(input); });
+    const firstOutcome = first.catch((error: Error) => error.name);
+    await waitFor(() => expect(stub.callsFor("GET /jobs/job-a")).toHaveLength(1));
+
+    let second!: Promise<unknown>;
+    await act(async () => { second = result.current.start(input); await second; });
+
+    expect(stub.callsFor("DELETE /jobs/job-a")).toHaveLength(1);
+    expect(await firstOutcome).toBe("AbortError");
+    expect(result.current.result).toEqual({ items: [{ result: { from: "b" } }] });
+  });
+
+  it("LC-09 cancels a job superseded while its submit was still in flight", async () => {
+    // The id only exists once the POST answers; the cancel must follow it.
+    const { renderHook, act } = await import("@testing-library/react");
+    const { useJob } = await import("@/hooks/use-job");
+    let releaseFirst!: () => void;
+    const firstSubmit = new Promise<void>((release) => { releaseFirst = release; });
+    let submits = 0;
+    const stub = jobRoutes(async () => {
+      submits += 1;
+      if (submits === 1) {
+        await firstSubmit;
+        return { json: { job_id: "job-a" } };
+      }
+      return { json: { job_id: "job-b" } };
+    });
+    const { result } = renderHook(() => useJob());
+
+    let first!: Promise<unknown>;
+    act(() => { first = result.current.start(input); });
+    const firstOutcome = first.catch((error: Error) => error.name);
+    await waitFor(() => expect(stub.callsFor("POST /jobs")).toHaveLength(1));
+    await act(async () => { await result.current.start(input); });
+    releaseFirst();
+
+    expect(await firstOutcome).toBe("AbortError");
+    await waitFor(() => expect(stub.callsFor("DELETE /jobs/job-a")).toHaveLength(1));
+    // Never polled: the abort is honoured before the first status read.
+    expect(stub.callsFor("GET /jobs/job-a")).toHaveLength(0);
+  });
+
+  it("LC-10 never sends DELETE for a job that already finished", async () => {
+    // DELETE on a terminal job removes its result (and any generated audio)
+    // rather than cancelling it.
+    const { renderHook, act } = await import("@testing-library/react");
+    const { useJob } = await import("@/hooks/use-job");
+    const stub = jobRoutes({ json: { job_id: "job-b" } });
+    const { result } = renderHook(() => useJob());
+
+    await act(async () => { await result.current.start(input); });
+    await act(async () => { await result.current.start(input); });
+
+    expect(stub.callsFor("DELETE /jobs/*")).toHaveLength(0);
+  });
+});
