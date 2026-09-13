@@ -124,6 +124,24 @@ describe("TestPredictionTabs", () => {
     const fairnessPanelId = fairnessTab.getAttribute("aria-controls");
     expect(document.getElementById(fairnessPanelId!)).not.toBeNull();
   });
+
+  it("UI-37 keeps a visited analysis tab mounted so its state and job survive a tab switch", async () => {
+    // Unmounting on switch reset the saliency method to GradCAM and re-submitted
+    // the job on return (served from cache after queueing behind the orphan).
+    await renderDashboard();
+    const user = userEvent.setup();
+    const saliencyTab = screen.getByRole("tab", { name: "Saliency" });
+    const saliencyPanelId = saliencyTab.getAttribute("aria-controls")!;
+    saliencyTab.focus();
+    await user.keyboard("{ArrowRight}");
+    await waitFor(() =>
+      expect(saliencyTab).toHaveAttribute("aria-selected", "false"),
+    );
+    const saliencyPanel = document.getElementById(saliencyPanelId);
+    expect(saliencyPanel).not.toBeNull();
+    expect(saliencyPanel).toHaveAttribute("data-state", "inactive");
+    expect(saliencyPanel!.textContent).toContain("Saliency Overlay");
+  });
 });
 
 describe("TestEmbeddingTabs", () => {
