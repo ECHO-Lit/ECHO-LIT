@@ -117,6 +117,9 @@ class TestRedisOutageUnderLoad:
 
 
 class TestWorkerLossUnderLoad:
+    # Asserts PE-1's wall-clock budget, so it belongs to the untraced timing run
+    # (TEST-05, tests/plans/4-deliverables.md).
+    @pytest.mark.performance
     async def test_half_the_workers_die_holding_jobs(self, harness, monkeypatch):
         """FO-92: RE-1 under load -- "Queued work shall continue on remaining workers".
 
