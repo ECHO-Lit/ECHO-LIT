@@ -310,20 +310,23 @@ Test files under [Backend/tests/](Backend/tests/):
 
 - `test_data_integrity.py` — audio processing correctness.
 - `test_function_testing.py` — unit tests over services.
-- `test_performance_load.py` — batch inference load.
+- `test_perf_*.py` / `test_load_*.py` — performance profiling and load (Test Plan 3.1.4 / 3.1.5).
 - `test_queue.py` — queue helpers.
 - `test_results_cache.py` — cache hit / miss / TTL.
 - `test_security.py` — auth / CORS / cookies.
 - `test_session_cookie.py` — session middleware.
 
+The full module-to-section map is `TEST_CATEGORIES` in [run_tests.py](Backend/tests/run_tests.py); per-section plans are in [Backend/tests/plans/](Backend/tests/plans/).
+
 ### 10.2 Frontend
 
-Minimal — `tests/ui-components.test.tsx` under [Frontend/](Frontend/). No configured test runner in `package.json` scripts; expand if adding coverage.
+Vitest + React Testing Library + jsdom; suites under `Frontend/src/tests/`. `npm test` runs them, `npm run test:coverage` adds v8 coverage and a junit report.
 
 Run backend tests:
 ```
 cd Backend
 pytest
+python tests/run_tests.py report   # coverage + tests/test_reports/evaluation-summary.md
 ```
 
 ---
