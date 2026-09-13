@@ -116,16 +116,18 @@ class JacobianLensTrainingSample(BaseModel):
 
 
 class JacobianLensFitParameters(OperationParameters):
-    samples: list[JacobianLensTrainingSample] = Field(min_length=2, max_length=200)
+    samples: list[JacobianLensTrainingSample] = Field(min_length=2, max_length=1000)
+    probe_count: int = Field(default=4, ge=1, le=32)
     max_audio_seconds: float = Field(default=30.0, gt=0, le=60)
-    frame_samples: int = Field(default=32, ge=8, le=128)
-    ridge_regularization: float = Field(default=1e-3, gt=0, le=1.0)
 
 
 class JacobianLensApplyParameters(OperationParameters):
     lens_id: str = Field(min_length=1, max_length=128)
     top_k: int = Field(default=5, ge=1, le=20)
-    max_frames: int = Field(default=96, ge=8, le=256)
+    # Positions to read come from the model's own greedy transcript unless a
+    # reference transcript is provided for a teacher-forced reading.
+    transcript: str | None = Field(default=None, max_length=4096)
+    max_new_tokens: int = Field(default=64, ge=8, le=256)
 
 
 class HiddenStatesParameters(OperationParameters):
@@ -196,7 +198,7 @@ PARAMETER_MODELS: dict[JobOperation, type[OperationParameters]] = {
 
 class JobCreateRequest(BaseModel):
     operation: JobOperation
-    audio_ids: list[str] = Field(min_length=1, max_length=200)
+    audio_ids: list[str] = Field(min_length=1, max_length=1000)
     model: str | None = None
     parameters: dict[str, Any] = Field(default_factory=dict)
 
