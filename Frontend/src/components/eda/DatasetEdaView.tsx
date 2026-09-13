@@ -419,12 +419,14 @@ export const DatasetEdaView = ({
 
       {/* Acoustic EDA */}
       <div className="border-t border-border pt-3 space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
+        {/* Wraps instead of pushing "Compute acoustics" past the panel edge
+            when the CSV/JSON buttons appear in a narrow panel. */}
+        <div className="flex flex-wrap items-center justify-between gap-1.5">
+          <div className="flex items-center gap-1.5 whitespace-nowrap">
             <BarChart3 className="h-3.5 w-3.5 text-primary" />
             <span className="text-xs font-medium">Acoustic features</span>
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             {acousticEda && (
               <>
                 <Tooltip>
@@ -500,7 +502,10 @@ export const DatasetEdaView = ({
               <Badge variant="outline" className="text-[10px]">
                 {acousticEda.summary.total_files} files &middot; {acousticEda.summary.total_features_extracted} features
               </Badge>
-              {acousticEda.cache_info && (
+              {/* A restored result's counts describe the run that produced it,
+                  not this view: "0/100 cached" beside "restored" read as a
+                  contradiction. */}
+              {acousticEda.cache_info && !acousticsFromCache && (
                 <Badge variant="outline" className="text-[10px] bg-primary/5">
                   {acousticEda.cache_info.cached_count}/{acousticEda.cache_info.cached_count + acousticEda.cache_info.missing_count} cached
                 </Badge>
