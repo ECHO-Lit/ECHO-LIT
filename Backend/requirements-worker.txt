@@ -12,3 +12,5 @@ lime>=0.2.0
 shap>=0.42.0
 accelerate
 torchaudio
+jiwer>=3.0
+pyloudnorm>=0.1.1

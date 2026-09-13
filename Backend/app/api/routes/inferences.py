@@ -420,6 +420,10 @@ async def get_whisper_accuracy(request: Request):
                 metadata_path = DATA_DIR / "common_voice_valid_dev" / "common_voice_valid_data_metadata.csv"
             elif dataset == "ravdess":
                 metadata_path = DATA_DIR / "ravdess_subset" / "ravdess_subset_metadata.csv"
+            elif dataset == "l2-arctic":
+                metadata_path = DATA_DIR / "L2_ARCTIC_dataset" / "l2_metadata.csv"
+            elif dataset == "saa":
+                metadata_path = DATA_DIR / "SAA_dataset" / "saa_metadata.csv"
             elif dataset.startswith("custom:"):
                 # For custom datasets, ground truth is not available - skip ground truth extraction
                 ground_truth = ""
@@ -436,6 +440,9 @@ async def get_whisper_accuracy(request: Request):
                     # Try with path prefix for common-voice
                     if dataset == "common-voice":
                         file_rows = df[df['filename'] == f"cv-valid-dev/{dataset_file}"]
+                    # SAA's CSV filenames have no extension (e.g. "arabic1" vs "arabic1.mp3")
+                    elif dataset == "saa":
+                        file_rows = df[df['filename'] == Path(dataset_file).stem]
                 
                 if not file_rows.empty:
                     # Try different column names for transcript/text
@@ -448,6 +455,18 @@ async def get_whisper_accuracy(request: Request):
                     elif dataset == "ravdess":
                         # For RAVDESS, use 'statement' column
                         for col in ['statement', 'text', 'transcript', 'sentence']:
+                            if col in df.columns:
+                                ground_truth = str(file_rows.iloc[0][col])
+                                break
+                    elif dataset == "l2-arctic":
+                        # For L2-ARCTIC, use 'text' column (canonical reference text)
+                        for col in ['text', 'transcript', 'sentence']:
+                            if col in df.columns:
+                                ground_truth = str(file_rows.iloc[0][col])
+                                break
+                    elif dataset == "saa":
+                        # For SAA, use 'reading_passage' column
+                        for col in ['reading_passage', 'text', 'transcript', 'sentence']:
                             if col in df.columns:
                                 ground_truth = str(file_rows.iloc[0][col])
                                 break

@@ -9,7 +9,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
-import { Upload, HelpCircle } from "lucide-react";
+import { Upload, HelpCircle, PanelLeft, PanelBottom, PanelRight } from "lucide-react";
 import { Link } from "react-router-dom";
 import { API_BASE } from '@/lib/api';
 import { CustomDatasetManager } from '@/components/dataset/CustomDatasetManager';
@@ -38,6 +38,12 @@ interface ToolbarProps {
   dataset: string;
   setDataset: (dataset: string) => void;
   onBatchInference?: (model: string, dataset: string) => void; // New callback for batch inference
+  leftPanelOpen?: boolean;
+  rightPanelOpen?: boolean;
+  bottomPanelOpen?: boolean;
+  onToggleLeftPanel?: () => void;
+  onToggleRightPanel?: () => void;
+  onToggleBottomPanel?: () => void;
 }
 
 interface CustomDataset {
@@ -47,9 +53,9 @@ interface CustomDataset {
 }
 
 const modelDatasetMap: Record<string, string[]> = {
-  "whisper-base": ["common-voice", "ravdess", "custom"],
-  "whisper-large": ["common-voice", "ravdess", "custom"],
-  "wav2vec2": ["common-voice", "ravdess", "custom"],
+  "whisper-base": ["common-voice", "ravdess", "l2-arctic", "saa", "custom"],
+  "whisper-large": ["common-voice", "ravdess", "l2-arctic", "saa", "custom"],
+  "wav2vec2": ["common-voice", "ravdess", "l2-arctic", "saa", "custom"],
 };
 
 const defaultDatasetForModel: Record<string, string> = {
@@ -58,7 +64,7 @@ const defaultDatasetForModel: Record<string, string> = {
   "wav2vec2": "ravdess",
 };
 
-export const Toolbar = ({apiData, setApiData, selectedFile, uploadedFiles, onFileSelect, model, setModel, dataset, setDataset, onBatchInference}: ToolbarProps) => {
+export const Toolbar = ({apiData, setApiData, selectedFile, uploadedFiles, onFileSelect, model, setModel, dataset, setDataset, onBatchInference, leftPanelOpen, rightPanelOpen, bottomPanelOpen, onToggleLeftPanel, onToggleRightPanel, onToggleBottomPanel}: ToolbarProps) => {
   const [customDatasets, setCustomDatasets] = useState<CustomDataset[]>([]);
   const [customModels, setCustomModels] = useState<CustomModel[]>([]);
 
@@ -187,6 +193,8 @@ const onModelChange = (value: string) => {
                     <p className="text-xs">Select the audio dataset to analyze:</p>
                     <p className="text-xs">• Common Voice: Speech recognition dataset</p>
                     <p className="text-xs">• RAVDESS: Emotion recognition dataset</p>
+                    <p className="text-xs">• L2-ARCTIC: L2 speech error dataset</p>
+                    <p className="text-xs">• SAA: Speaker accent dataset</p>
                     <p className="text-xs">• Custom: Your uploaded datasets</p>
                   </TooltipContent>
                 </Tooltip>
@@ -201,6 +209,8 @@ const onModelChange = (value: string) => {
                   let label = ds;
                   if (ds === "common-voice") label = "Common Voice";
                   else if (ds === "ravdess") label = "RAVDESS";
+                  else if (ds === "l2-arctic") label = "L2-ARCTIC";
+                  else if (ds === "saa") label = "SAA";
                   return (
                     <SelectItem key={ds} value={ds}>
                       {label}
@@ -255,6 +265,56 @@ const onModelChange = (value: string) => {
 
       {/* Right side: Action buttons */}
       <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-1">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={leftPanelOpen ? "secondary" : "ghost"}
+                size="icon"
+                className="h-7 w-7"
+                onClick={onToggleLeftPanel}
+              >
+                <PanelLeft className="h-3.5 w-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>Toggle left panel</p>
+            </TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={bottomPanelOpen ? "secondary" : "ghost"}
+                size="icon"
+                className="h-7 w-7"
+                onClick={onToggleBottomPanel}
+              >
+                <PanelBottom className="h-3.5 w-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>Toggle bottom panel</p>
+            </TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={rightPanelOpen ? "secondary" : "ghost"}
+                size="icon"
+                className="h-7 w-7"
+                onClick={onToggleRightPanel}
+              >
+                <PanelRight className="h-3.5 w-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>Toggle right panel</p>
+            </TooltipContent>
+          </Tooltip>
+        </div>
+
         <CustomDatasetManager
           onDatasetCreated={handleDatasetCreated}
           onDatasetSelected={handleDatasetSelected}

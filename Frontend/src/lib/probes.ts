@@ -82,68 +82,118 @@ export interface LayerProbeResponse {
 export interface ProbeProperty {
   key: string;
   label: string;
-  /** Metadata column supplying this property's label. */
+  /** Metadata column supplying this property's label, resolved for this dataset. */
   column: string;
   /** What a HIGH value means. Users read "low speaker accuracy" as "bad model". */
+  meaning: string;
+  /** True when discovered from an uploaded dataset rather than curated here. */
+  discovered?: boolean;
+}
+
+interface CuratedProperty {
+  key: string;
+  label: string;
+  /** Column names this property may appear under, in preference order. */
+  columns: string[];
   meaning: string;
 }
 
 /**
- * Known probe targets. A dataset offers whichever of these its metadata has;
- * `availableProperties` decides, so custom datasets work without a code change
- * whenever their columns happen to match.
+ * Curated probe targets, with the interpretation text that is most of the value.
+ *
+ * Each lists several accepted column names because the same property is spelled
+ * differently per corpus -- RAVDESS calls the speaker `actor`, SAVEE calls it
+ * `speaker`. A dataset offers whichever of these its metadata has; anything else
+ * is picked up generically by `discoverProperties`, so an uploaded dataset with
+ * unfamiliar column names still works.
  */
-export const PROBE_PROPERTIES: ProbeProperty[] = [
+export const CURATED_PROPERTIES: CuratedProperty[] = [
   {
     key: 'gender',
     label: 'Gender',
-    column: 'gender',
+    columns: ['gender', 'sex'],
     meaning:
       'High = the speaker\'s gender is linearly decodable at this depth. Largely an acoustic property (pitch, formants), so it is usually readable from the very first layer.',
   },
   {
     key: 'speaker',
     label: 'Speaker identity',
-    column: 'actor',
+    columns: ['actor', 'speaker', 'speaker_id'],
     meaning:
       'High = the model still distinguishes *who* is talking. A fall toward the top of the stack is the expected, desirable result for an ASR encoder: speaker identity is being discarded in favour of what was said.',
   },
   {
     key: 'emotion',
     label: 'Emotion',
-    column: 'emotion',
+    columns: ['emotion', 'emotion_label'],
     meaning:
       'High = the emotional category is decodable. Expected to peak mid-stack, above the acoustic layers but below the most linguistic ones.',
   },
   {
     key: 'lexical',
     label: 'Lexical content',
-    column: 'statement',
+    columns: ['statement', 'sentence', 'utterance'],
     meaning:
-      'High = *which sentence* was spoken is decodable. Both RAVDESS sentences are spoken by every actor in every emotion, so speaker and emotion are controlled and this genuinely measures linguistic content. Expected to rise with depth.',
+      'High = *which sentence* was spoken is decodable. When every speaker reads the same fixed sentences, speaker and emotion are controlled and this genuinely measures linguistic content. Expected to rise with depth.',
   },
   {
     key: 'intensity',
     label: 'Vocal intensity',
-    column: 'intensity',
+    columns: ['intensity'],
     meaning:
       'High = normal vs strong delivery is decodable. An energy property, so it is expected to be readable early and not to grow with depth.',
   },
   {
     key: 'accent',
     label: 'Accent',
-    column: 'accent',
+    columns: ['accent', 'dialect'],
     meaning:
       'High = the speaker\'s accent is decodable. Only a minority of Common Voice clips are annotated, so read this alongside the sample count.',
   },
   {
     key: 'age',
     label: 'Age band',
-    column: 'age',
+    columns: ['age', 'age_band'],
     meaning:
       'High = the speaker\'s age band is decodable. Sparsely annotated in Common Voice; a selectivity at or below zero means no information was found.',
   },
+  {
+    key: 'duration_band',
+    label: 'Clip length',
+    columns: ['duration_band'],
+    meaning:
+      'Derived automatically from clip duration, so it needs no annotation. Read it as a sanity check rather than a finding: length is an input property, so flat or falling is expected and a RISING curve should be treated as suspicious.',
+  },
 ];
+
+/** Columns that describe the file rather than something worth probing. */
+const RESERVED_COLUMNS = new Set([
+  'filename',
+  'original_filename',
+  'size',
+  'uploaded_at',
+  'duration',
+  'sample_rate',
+  'text',
+  'client_id',
+  'locale',
+  'up_votes',
+  'down_votes',
+  'modality',
+  'vocal_channel',
+  'repetition',
+]);
+
+/** More distinct values than this and the column is an identifier, not a class. */
+const MAX_DISCOVERED_CLASSES = 50;
+
+const DISCOVERED_MEANING =
+  'Discovered in this dataset\'s labels. High = this property is linearly decodable at that depth. Read it against the majority baseline and the selectivity, not on accuracy alone.';
+
+function humanise(column: string): string {
+  const words = column.replace(/[_-]+/g, ' ').trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
 
 export const NOISE_PROPERTY = 'noise';
 
@@ -190,17 +240,67 @@ function indexByFilename(rows: MetadataRow[]): Map<string, MetadataRow> {
   return index;
 }
 
-/** Properties this dataset can actually supply: column present, >=2 distinct labels. */
-export function availableProperties(rows: MetadataRow[]): ProbeProperty[] {
-  return PROBE_PROPERTIES.filter((property) => {
-    const values = new Set<string>();
-    for (const row of rows) {
-      const label = normaliseLabel(row[property.column]);
-      if (label) values.add(label);
-      if (values.size >= 2) return true;
+/** Distinct usable labels in a column, capped so an identifier column exits early. */
+function distinctLabels(rows: MetadataRow[], column: string, cap: number): Set<string> {
+  const values = new Set<string>();
+  for (const row of rows) {
+    const label = normaliseLabel(row[column]);
+    if (label) values.add(label);
+    if (values.size > cap) break;
+  }
+  return values;
+}
+
+/**
+ * Columns present in the data that no curated property already claims.
+ *
+ * This is what makes an uploaded dataset work without a code change: a CSV with
+ * a `speaking_style` column becomes a probeable property, keeping only the
+ * generic interpretation text since we cannot know what it means.
+ */
+function discoverProperties(rows: MetadataRow[], claimed: Set<string>): ProbeProperty[] {
+  const seen = new Set<string>();
+  const found: ProbeProperty[] = [];
+  for (const row of rows) {
+    for (const column of Object.keys(row)) {
+      if (seen.has(column) || claimed.has(column) || RESERVED_COLUMNS.has(column)) continue;
+      seen.add(column);
+      const values = distinctLabels(rows, column, MAX_DISCOVERED_CLASSES);
+      // Two classes minimum to be separable; above the cap it is an id column.
+      if (values.size < 2 || values.size > MAX_DISCOVERED_CLASSES) continue;
+      found.push({
+        key: column,
+        label: humanise(column),
+        column,
+        meaning: DISCOVERED_MEANING,
+        discovered: true,
+      });
     }
-    return false;
-  });
+  }
+  return found;
+}
+
+/**
+ * Properties this dataset can actually supply: column present, >=2 distinct labels.
+ *
+ * Curated properties come first and keep their interpretation text; anything
+ * else the dataset carries follows, discovered generically.
+ */
+export function availableProperties(rows: MetadataRow[]): ProbeProperty[] {
+  const claimed = new Set<string>();
+  const curated: ProbeProperty[] = [];
+  for (const property of CURATED_PROPERTIES) {
+    for (const column of property.columns) {
+      claimed.add(column);
+    }
+    // First column that actually separates wins, so a dataset carrying both
+    // `actor` and `speaker` resolves to one property rather than two.
+    const column = property.columns.find(
+      (candidate) => distinctLabels(rows, candidate, MAX_DISCOVERED_CLASSES).size >= 2,
+    );
+    if (column) curated.push({ key: property.key, label: property.label, column, meaning: property.meaning });
+  }
+  return [...curated, ...discoverProperties(rows, claimed)];
 }
 
 /**
@@ -216,7 +316,9 @@ export function extractProperties(
   selected: string[],
 ): Record<string, Array<string | null>> {
   const index = indexByFilename(rows);
-  const chosen = PROBE_PROPERTIES.filter((property) => selected.includes(property.key));
+  // Resolved from the rows rather than a static registry, so a discovered
+  // property and a curated one whose column varies by corpus both work.
+  const chosen = availableProperties(rows).filter((property) => selected.includes(property.key));
   const payload: Record<string, Array<string | null>> = {};
   for (const property of chosen) {
     payload[property.key] = filenames.map((filename) => {
@@ -278,15 +380,23 @@ export async function runLayerProbe(
   );
 }
 
-/** Human-readable label for a property key, including the synthetic noise probe. */
+/**
+ * Human-readable label for a property key, including the synthetic noise probe.
+ *
+ * Discovered properties are not in the curated list, and their key *is* their
+ * column name, so humanising the key is the correct fallback rather than a
+ * degraded one.
+ */
 export function propertyLabel(key: string): string {
   if (key === NOISE_PROPERTY) return 'Noise (clean vs noisy)';
-  return PROBE_PROPERTIES.find((property) => property.key === key)?.label ?? key;
+  return CURATED_PROPERTIES.find((property) => property.key === key)?.label ?? humanise(key);
 }
 
 export function propertyMeaning(key: string): string {
   if (key === NOISE_PROPERTY) return NOISE_PROPERTY_MEANING;
-  return PROBE_PROPERTIES.find((property) => property.key === key)?.meaning ?? '';
+  return (
+    CURATED_PROPERTIES.find((property) => property.key === key)?.meaning ?? DISCOVERED_MEANING
+  );
 }
 
 /** Properties ordered shallow -> deep by where they peak. The emergence story. */

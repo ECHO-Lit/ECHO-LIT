@@ -32,7 +32,7 @@ def detect_model_type(model: str) -> str:
 
 
 #################################################################################################################
-def generate_whisper_saliency(audio_file_path: str, model_size: str = "base", method: str = "gradcam", existing_prediction: Dict = None) -> Dict:
+def generate_whisper_saliency(audio_file_path: str, model_size: str = "base", method: str = "gradcam", existing_prediction: Dict = None, full_audio: bool = False) -> Dict:
     logger.info(f"Generating Whisper saliency for {audio_file_path} using {method} method")
     
     if existing_prediction and "chunks" in existing_prediction:
@@ -57,12 +57,13 @@ def generate_whisper_saliency(audio_file_path: str, model_size: str = "base", me
         if not np.all(np.isfinite(audio)):
             logger.warning(f"generate_whisper_saliency: non-finite samples in {audio_file_path}; zeroing them")
             audio = np.nan_to_num(audio, nan=0.0, posinf=0.0, neginf=0.0)
-        max_seconds = MAX_SALIENCY_SECONDS_SHAP if method == "shap" else MAX_SALIENCY_SECONDS
-        max_len = int(max_seconds * 16000)
-        if len(audio) > max_len:
-            audio = audio[:max_len]
-            # Keep only chunks inside the window
-            chunks = [c for c in chunks if c.get("timestamp", [0, 0])[0] < max_seconds]
+        if not full_audio:
+            max_seconds = MAX_SALIENCY_SECONDS_SHAP if method == "shap" else MAX_SALIENCY_SECONDS
+            max_len = int(max_seconds * 16000)
+            if len(audio) > max_len:
+                audio = audio[:max_len]
+                # Keep only chunks inside the window
+                chunks = [c for c in chunks if c.get("timestamp", [0, 0])[0] < max_seconds]
     
     if model_size == "base":
         processor, model = get_whisper_saliency_models("openai/whisper-base")
@@ -327,7 +328,7 @@ def generate_whisper_saliency(audio_file_path: str, model_size: str = "base", me
 
 ################################################################################################################
 
-def generate_wav2vec2_saliency(audio_file_path: str, method: str = "gradcam", existing_prediction: Dict = None) -> Dict:
+def generate_wav2vec2_saliency(audio_file_path: str, method: str = "gradcam", existing_prediction: Dict = None, full_audio: bool = False) -> Dict:
     feature_extractor, emo_model = get_emotion_models()
     # Derive the device from the model because an OOM fallback may relocate it.
     runtime_device = next(emo_model.parameters()).device
@@ -358,11 +359,12 @@ def generate_wav2vec2_saliency(audio_file_path: str, method: str = "gradcam", ex
             f"Audio file is too short ({len(audio)} samples at 16 kHz). "
             f"Minimum required for wav2vec2 saliency is {MIN_WAV2VEC2_SAMPLES} samples (~{MIN_WAV2VEC2_SAMPLES/16000:.3f}s)."
         )
-    # Crop to safe max duration to bound memory
-    max_seconds = MAX_SALIENCY_SECONDS_SHAP if method == "shap" else MAX_SALIENCY_SECONDS
-    max_len = int(max_seconds * rate)
-    if len(audio) > max_len:
-        audio = audio[:max_len]
+    # Crop to safe max duration to bound memory (skipped when full_audio requested)
+    if not full_audio:
+        max_seconds = MAX_SALIENCY_SECONDS_SHAP if method == "shap" else MAX_SALIENCY_SECONDS
+        max_len = int(max_seconds * rate)
+        if len(audio) > max_len:
+            audio = audio[:max_len]
     inputs = feature_extractor(audio, sampling_rate=rate, return_tensors="pt", padding=True)
 
     input_values = inputs.input_values.to(runtime_device)
@@ -555,13 +557,19 @@ def generate_wav2vec2_saliency(audio_file_path: str, method: str = "gradcam", ex
         "series": series.tolist()
     }
 
-def generate_saliency(audio_file_path: str, model: str, method: str = "gradcam", existing_prediction: Dict = None) -> Dict:
+def generate_saliency(
+    audio_file_path: str,
+    model: str,
+    method: str = "gradcam",
+    existing_prediction: Dict = None,
+    full_audio: bool = False,
+) -> Dict:
     model_type = detect_model_type(model)
-    
+
     if model_type == "whisper":
         model_size = "base" if "base" in model else "large"
-        return generate_whisper_saliency(audio_file_path, model_size, method, existing_prediction)
+        return generate_whisper_saliency(audio_file_path, model_size, method, existing_prediction, full_audio=full_audio)
     elif model_type == "wav2vec2":
-        return generate_wav2vec2_saliency(audio_file_path, method, existing_prediction)
+        return generate_wav2vec2_saliency(audio_file_path, method, existing_prediction, full_audio=full_audio)
     else:
         raise ValueError(f"Unsupported model: {model}")
