@@ -331,6 +331,25 @@ def _aggregate_batch(result: dict[str, Any], filenames: list[str]) -> None:
         }
 
 
+def _mark_all_cached(payload: dict[str, Any]) -> None:
+    """Restate a replayed whole-job cache entry's counts for this job.
+
+    The stored entry carries the counts of the run that produced it -- usually
+    0/N, the cold first run -- so a job served entirely from it would report
+    that none of its files were cached.
+    """
+    items = payload.get("items") or []
+    for item in items:
+        if isinstance(item, dict):
+            item["cache_hit"] = True
+    if "cache_info" in payload:
+        payload["cache_info"] = {
+            "cached_count": len(items),
+            "missing_count": 0,
+            "cache_hit_rate": 1.0 if items else 0,
+        }
+
+
 async def _check_cancel(job_id: str, repository: JobRepository) -> None:
     if await repository.cancellation_requested(job_id):
         raise JobCancelled()
@@ -591,6 +610,7 @@ async def execute(envelope_data: dict[str, Any], celery_task_id: str) -> None:
             job_result_key = f"results/{envelope.session_id}/{envelope.job_id}/result.json"
             cached_payload["job_id"] = envelope.job_id
             cached_payload.setdefault("metadata", {})["cache_hit"] = True
+            _mark_all_cached(cached_payload)
             cached_payload["metadata"]["queue_latency_seconds"] = queue_latency
             cached_payload["metadata"]["execution_seconds"] = time.monotonic() - started_at
             storage.put_json(job_result_key, cached_payload)
@@ -762,6 +782,7 @@ async def execute_batch_item(
         )
         storage = get_storage()
         output = await _cached_item_result(envelope, asset.sha256, storage)
+        item_cache_hit = output is not None
         if output is None:
             with tempfile.TemporaryDirectory(prefix=f"echo-{envelope.job_id}-{asset_index}-") as temp_dir:
                 local_path = Path(temp_dir) / f"{asset.audio_id}{Path(asset.filename).suffix}"
@@ -791,6 +812,7 @@ async def execute_batch_item(
             "audio_id": asset.audio_id,
             "filename": asset.filename,
             "result": _jsonable(output),
+            "cache_hit": item_cache_hit,
             "task_id": celery_task_id,
         }
     except JobCancelled:
@@ -828,8 +850,10 @@ async def finalize_batch(
         "job_id": envelope.job_id,
         "operation": envelope.operation.value,
         "model": envelope.model,
+        # `cache_hit` is carried through for `_aggregate_batch`'s cache_info;
+        # dropping it here reported every batch as 0/N cached.
         "items": [
-            {"audio_id": item["audio_id"], "result": item["result"]}
+            {"audio_id": item["audio_id"], "result": item["result"], "cache_hit": item.get("cache_hit", False)}
             for item in ordered
         ],
         "metadata": {
@@ -884,6 +908,7 @@ async def complete_batch_from_cache(envelope_data: dict[str, Any]) -> bool:
         return False
     payload["job_id"] = envelope.job_id
     payload.setdefault("metadata", {})["cache_hit"] = True
+    _mark_all_cached(payload)
     job_result_key = f"results/{envelope.session_id}/{envelope.job_id}/result.json"
     storage.put_json(job_result_key, payload)
     await JobRepository().update(

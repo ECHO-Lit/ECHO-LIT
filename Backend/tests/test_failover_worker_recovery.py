@@ -409,6 +409,12 @@ class TestRetryChain:
         record = await JobRepository().get("second")
         assert record.status == JobStatus.success
         assert record.error is None
+        # The reuse is reported, not just performed: the chord's per-item cache
+        # hits used to be dropped, so every batch read 0/N cached.
+        payload = get_storage().get_json(record.result_key)
+        assert [item["cache_hit"] for item in payload["items"]] == [True, True, False, True]
+        assert payload["cache_info"]["cached_count"] == 3
+        assert payload["cache_info"]["missing_count"] == 1
 
 
 # --------------------------------------------------------------------------

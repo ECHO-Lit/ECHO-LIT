@@ -276,7 +276,12 @@ class TestBatchCachePointer:
         digest = analysis_cache_key(TaskEnvelope.model_validate(data))
         await JobRepository().create(job_record(job_id="j2"))
         cache_key = f"cache/{digest}/result.json"
-        get_storage().put_json(cache_key, {"job_id": "j1", "items": [{"result": 1}]})
+        # Stored as the cold run that produced it recorded itself: nothing cached.
+        get_storage().put_json(cache_key, {
+            "job_id": "j1",
+            "items": [{"result": 1, "cache_hit": False}, {"result": 2, "cache_hit": False}],
+            "cache_info": {"cached_count": 0, "missing_count": 2, "cache_hit_rate": 0},
+        })
         await redis_module.redis.set(f"analysis-cache:{digest}", cache_key)
 
         assert await complete_batch_from_cache({**data, "job_id": "j2"}) is True
@@ -286,6 +291,10 @@ class TestBatchCachePointer:
         # job's id and must be restamped for the consumer.
         assert payload["job_id"] == "j2"
         assert payload["metadata"]["cache_hit"] is True
+        # Its counts too: replaying the cold run's 0/2 told the user nothing
+        # came from cache when everything did.
+        assert payload["cache_info"] == {"cached_count": 2, "missing_count": 0, "cache_hit_rate": 1.0}
+        assert all(item["cache_hit"] for item in payload["items"])
 
         record = await JobRepository().get("j2")
         assert record.status == JobStatus.success
