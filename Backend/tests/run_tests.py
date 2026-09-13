@@ -4,27 +4,70 @@ Master Test Plan Implementation - Comprehensive Test Execution
 """
 
 import pytest
+import shlex
+import subprocess
 import sys
 import os
 from pathlib import Path
 
-# Test execution configuration based on Master Test Plan sections
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+REPORT_DIR = Path(__file__).resolve().parent / "test_reports"
 
-# Test Categories from Test Plan
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+from tests import _report  # noqa: E402
+
+# Every tests/test_*.py belongs to exactly one category (guarded by TD-01), so
+# `all`, `critical` and `report` cannot silently skip a module. Assignments
+# follow each module's Test Case Matrix in tests/plans/.
 TEST_CATEGORIES = {
     "data_integrity": {
+        "section": "3.1.1",
         "description": "Data and Database Integrity Testing (Section 3.1.1)",
-        "files": ["test_data_integrity.py"],
+        "files": [
+            "test_data_integrity.py",
+            "test_data_integrity_artifacts.py",
+            "test_data_integrity_store.py",
+            "test_results_cache.py",
+        ],
         "priority": "critical",
-        "estimated_time": "10 minutes"
     },
     "function_testing": {
-        "description": "Function Testing - ML Models and Audio Processing (Section 3.1.2)", 
-        "files": ["test_function_testing.py"],
+        "section": "3.1.2",
+        "description": "Function Testing (Section 3.1.2)",
+        "files": [
+            "test_function_testing.py",
+            "test_async_jobs.py",
+            "test_queue.py",
+            "test_jobs_api_contract.py",
+            "test_custom_models_api.py",
+            "test_custom_dataset_manifest.py",
+            "test_dataset_labels_service.py",
+            "test_dataset_management_api.py",
+            "test_dataset_serving_api.py",
+            "test_clustering.py",
+            "test_probing_service.py",
+            "test_layer_probe_job.py",
+            "test_layer_probe_schema.py",
+            "test_jacobian_lens.py",
+            "test_fr7_acceptance.py",
+            "test_fr7_api_contract.py",
+            "test_fr7_dsp_invariants.py",
+            "test_fr7_metrics.py",
+            "test_fr7_orchestration.py",
+            "test_fr10_api_contract.py",
+            "test_fr10_cancellation_and_failures.py",
+            "test_fr10_dataset_extensions.py",
+            "test_fr10_grounding.py",
+            "test_fr10_metrics.py",
+            "test_fr10_orchestration.py",
+            "test_fr10_partitioning.py",
+            "test_whisper_transcript_consistency.py",
+        ],
         "priority": "critical",
-        "estimated_time": "30 minutes"
     },
     "performance_profiling": {
+        "section": "3.1.4",
         "description": "Performance Profiling (Section 3.1.4)",
         "files": [
             "test_perf_control_plane.py",
@@ -32,9 +75,9 @@ TEST_CATEGORIES = {
             "test_perf_worker_compute.py",
         ],
         "priority": "important",
-        "estimated_time": "1 minute"
     },
     "load_testing": {
+        "section": "3.1.5",
         "description": "Load Testing (Section 3.1.5)",
         "files": [
             "test_load_workload_profiles.py",
@@ -43,15 +86,15 @@ TEST_CATEGORIES = {
             "test_load_capacity_growth.py",
         ],
         "priority": "important",
-        "estimated_time": "2 minutes"
     },
     "security": {
+        "section": "3.1.6",
         "description": "Security and Access Control Testing (Section 3.1.6)",
-        "files": ["test_security.py"],
+        "files": ["test_security.py", "test_session_cookie.py"],
         "priority": "important",
-        "estimated_time": "20 minutes"
     },
     "failover_recovery": {
+        "section": "3.1.7",
         "description": "Failover and Recovery Testing (Section 3.1.7)",
         "files": [
             "test_failover_redis_outage.py",
@@ -59,10 +102,29 @@ TEST_CATEGORIES = {
             "test_failover_stuck_jobs.py",
             "test_failover_corrupt_data.py",
             "test_failover_under_load.py",
+            "test_worker_native_crash.py",
         ],
         "priority": "critical",
-        "estimated_time": "1 minute"
-    }
+    },
+    "configuration": {
+        "section": "3.1.8",
+        "description": "Configuration Testing (Section 3.1.8)",
+        "files": [
+            "test_config_settings.py",
+            "test_config_deployment.py",
+            "test_config_roles.py",
+            "test_config_hardware.py",
+            "test_config_storage.py",
+            "test_device.py",
+        ],
+        "priority": "important",
+    },
+    "deliverables": {
+        "section": "4",
+        "description": "Test Deliverables Tooling (Section 4)",
+        "files": ["test_deliverables_reporting.py"],
+        "priority": "important",
+    },
 }
 
 # Performance budgets live with the cases that assert them, sourced from SRS
@@ -183,34 +245,72 @@ def run_performance_benchmarks():
     print(f"\nPerformance Benchmarks: {'PASS' if result == 0 else 'FAIL'}")
     return result == 0
 
-def generate_test_report():
-    """Generate a comprehensive test report."""
-    print("\n" + "="*80)
-    print("GENERATING TEST REPORT")
-    print("="*80)
-    
-    # Run tests with HTML report generation
-    report_dir = Path(__file__).parent / "test_reports"
-    report_dir.mkdir(exist_ok=True)
-    
-    pytest_args = [
-        "--html=" + str(report_dir / "test_report.html"),
-        "--self-contained-html",
-        "--tb=short",
-        "-v"
+FRONTEND_COMMAND = "cd Frontend && npm run test:coverage"
+STALE_ARTIFACTS = ("junit-backend.xml", "junit-performance.xml", "coverage.json")
+
+
+def report_commands():
+    """The two pytest runs behind `report`, as (label, argv) pairs.
+
+    The `performance` cases assert absolute wall-clock budgets, which the
+    coverage tracer would inflate, so they run separately without coverage.
+    """
+    out = "tests/test_reports"
+    pytest_cmd = [sys.executable, "-m", "pytest", "tests", "-q"]
+    return [
+        ("Coverage run", pytest_cmd + [
+            "-m", "not performance",
+            "--cov",
+            f"--cov-report=html:{out}/coverage-html",
+            f"--cov-report=json:{out}/coverage.json",
+            f"--junitxml={out}/junit-backend.xml",
+        ]),
+        ("Timing run", pytest_cmd + ["-m", "performance", f"--junitxml={out}/junit-performance.xml"]),
     ]
-    
-    # Add all test files
-    for category, config in TEST_CATEGORIES.items():
-        for test_file in config["files"]:
-            test_path = Path(__file__).parent / test_file
-            if test_path.exists():
-                pytest_args.append(str(test_path))
-    
-    result = pytest.main(pytest_args)
-    
-    print(f"Test report generated: {report_dir / 'test_report.html'}")
-    return result == 0
+
+
+def _display_commands():
+    shown = ["cd Backend && " + shlex.join(["python", *argv[1:]]) for _, argv in report_commands()]
+    return shown + [FRONTEND_COMMAND]
+
+
+def _child_env():
+    env = dict(os.environ)
+    env["HF_HUB_OFFLINE"] = "1"
+    env["TRANSFORMERS_OFFLINE"] = "1"
+    return env
+
+
+def generate_test_report():
+    """Run the suite with coverage and write the evaluation summary (Section 4)."""
+    print("\n" + "="*80)
+    print("GENERATING TEST EVALUATION SUMMARY")
+    print("="*80)
+
+    REPORT_DIR.mkdir(exist_ok=True)
+    for name in STALE_ARTIFACTS:
+        (REPORT_DIR / name).unlink(missing_ok=True)
+
+    outcomes = []
+    for label, argv in report_commands():
+        print(f"\n--- {label}: {shlex.join(argv[1:])}")
+        result = subprocess.run(argv, cwd=BACKEND_DIR, env=_child_env())
+        outcomes.append((label, result.returncode))
+
+    path, evaluation = _report.write_summary(TEST_CATEGORIES, _display_commands())
+
+    print()
+    for label, code in outcomes:
+        print(f"{label}: {'PASS' if code == 0 else f'FAIL (exit {code})'}")
+    print(f"Evaluation summary [{evaluation.verdict}]: {path}")
+    return all(code == 0 for _, code in outcomes)
+
+
+def render_summary():
+    """Re-render the evaluation summary from existing artifacts, running nothing."""
+    path, evaluation = _report.write_summary(TEST_CATEGORIES, _display_commands())
+    print(f"Evaluation summary [{evaluation.verdict}]: {path}")
+    return evaluation.verdict != "FAIL"
 
 if __name__ == "__main__":
     """
@@ -221,22 +321,25 @@ if __name__ == "__main__":
         python run_tests.py critical          # Run critical tests only
         python run_tests.py data_integrity    # Run specific category
         python run_tests.py performance       # Run performance tests
-        python run_tests.py report           # Generate HTML report
+        python run_tests.py report            # Coverage + evaluation summary
+        python run_tests.py summary           # Re-render summary from artifacts
     """
-    
+
     if len(sys.argv) < 2:
         # Run all tests by default
         success = run_all_tests()
         sys.exit(0 if success else 1)
-    
+
     command = sys.argv[1].lower()
-    
+
     if command == "critical":
         success = run_critical_tests()
     elif command == "performance":
         success = run_performance_benchmarks()
     elif command == "report":
         success = generate_test_report()
+    elif command == "summary":
+        success = render_summary()
     elif command in TEST_CATEGORIES:
         success = run_category_tests(command)
     elif command == "all":
@@ -246,8 +349,9 @@ if __name__ == "__main__":
         print("\nAvailable commands:")
         print("  critical          - Run critical priority tests")
         print("  performance       - Run performance benchmarks")
-        print("  report           - Generate HTML test report")
-        print("  all              - Run all tests")
+        print("  report            - Run with coverage, write tests/test_reports/evaluation-summary.md")
+        print("  summary           - Re-render the evaluation summary from existing artifacts")
+        print("  all               - Run all tests")
         
         for category in TEST_CATEGORIES:
             config = TEST_CATEGORIES[category]
