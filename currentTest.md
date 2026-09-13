@@ -90,7 +90,9 @@ No test varies hardware/software configuration combinations, cross-browser behav
 
 ---
 
-## Section 4 — Deliverables
+## Section 4 — Deliverables — SUPERSEDED
+
+> **Superseded 2026-09-12** by `Backend/tests/plans/4-deliverables.md`: `run_tests.py report` now writes a Markdown evaluation summary from junit XML and measures coverage in both tiers (pytest-cov, `@vitest/coverage-v8`) against ratchet floors; TEST-03..05 fixed. The analysis below is kept as the original record.
 
 - **4.1 Test Evaluation Summaries**: `run_tests.py` prints console summaries and claims HTML report generation (`python tests/run_tests.py report`) — present as tooling, not verified against actual report output in this scan.
 - **4.2 Reporting on Test Coverage**: no coverage tooling found in the repo (no `pytest-cov` / coverage config detected). README's ">85% line coverage" target is stated but unmeasured.
@@ -113,7 +115,7 @@ No formal risk register exists. `Backend/tests/README.md` has an informal Troubl
 | 3.1.6 Security & Access Control | Implemented |
 | 3.1.7 Failover & Recovery | Implemented (superseded 2026-09-12 — see `Backend/tests/plans/3.1.7-failover-and-recovery.md`) |
 | 3.1.8 Configuration Testing | Implemented (superseded 2026-09-12 — see `Backend/tests/plans/3.1.8-configuration-testing.md`) |
-| 4. Deliverables | Partial — reporting tooling claimed, coverage measurement absent |
+| 4. Deliverables | Implemented (superseded 2026-09-12 — see `Backend/tests/plans/4-deliverables.md`) |
 | 5. Risks/Dependencies | Missing formal doc — informal equivalent exists |
 
 ---
@@ -181,7 +183,8 @@ Grounded against actual repo shape, checked 2026-09-02:
   2. Cross-browser E2E smoke pass (Playwright, 2–3 browsers) covering the core upload → analyze → view-results flow.
   3. Resource-constrained CI job variant (cgroup/container memory+CPU cap) running the existing performance suite to confirm graceful degradation rather than crashes.
 
-## Section 4 — Deliverables gaps
+## Section 4 — Deliverables gaps (closed 2026-09-12, see `Backend/tests/plans/4-deliverables.md`)
+- (The frontend runner is Vitest, not Jest — corrected here.)
 - No coverage tool wired in (`pytest-cov` absent from `Backend/tests/`, no Jest coverage config confirmed for frontend) — the README's ">85% line coverage" and "component coverage" targets are unmeasured claims.
 - No actual generated HTML report artifact found — `run_tests.py report` is a claimed command, not something this scan could verify produces output.
 - **To implement:** add `pytest-cov` + `--cov-report=html` to the pytest config and wire it into `run_tests.py`; add Jest `--coverage` to the frontend test command; publish both as CI artifacts so the README's coverage claims become verifiable numbers instead of stated goals.
