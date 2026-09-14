@@ -12,6 +12,7 @@ from app.core.model_catalog import MODEL_DEFINITIONS, ModelKind, is_supported_mo
 class JobOperation(str, Enum):
     prediction = "prediction"
     saliency = "saliency"
+    saliency_faithfulness = "saliency_faithfulness"
     attention = "attention"
     embedding = "embedding"
     perturbation = "perturbation"
@@ -37,6 +38,7 @@ SUPPORTED_MODELS = set(MODEL_DEFINITIONS)
 MODEL_REQUIRED_OPERATIONS = {
     JobOperation.prediction,
     JobOperation.saliency,
+    JobOperation.saliency_faithfulness,
     JobOperation.attention,
     JobOperation.embedding,
     JobOperation.linguistic_acoustic,
@@ -47,6 +49,7 @@ MODEL_REQUIRED_OPERATIONS = {
 }
 SINGLE_AUDIO_OPERATIONS = {
     JobOperation.saliency,
+    JobOperation.saliency_faithfulness,
     JobOperation.attention,
     JobOperation.perturbation,
     JobOperation.jacobian_lens_apply,
@@ -72,6 +75,26 @@ class SaliencyParameters(OperationParameters):
     # Bypasses MAX_SALIENCY_SECONDS(_SHAP) cropping to analyze the full clip.
     # Opt-in only — memory/runtime scale with duration, so the default stays capped.
     full_audio: bool = False
+
+
+class SaliencyFaithfulnessParameters(SaliencyParameters):
+    """Settings for testing whether a saliency map reflects what the model uses.
+
+    Inherits `method` because the evaluation always generates the map it scores:
+    a faithfulness number is a property of one attribution method, not of the
+    model alone.
+
+    Cost is `(3 + random_repeats) * n_steps + segments + 1` forward passes, so
+    the defaults are chosen to stay affordable on whisper-large. Raising
+    `n_steps` buys curve resolution; raising `random_repeats` tightens the
+    baseline that `faithfulness_gain` is measured against.
+    """
+
+    n_steps: int = Field(default=9, ge=3, le=20)
+    top_fraction: float = Field(default=0.2, gt=0, lt=1)
+    random_repeats: int = Field(default=3, ge=2, le=10)
+    seed: int = Field(default=42, ge=0, le=2**31 - 1)
+    include_occlusion: bool = True
 
 
 class AttentionParameters(OperationParameters):
@@ -184,6 +207,7 @@ class LayerProbeParameters(HiddenStatesParameters):
 PARAMETER_MODELS: dict[JobOperation, type[OperationParameters]] = {
     JobOperation.prediction: PredictionParameters,
     JobOperation.saliency: SaliencyParameters,
+    JobOperation.saliency_faithfulness: SaliencyFaithfulnessParameters,
     JobOperation.attention: AttentionParameters,
     JobOperation.embedding: EmbeddingParameters,
     JobOperation.perturbation: PerturbationParameters,

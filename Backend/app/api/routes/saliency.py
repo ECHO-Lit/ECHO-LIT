@@ -12,7 +12,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 UPLOAD_DIR = Path("uploads")
-SALIENCY_SCHEMA_VERSION = "v2"  # bump to bust stale caches after logic changes
+SALIENCY_SCHEMA_VERSION = "v3"  # bump to bust stale caches after logic changes
 
 class SaliencyRequest(BaseModel):
     model: str
@@ -29,6 +29,7 @@ class SaliencyResponse(BaseModel):
     total_duration: float
     emotion: Optional[str] = None
     series: Optional[list] = None
+    attribution_source: Optional[str] = None
 
 def get_session_id(request: Request) -> Optional[str]:
     """Extract session ID from request (optional for backwards compatibility)"""

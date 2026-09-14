@@ -3,6 +3,7 @@ import { API_BASE, AudioReference } from './api';
 export type JobOperation =
   | 'prediction'
   | 'saliency'
+  | 'saliency_faithfulness'
   | 'attention'
   | 'embedding'
   | 'perturbation'
