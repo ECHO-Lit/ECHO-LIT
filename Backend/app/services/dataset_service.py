@@ -33,6 +33,7 @@ DATASET_PATHS: Dict[str, Path] = {
     "common-voice": DATA_DIR / "common_voice_valid_dev" / "common_voice_valid_data_metadata.csv",
     "cv-valid-dev": DATA_DIR / "common_voice_valid_dev" / "common_voice_valid_data_metadata.csv",
     "ravdess": DATA_DIR / "ravdess_subset" / "ravdess_subset_metadata.csv",
+    "librispeech-1000": DATA_DIR / "librispeech_1000" / "librispeech_1000_metadata.csv",
     "l2-arctic": DATA_DIR / "L2_ARCTIC_dataset" / "l2_metadata.csv",
     "saa": DATA_DIR / "SAA_dataset" / "saa_metadata.csv",
 }
@@ -42,6 +43,7 @@ DATASET_BASE_DIRS: Dict[str, Path] = {
     "common-voice": DATA_DIR / "common_voice_valid_dev",
     "cv-valid-dev": DATA_DIR / "common_voice_valid_dev",
     "ravdess": DATA_DIR / "ravdess_subset",
+    "librispeech-1000": DATA_DIR / "librispeech_1000",
     "l2-arctic": DATA_DIR / "L2_ARCTIC_dataset" / "audio",
     "saa": DATA_DIR / "SAA_dataset" / "audio",
 }
@@ -72,6 +74,9 @@ def load_metadata(dataset: str, session_id: Optional[str] = None) -> List[Dict[s
         
         session_id_from_name, dataset_name = parse_custom_dataset_name(dataset)
         logger.info(f"Custom dataset metadata: session_id_from_name='{session_id_from_name}', current_session_id='{session_id}'")
+        if session_id_from_name == "__global__":
+            manager = get_custom_dataset_manager(session_id or "__global__")
+            return manager.get_global_dataset_files_as_csv_format(dataset_name)
         if session_id_from_name != session_id:
             logger.warning(f"Session ID mismatch in metadata: dataset has '{session_id_from_name}' but request has '{session_id}'")
             # Use the dataset's session ID instead
@@ -88,7 +93,11 @@ def load_metadata(dataset: str, session_id: Optional[str] = None) -> List[Dict[s
 
     csv_path = DATASET_PATHS[ds]
     if not csv_path.exists():
-        raise FileNotFoundError(f"Dataset metadata not found for: {dataset}")
+        raise FileNotFoundError(
+            f"Dataset files for '{dataset}' are not provisioned in this deployment "
+            f"(expected metadata at {csv_path}). Upload a custom dataset via "
+            "Manage Datasets, or provision Backend/data."
+        )
 
     csv_mtime = csv_path.stat().st_mtime
     cached = _metadata_cache.get(ds)
@@ -147,6 +156,9 @@ def resolve_file(dataset: str, file_path: str, session_id: Optional[str] = None)
         
         session_id_from_name, dataset_name = parse_custom_dataset_name(dataset)
         logger.info(f"Custom dataset: session_id_from_name='{session_id_from_name}', current_session_id='{session_id}'")
+        if session_id_from_name == "__global__":
+            manager = get_custom_dataset_manager(session_id or "__global__")
+            return manager.resolve_global_file(dataset_name, file_path)
         if session_id_from_name != session_id:
             logger.warning(f"Session ID mismatch: dataset has '{session_id_from_name}' but request has '{session_id}'")
             # For debugging, let's check if the file exists with the dataset's session ID

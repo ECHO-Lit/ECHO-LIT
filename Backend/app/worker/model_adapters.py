@@ -36,14 +36,15 @@ class AudioModelAdapter(ABC):
     def jacobian_lens_architecture(self) -> str | None:
         """Architecture-specific output path used by the generic J-lens service.
 
-        Only speech-to-text adapters expose a verbal vocabulary.  Keeping this
-        on the adapter prevents the fitting code from depending on Whisper or
-        any individual Hugging Face model class.
+        The J-lens reads the decoder's own residual stream the way the LLM
+        Jacobian lens reads an LLM: one averaged, position-resolved causal map
+        per decoder layer, chained with the model's output projection.  Only
+        seq2seq speech-to-text models have a decoder to lens; CTC and
+        classification models are excluded because their output heads read
+        encoder states directly, with no verbal workspace in between.
         """
         if self.kind == ModelKind.SEQ2SEQ_ASR:
-            return "seq2seq"
-        if self.kind == ModelKind.CTC_ASR:
-            return "ctc"
+            return "decoder"
         return None
 
     def jacobian_lens_components(self, resource: Any) -> tuple[Any, Any]:

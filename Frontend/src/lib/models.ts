@@ -68,3 +68,11 @@ export async function deleteCustomModel(modelId: string): Promise<void> {
   });
   if (!response.ok && response.status !== 204) throw await errorFor(response);
 }
+
+export async function deleteJacobianLens(lensId: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/jobs/jacobian-lenses/${lensId}`, {
+    method: 'DELETE',
+    credentials: 'include',
+  });
+  if (!response.ok && response.status !== 204) throw await errorFor(response);
+}
