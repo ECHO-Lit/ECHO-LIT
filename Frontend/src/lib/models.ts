@@ -1,4 +1,5 @@
 import { API_BASE } from './api';
+import { describeHttpError } from './httpError';
 
 export type CustomModelStatus = 'validating' | 'ready' | 'failed';
 
@@ -31,18 +32,11 @@ export async function listJacobianLenses(modelId: string): Promise<JacobianLens[
   const response = await fetch(`${API_BASE}/models/jacobian-lenses/${encodeURIComponent(modelId)}`, {
     credentials: 'include',
   });
-  if (!response.ok) throw new Error(`Could not load Jacobian lenses (${response.status})`);
+  if (!response.ok) throw await describeHttpError(response, 'Could not load Jacobian lenses');
   return response.json();
 }
 
-async function errorFor(response: Response): Promise<Error> {
-  try {
-    const body = await response.json();
-    return new Error(body.detail || `Request failed (${response.status})`);
-  } catch {
-    return new Error(`Request failed (${response.status})`);
-  }
-}
+const errorFor = (response: Response): Promise<Error> => describeHttpError(response);
 
 export async function listCustomModels(): Promise<CustomModel[]> {
   const response = await fetch(`${API_BASE}/models`, { credentials: 'include' });

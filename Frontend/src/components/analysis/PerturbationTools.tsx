@@ -12,6 +12,7 @@ import { WaveformViewer } from "../audio/WaveformViewer"
 import { API_BASE } from '@/lib/api'
 import { firstJobResult, resolveAudioId, runJob } from '@/lib/jobs'
 import { useJob } from '@/hooks/use-job'
+import { toast } from "sonner";
 
 interface UploadedFile {
   audio_id?: string;
@@ -204,6 +205,11 @@ export const PerturbationTools: React.FC<PerturbationToolsProps> = ({
       const errorMessage = err instanceof Error ? err.message : "Unknown error occurred";
       setError(errorMessage);
       console.error("Error adding perturbations:", err);
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : "The perturbation could not be applied. Try a different setting or file.",
+      );
     } finally {
       setIsLoading(false);
     }

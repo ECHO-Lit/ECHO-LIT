@@ -6,7 +6,7 @@ import uuid
 
 from fastapi import APIRouter, HTTPException, Request, Response
 
-from app.core.celery_app import celery_app, queue_for
+from app.core.celery_app import celery_app, queue_for, revoke_async, send_task_async
 from app.core.model_catalog import MODEL_REVISIONS, custom_model_capabilities
 from app.core.settings import settings
 from app.core.storage import get_storage
@@ -71,13 +71,10 @@ async def create_job(payload: JobCreateRequest, request: Request):
             kind=custom.kind,
             capabilities=custom.capabilities,
         )
-    audio_repository = AudioRepository()
-    assets = []
-    for audio_id in payload.audio_ids:
-        asset = await audio_repository.get_owned(audio_id, request.state.sid)
+    assets = await AudioRepository().get_owned_many(payload.audio_ids, request.state.sid)
+    for audio_id, asset in zip(payload.audio_ids, assets):
         if not asset:
             raise HTTPException(status_code=404, detail=f"Audio not found: {audio_id}")
-        assets.append(asset)
 
     now = datetime.now(timezone.utc)
     job_id = uuid.uuid4().hex
@@ -147,7 +144,7 @@ async def create_job(payload: JobCreateRequest, request: Request):
             if len(assets) > 1 and payload.operation.value != "jacobian_lens_fit"
             else "app.worker.tasks.execute_job"
         )
-        task = celery_app.send_task(
+        task = await send_task_async(
             task_name,
             args=[envelope.model_dump(mode="json")],
             queue=(
@@ -193,9 +190,14 @@ async def get_job_result(job_id: str, request: Request):
     if record.status != JobStatus.success or not record.result_key:
         raise HTTPException(status_code=409, detail=f"Job is {record.status.value}")
     try:
-        return await asyncio.to_thread(get_storage().get_json, record.result_key)
+        content = await asyncio.to_thread(get_storage().get_bytes, record.result_key)
     except Exception as exc:
         raise HTTPException(status_code=410, detail="Job result has expired") from exc
+    # The stored object is already the JSON document the client asked for
+    # (written by put_json). Parsing it and letting FastAPI re-encode it walked
+    # every value of the result on the event loop -- ~570 ms for a 200-item
+    # embedding result, over PE-1's budget on its own.
+    return Response(content=content, media_type="application/json")
 
 
 @router.delete("/{job_id}", status_code=202)
@@ -220,15 +222,8 @@ async def cancel_or_delete_job(job_id: str, request: Request, response: Response
         await jobs.delete(record)
         response.status_code = 204
         return None
-    await jobs.request_cancel(job_id)
-    if record.task_id:
-        celery_app.control.revoke(record.task_id, terminate=False)
-    for child_task_id in record.child_task_ids:
-        celery_app.control.revoke(child_task_id, terminate=False)
-    if record.status == JobStatus.queued:
-        await jobs.update(
-            job_id,
-            status=JobStatus.cancelled,
-            progress=JobProgress(current=0, total=record.progress.total, message="Cancelled"),
-        )
+    # Queued jobs, and running jobs whose worker has gone silent, are cancelled
+    # at once; a live worker sees the request at its next cancel check.
+    await jobs.cancel(record)
+    await revoke_async([record.task_id, *record.child_task_ids])
     return {"job_id": job_id, "status": "cancellation_requested"}

@@ -27,9 +27,11 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from celery.exceptions import SoftTimeLimitExceeded  # celery is in both the API and worker images
+
 from app.core import redis as redis_module
 from app.core.settings import settings
-from app.core.storage import StorageError, get_storage
+from app.core.storage import StorageError, get_storage, read_cache_entry
 from app.repositories.jobs import JobRepository
 from app.schemas.jobs import JobError, JobProgress, JobStatus, TaskEnvelope
 from app.services import dataset_service
@@ -627,7 +629,9 @@ async def complete_from_cache(envelope_data: dict[str, Any]) -> bool:
     cache_key = f"fairness/cache/{digest}.json"
     if not storage.exists(cache_key):
         return False
-    payload = storage.get_json(cache_key)
+    payload = read_cache_entry(storage, cache_key, valid=lambda value: isinstance(value, dict))
+    if payload is None:
+        return False
     payload["job_id"] = envelope.job_id
     payload.setdefault("provenance", {})["cache_hit"] = True
     job_result_key = f"results/{envelope.session_id}/{envelope.job_id}/result.json"
@@ -799,8 +803,11 @@ async def infer_shard(envelope_data: dict[str, Any], shard_data: dict[str, Any],
             continue
 
         cache_key = f"fairness/cache/pred/{_item_pred_cache_key(envelope, item_id)}.json"
-        if storage.exists(cache_key):
-            cached = storage.get_json(cache_key)
+        cached = (
+            read_cache_entry(storage, cache_key, valid=lambda value: isinstance(value, dict))
+            if storage.exists(cache_key) else None
+        )
+        if cached is not None:
             # `group_label` belongs to THIS job's grouping_key, not to the item.
             # _item_pred_cache_key deliberately omits grouping_key so one
             # prediction is reused across groupings, so a cache entry written by
@@ -845,6 +852,8 @@ async def infer_shard(envelope_data: dict[str, Any], shard_data: dict[str, Any],
             # baking one run's group_label into it poisons later runs.
             storage.put_json(cache_key, {k: v for k, v in record.items() if k != "group_label"})
             records.append(record)
+        except SoftTimeLimitExceeded:
+            raise  # the shard's time is up, not this item's: stop, don't carry on to the hard limit
         except Exception as exc:  # noqa: BLE001 -- per-item failure must not fail the shard
             n_failed += 1
             failures.append({"item_id": item_id, "code": "inference_failed", "message": str(exc)[:200]})
@@ -934,6 +943,8 @@ async def explain_shard(envelope_data: dict[str, Any], shard_data: dict[str, Any
                         series, total_duration, intervals, speech_mask,
                     )
             records.append(_jsonable(record))
+        except SoftTimeLimitExceeded:
+            raise  # the shard's time is up, not this item's: stop, don't carry on to the hard limit
         except Exception as exc:  # noqa: BLE001 -- per-item failure must not fail the shard
             n_failed += 1
             failures.append({"item_id": item_id, "code": "saliency_failed", "message": str(exc)[:200]})

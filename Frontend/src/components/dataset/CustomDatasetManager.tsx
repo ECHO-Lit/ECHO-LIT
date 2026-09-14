@@ -29,6 +29,7 @@ import {
   X
 } from "lucide-react";
 import { API_BASE } from '@/lib/api';
+import { uploadWithProgress } from '@/lib/upload';
 import { DatasetLabelsTab } from './DatasetLabelsTab';
 
 interface CustomDataset {
@@ -75,7 +76,8 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
   // Upload files form
   const [selectedDataset, setSelectedDataset] = useState<string>("");
   const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null);
-  const [uploadProgress, setUploadProgress] = useState(0);
+  // Percentage of request bytes sent; null until the browser reports a total.
+  const [uploadPercent, setUploadPercent] = useState<number | null>(null);
   const [uploadLoading, setUploadLoading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<Array<{file: string, status: 'pending' | 'uploading' | 'success' | 'error', error?: string}>>([]);
   const [selectedManifest, setSelectedManifest] = useState<File | null>(null);
@@ -152,7 +154,7 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
 
     setUploadLoading(true);
     setError(null);
-    setUploadProgress(0);
+    setUploadPercent(null);
     
     // Initialize upload status
     const initialStatus = Array.from(selectedFiles).map(file => ({
@@ -167,20 +169,21 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
         formData.append('files', file);
       });
       
-      const response = await fetch(`${API_BASE}/upload/dataset/${selectedDataset}/files`, {
-        method: 'POST',
-        credentials: 'include',
-        body: formData
-      });
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || `Failed to upload files: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      setUploadProgress(100);
-      
+      // XMLHttpRequest rather than fetch: only XHR reports upload bytes, so the
+      // bar shows real transfer progress (BUG-45, completing 3.1.3's BUG-22).
+      const data = await uploadWithProgress<{
+        uploaded_files?: Array<{ original_filename: string }>;
+        errors?: string[];
+      }>(
+        `${API_BASE}/upload/dataset/${selectedDataset}/files`,
+        formData,
+        {
+          context: 'Upload failed',
+          onProgress: ({ fraction }) =>
+            setUploadPercent(fraction === null ? null : Math.round(fraction * 100)),
+        },
+      );
+
       // Update upload status based on response
       const updatedStatus = initialStatus.map(item => {
         const uploadedFile = data.uploaded_files?.find((f: any) => f.original_filename === item.file);
@@ -367,8 +370,9 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
                           size="sm"
                           onClick={() => deleteDataset(dataset.dataset_name)}
                           className="text-red-600 hover:text-red-700"
+                          aria-label={`Delete dataset ${dataset.dataset_name}`}
                         >
-                          <Trash2 className="h-4 w-4" />
+                          <Trash2 className="h-4 w-4" aria-hidden="true" />
                         </Button>
                       </div>
                     </div>
@@ -500,9 +504,17 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
                 </div>
                 
                 {uploadLoading && (
-                  <div className="space-y-2">
-                    <Progress value={uploadProgress} className="w-full" />
-                    <p className="text-sm text-center">Uploading files...</p>
+                  <div className="space-y-2" role="status" aria-live="polite">
+                    <Progress
+                      className="w-full"
+                      value={uploadPercent ?? undefined}
+                      aria-label="Upload progress"
+                    />
+                    <p className="text-sm text-center">
+                      {uploadPercent === 100
+                        ? `Processing ${selectedFiles?.length ?? 0} file${(selectedFiles?.length ?? 0) === 1 ? "" : "s"} on the server…`
+                        : `Uploading ${selectedFiles?.length ?? 0} file${(selectedFiles?.length ?? 0) === 1 ? "" : "s"}${uploadPercent === null ? "…" : ` — ${uploadPercent}%`}`}
+                    </p>
                   </div>
                 )}
                 

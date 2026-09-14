@@ -32,6 +32,23 @@ class AudioRepository:
         asset = await self.get(audio_id)
         return asset if asset and asset.session_id == session_id else None
 
+    async def get_many(self, audio_ids: list[str]) -> list[AudioAsset | None]:
+        """One MGET for many records, in the order asked; a missing one is None.
+
+        A loop of GETs costs one network round trip per item -- 200 for a
+        maximal batch -- on the request paths PE-1 budgets at 500 ms.
+        """
+        if not audio_ids:
+            return []
+        raws = await redis_module.job_redis.mget([self._key(audio_id) for audio_id in audio_ids])
+        return [AudioAsset.model_validate_json(raw) if raw else None for raw in raws]
+
+    async def get_owned_many(self, audio_ids: list[str], session_id: str) -> list[AudioAsset | None]:
+        return [
+            asset if asset and asset.session_id == session_id else None
+            for asset in await self.get_many(audio_ids)
+        ]
+
     async def delete(self, audio_id: str, session_id: str) -> AudioAsset | None:
         asset = await self.get_owned(audio_id, session_id)
         if not asset:
@@ -45,5 +62,4 @@ class AudioRepository:
 
     async def list_owned(self, session_id: str) -> list[AudioAsset]:
         ids = await redis_module.job_redis.smembers(self._session_key(session_id))
-        assets = [await self.get(audio_id) for audio_id in ids]
-        return [asset for asset in assets if asset and asset.session_id == session_id]
+        return [asset for asset in await self.get_owned_many(list(ids), session_id) if asset]

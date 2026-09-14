@@ -169,17 +169,17 @@ export const DatapointEditorPanel = ({
     <TooltipProvider>
       <div className="h-full bg-panel-background border-l border-border flex flex-col">
         <div className="bg-panel-header p-3 border-b border-border">
-          <h3 className="font-semibold text-sm text-foreground flex items-center gap-1.5">
+          <h2 className="font-semibold text-sm text-foreground flex items-center gap-1.5">
             Datapoint Editor
             <Tooltip>
-              <TooltipTrigger>
-                <HelpCircle className="h-3 w-3 text-muted-foreground hover:text-primary cursor-help transition-colors" />
+              <TooltipTrigger aria-label="More information">
+                <HelpCircle className="h-3 w-3 text-muted-foreground hover:text-primary cursor-help transition-colors" aria-hidden="true" />
               </TooltipTrigger>
               <TooltipContent>
                 Edit and analyze individual audio samples with predictions and perturbations
               </TooltipContent>
             </Tooltip>
-          </h3>
+          </h2>
         </div>
 
       <div className="flex-1 p-3 overflow-auto space-y-3">
@@ -190,8 +190,8 @@ export const DatapointEditorPanel = ({
               <CardTitle className="text-xs flex items-center gap-1.5">
                 Sample Info
                 <Tooltip>
-                  <TooltipTrigger>
-                    <HelpCircle className="h-3 w-3 text-muted-foreground hover:text-primary cursor-help transition-colors" />
+                  <TooltipTrigger aria-label="More information">
+                    <HelpCircle className="h-3 w-3 text-muted-foreground hover:text-primary cursor-help transition-colors" aria-hidden="true" />
                   </TooltipTrigger>
                   <TooltipContent>
                     Detailed information about the selected audio sample
@@ -321,8 +321,8 @@ export const DatapointEditorPanel = ({
             <CardTitle className="text-xs flex items-center gap-1.5">
               Audio Playback
               <Tooltip>
-                <TooltipTrigger>
-                  <HelpCircle className="h-3 w-3 text-muted-foreground hover:text-primary cursor-help transition-colors" />
+                <TooltipTrigger aria-label="More information">
+                  <HelpCircle className="h-3 w-3 text-muted-foreground hover:text-primary cursor-help transition-colors" aria-hidden="true" />
                 </TooltipTrigger>
                 <TooltipContent>
                   Interactive audio player with waveform visualization

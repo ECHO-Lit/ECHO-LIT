@@ -1,4 +1,5 @@
 import { API_BASE } from './api';
+import { describeHttpError } from './httpError';
 
 export type SweepProperty = 'pitch' | 'speed' | 'noise' | 'time_mask' | 'freq_mask';
 
@@ -88,17 +89,7 @@ export interface LinguisticAcousticAccepted {
   poll_after_ms: number;
 }
 
-async function parseError(response: Response): Promise<Error> {
-  try {
-    const body = await response.json();
-    if (Array.isArray(body.detail)) {
-      return new Error(body.detail.map((entry: any) => entry.msg).join('; '));
-    }
-    return new Error(body.detail || `Request failed (${response.status})`);
-  } catch {
-    return new Error(`Request failed (${response.status})`);
-  }
-}
+const parseError = (response: Response): Promise<Error> => describeHttpError(response);
 
 export async function submitLinguisticAcoustic(
   body: {

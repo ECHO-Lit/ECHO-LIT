@@ -1,4 +1,5 @@
 from __future__ import annotations
+import asyncio
 import logging
 from urllib.parse import unquote
 
@@ -30,7 +31,9 @@ async def get_dataset_metadata(dataset: str, request: Request) -> JSONResponse:
         # URL decode the dataset parameter to handle colons in custom dataset names
         dataset = unquote(dataset)
         session_id = get_session_id(request)
-        rows: List[dict] = load_metadata(dataset, session_id)
+        # A cold load of a built-in dataset probes every file, and a custom one
+        # re-reads its JSON; neither may hold the event loop.
+        rows: List[dict] = await asyncio.to_thread(load_metadata, dataset, session_id)
         return JSONResponse(content=rows)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -45,7 +48,7 @@ async def get_dataset_eda(dataset: str, request: Request) -> JSONResponse:
     try:
         dataset = unquote(dataset)
         session_id = get_session_id(request)
-        return JSONResponse(content=compute_metadata_eda(dataset, session_id))
+        return JSONResponse(content=await asyncio.to_thread(compute_metadata_eda, dataset, session_id))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except FileNotFoundError as e:
@@ -65,7 +68,9 @@ async def serve_dataset_file(dataset: str, file_path: str, request: Request):
         logger.info(f"After URL decode: dataset='{dataset}'")
         session_id = get_session_id(request)
         logger.info(f"Session ID: {session_id}")
-        audio_path = resolve_file(dataset, file_path, session_id)
+        # resolve_file retries a missing built-in file with blocking sleeps (a
+        # Docker Desktop bind-mount workaround), so it runs off the loop.
+        audio_path = await asyncio.to_thread(resolve_file, dataset, file_path, session_id)
         logger.info(f"Resolved audio path: {audio_path}")
     except ValueError as e:
         # Unknown dataset

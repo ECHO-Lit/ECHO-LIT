@@ -11,10 +11,10 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
-from app.core.celery_app import celery_app
+from app.core.celery_app import celery_app, send_task_async
 from app.core.settings import settings
 from app.core.audio_probe import probe_audio
-from app.core.storage import LocalObjectStorage, StorageError, get_storage
+from app.core.storage import LocalObjectStorage, StorageError, StorageUnavailable, get_storage
 from app.repositories.audio import AudioRepository
 from app.schemas.jobs import AudioAsset, JobOperation, TaskEnvelope
 
@@ -112,7 +112,9 @@ async def upload_audio_file(
             await asyncio.to_thread(storage.delete, object_key)
             raise
         return _asset_response(asset)
-    except HTTPException:
+    except (HTTPException, StorageUnavailable):
+        # An unreachable store is the service's failure, not the request's:
+        # main.py answers it with a 503 and a retry hint.
         raise
     except (StorageError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -133,7 +135,8 @@ async def materialize_dataset_audio(payload: MaterializeAudioRequest, request: R
     from app.services.dataset_service import resolve_file
 
     try:
-        source = resolve_file(payload.dataset, payload.filename, request.state.sid)
+        # Off the loop: resolve_file retries a missing file with blocking sleeps.
+        source = await asyncio.to_thread(resolve_file, payload.dataset, payload.filename, request.state.sid)
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     extension = source.suffix.lower()
@@ -164,7 +167,12 @@ async def materialize_dataset_audio(payload: MaterializeAudioRequest, request: R
         sha256=digest,
         created_at=datetime.now(timezone.utc),
     )
-    await AudioRepository().create(asset)
+    try:
+        await AudioRepository().create(asset)
+    except Exception:
+        # As in upload: an object with no record is unreachable, so remove it.
+        await asyncio.to_thread(storage.delete, object_key)
+        raise
     return _asset_response(asset)
 
 
@@ -245,7 +253,7 @@ async def render_variant_audio(audio_id: str, payload: VariantAudioRequest, requ
     }
 
     try:
-        task_handle = celery_app.send_task(
+        task_handle = await send_task_async(
             "app.worker.tasks.fr7_render_variant",
             args=[envelope.model_dump(mode="json"), spec_data], queue="cpu",
         )

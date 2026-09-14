@@ -323,7 +323,7 @@ export const LayerProbePanel = ({ model, dataset, availableFiles }: LayerProbePa
       </div>
 
       {isRunning && (
-        <div className="space-y-1">
+        <div className="space-y-1" role="status" aria-live="polite">
           <Progress
             value={progress.total ? (progress.current / progress.total) * 100 : 0}
             className="h-1"

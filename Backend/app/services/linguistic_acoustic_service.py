@@ -26,7 +26,7 @@ import numpy as np
 from app.core import redis as redis_module
 from app.core.model_catalog import MODEL_REVISIONS
 from app.core.settings import settings
-from app.core.storage import get_storage
+from app.core.storage import get_storage, is_item_entry, read_cache_entry
 from app.repositories.audio import AudioRepository
 from app.repositories.jobs import JobRepository
 from app.schemas.jobs import AudioAsset, JobProgress, JobStatus, TaskEnvelope
@@ -163,7 +163,9 @@ async def complete_sweep_from_cache(envelope_data: dict[str, Any]) -> bool:
     storage = get_storage()
     if not cached_key or not storage.exists(cached_key):
         return False
-    payload = storage.get_json(cached_key)
+    payload = read_cache_entry(storage, cached_key, valid=lambda value: isinstance(value, dict))
+    if payload is None:
+        return False
     payload["job_id"] = envelope.job_id
     payload.setdefault("metadata", {})["cache_hit"] = True
     job_result_key = f"results/{envelope.session_id}/{envelope.job_id}/result.json"
@@ -341,8 +343,12 @@ async def infer_variant(
     digest = _variant_item_cache_key(envelope, rendered["sha256"])
     cache_pointer = f"analysis-item-cache:{digest}"
     cached_key = await redis_module.redis.get(cache_pointer)
-    if cached_key and storage.exists(cached_key):
-        output = storage.get_json(cached_key)["result"]
+    cached = (
+        read_cache_entry(storage, cached_key, valid=is_item_entry)
+        if cached_key and storage.exists(cached_key) else None
+    )
+    if cached is not None:
+        output = cached["result"]
         cache_hit = True
     else:
         with tempfile.TemporaryDirectory(prefix=f"fr7-infer-{envelope.job_id}-") as temp_dir:

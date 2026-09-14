@@ -448,6 +448,20 @@ export const AudioDataTable = ({ selectedRow, onRowSelect, searchQuery, apiData,
     onVisibleRowIdsChange(ids);
   }, [onVisibleRowIdsChange, searchQuery, dataset, model, hasDatasetMetadata]);
 
+  const resolveRowId = (row: { original: unknown; id: string | number }): string => {
+    if (hasUploadedFiles) {
+      // Combined view: distinguish a dataset row from an uploaded file.
+      if ('file_id' in (row.original as Record<string, unknown>)) {
+        return (row.original as AudioData).id;
+      }
+      return getDatasetRowId(row.original as DatasetRow, String(row.id));
+    }
+    if (hasDatasetMetadata) {
+      return getDatasetRowId(row.original as DatasetRow, String(row.id));
+    }
+    return (row.original as AudioData).id;
+  };
+
   return (
     <div className="h-full flex flex-col">
       <div className="flex-1 overflow-auto">
@@ -490,21 +504,17 @@ export const AudioDataTable = ({ selectedRow, onRowSelect, searchQuery, apiData,
                     return selectedRow === rowId ? "selected" : undefined;
                   })()}
                   className="cursor-pointer hover:bg-muted/50 data-[state=selected]:bg-blue-50 data-[state=selected]:border-blue-200 data-[state=selected]:shadow-sm"
-                  onClick={() => {
-                    let rowId: string;
-                    if (hasUploadedFiles) {
-                      // When showing combined data, check if it's a dataset row or uploaded file
-                      if ('file_id' in (row.original as any)) {
-                        rowId = (row.original as AudioData).id;
-                      } else {
-                        rowId = getDatasetRowId(row.original as DatasetRow, String(row.id));
-                      }
-                    } else if (hasDatasetMetadata) {
-                      rowId = getDatasetRowId(row.original as DatasetRow, String(row.id));
-                    } else {
-                      rowId = (row.original as AudioData).id;
+                  tabIndex={0}
+                  aria-selected={(() => {
+                    const rowId = resolveRowId(row);
+                    return selectedRow === rowId;
+                  })()}
+                  onClick={() => onRowSelect(resolveRowId(row))}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onRowSelect(resolveRowId(row));
                     }
-                    onRowSelect(rowId);
                   }}
                 >
                   {row.getVisibleCells().map((cell) => (
@@ -535,19 +545,21 @@ export const AudioDataTable = ({ selectedRow, onRowSelect, searchQuery, apiData,
             variant="outline"
             size="sm"
             className="h-6 w-6 p-0"
+            aria-label="Previous page"
             onClick={() => table.previousPage()}
             disabled={!table.getCanPreviousPage()}
           >
-            <ChevronLeft className="h-3 w-3" />
+            <ChevronLeft className="h-3 w-3" aria-hidden="true" />
           </Button>
           <Button
             variant="outline"
             size="sm"
             className="h-6 w-6 p-0"
+            aria-label="Next page"
             onClick={() => table.nextPage()}
             disabled={!table.getCanNextPage()}
           >
-            <ChevronRight className="h-3 w-3" />
+            <ChevronRight className="h-3 w-3" aria-hidden="true" />
           </Button>
         </div>
       </div>

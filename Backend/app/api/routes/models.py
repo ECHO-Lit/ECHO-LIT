@@ -5,7 +5,7 @@ import uuid
 
 from fastapi import APIRouter, HTTPException, Request, Response
 
-from app.core.celery_app import celery_app
+from app.core.celery_app import celery_app, revoke_async, send_task_async
 from app.core.model_catalog import MODEL_DEFINITIONS, custom_model_capabilities
 from app.repositories.models import CustomModelRepository
 from app.repositories.jacobian_lenses import JacobianLensRepository
@@ -50,7 +50,7 @@ async def register_custom_model(payload: CustomModelCreateRequest, request: Requ
     repository = CustomModelRepository()
     await repository.create(record)
     try:
-        task = celery_app.send_task(
+        task = await send_task_async(
             "app.worker.tasks.validate_custom_model",
             args=[record.model_id],
             queue="cpu",
@@ -108,7 +108,7 @@ async def delete_custom_model(model_id: str, request: Request, response: Respons
     if not record:
         raise HTTPException(status_code=404, detail="Custom model not found")
     if record.task_id and record.status == CustomModelStatus.VALIDATING:
-        celery_app.control.revoke(record.task_id, terminate=False)
+        await revoke_async([record.task_id])
     await CustomModelRepository().delete(record)
     response.status_code = 204
     return None

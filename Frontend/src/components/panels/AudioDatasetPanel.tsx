@@ -9,7 +9,8 @@ import { AudioUploader } from "../audio/AudioUploader";
 import { AudioDataTable } from "../audio/AudioDataTable";
 import { toast } from "sonner";
 import { API_BASE } from '@/lib/api';
-import { materializeAudio, runJob } from '@/lib/jobs';
+import { materializeAll, materializeAudio, runJob } from '@/lib/jobs';
+import { isAcceptedAudioFile } from '@/lib/audioFiles';
 
 interface UploadedFile {
   audio_id?: string;
@@ -33,6 +34,11 @@ interface AudioDatasetPanelProps {
   selectedFile?: UploadedFile | null;
   onFileSelect?: (file: UploadedFile) => void;
   onUploadSuccess?: (uploadResponse: UploadedFile) => void;
+  /**
+   * Publishes this panel's file-picker trigger to the shell, so the toolbar's
+   * Upload button can open the same picker instead of being inert.
+   */
+  onRegisterUploadTrigger?: (open: () => void) => void;
   batchInferenceStatus?: 'idle' | 'running' | 'done';
   onBatchInferenceStart?: () => void;
   onBatchInferenceComplete?: () => void;
@@ -56,6 +62,7 @@ export const AudioDatasetPanel = ({
   selectedFile,
   onFileSelect,
   onUploadSuccess,
+  onRegisterUploadTrigger,
   batchInferenceStatus,
   onBatchInferenceStart,
   onBatchInferenceComplete,
@@ -250,9 +257,7 @@ export const AudioDatasetPanel = ({
         setInferenceStatus(Object.fromEntries(entries.map((entry) => [entry.fileId, 'loading' as const])));
         onBatchInferenceStart?.();
 
-        const assets = await Promise.all(
-          entries.map((entry) => materializeAudio(datasetToUse, entry.filename, signal)),
-        );
+        const assets = await materializeAll(datasetToUse, entries.map((entry) => entry.filename), signal);
         const result: any = await runJob({
           operation: 'prediction',
           model: model || 'whisper-base',
@@ -417,22 +422,21 @@ export const AudioDatasetPanel = ({
     return () => ac.abort();
   }, [originalDataset, dataset]);
 
-  const handleUploadClick = () => {
+  const handleUploadClick = useCallback(() => {
     fileInputRef.current?.click();
-  };
+  }, []);
+
+  useEffect(() => {
+    onRegisterUploadTrigger?.(handleUploadClick);
+  }, [onRegisterUploadTrigger, handleUploadClick]);
 
   const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
     if (files) {
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        
-        // Check both MIME type and file extension for better .flac support
-        const allowedExtensions = ['.wav', '.mp3', '.m4a', '.flac'];
-        const fileExtension = file.name.toLowerCase().substring(file.name.lastIndexOf('.'));
-        const isValidFile = file.type.startsWith('audio/') || allowedExtensions.includes(fileExtension);
-        
-        if (isValidFile) {
+
+        if (isAcceptedAudioFile(file)) {
           try {
             await uploadFile(file, model ?? "");
           } catch (error) {
@@ -489,7 +493,7 @@ export const AudioDatasetPanel = ({
         <div className="bg-panel-header p-3 border-b border-border">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5">
-              <h3 className="font-semibold text-foreground text-sm">Audio Dataset</h3>
+              <h2 className="font-semibold text-foreground text-sm">Audio Dataset</h2>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <HelpCircle className="h-3 w-3 text-muted-foreground hover:text-primary cursor-help transition-colors" />
@@ -500,7 +504,7 @@ export const AudioDatasetPanel = ({
                 </TooltipContent>
               </Tooltip>
             </div>
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5" role="status" aria-live="polite">
               <Badge variant="outline" className="text-[10px] bg-muted">
                 {uploadedFiles ? `${uploadedFiles.length} uploaded` : "0 files"}
               </Badge>
@@ -554,6 +558,7 @@ export const AudioDatasetPanel = ({
               <TooltipTrigger asChild>
                 <Input
                   placeholder="Search audio files..."
+                  aria-label="Search audio files"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="pl-9 h-6 text-xs bg-transparent border-0 focus:ring-0 rounded-md"

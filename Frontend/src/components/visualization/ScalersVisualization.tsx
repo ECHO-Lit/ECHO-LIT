@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { HelpCircle } from "lucide-react";
 import { API_BASE } from '@/lib/api';
-import { materializeAudio, runJob } from '@/lib/jobs';
+import { materializeAll, runJob } from '@/lib/jobs';
 import { getFeatureExplanation } from "@/lib/audioFeatures";
 
 interface ScalersVisualizationProps {
@@ -160,7 +160,7 @@ export const ScalersVisualization = ({ model, dataset }: ScalersVisualizationPro
         requestBody.dataset = dataset;
       }
 
-      const assets = await Promise.all(selectedPoints.map((filename) => materializeAudio(dataset || '', filename)));
+      const assets = await materializeAll(dataset || '', selectedPoints);
       const analysis = await runJob<AudioFrequencyAnalysis>({
         operation: 'audio_features', audio_ids: assets.map((asset) => asset.audio_id),
       });
@@ -190,7 +190,7 @@ export const ScalersVisualization = ({ model, dataset }: ScalersVisualizationPro
         requestBody.dataset = dataset;
       }
 
-      const assets = await Promise.all(selectedPoints.map((filename) => materializeAudio(dataset || '', filename)));
+      const assets = await materializeAll(dataset || '', selectedPoints);
       const analysis = await runJob<WhisperBatchAnalysis>({
         operation: 'prediction', model, audio_ids: assets.map((asset) => asset.audio_id),
       });
@@ -219,7 +219,7 @@ export const ScalersVisualization = ({ model, dataset }: ScalersVisualizationPro
         requestBody.dataset = dataset;
       }
 
-      const assets = await Promise.all(selectedPoints.map((filename) => materializeAudio(dataset || '', filename)));
+      const assets = await materializeAll(dataset || '', selectedPoints);
       const prediction = await runJob<Wav2Vec2BatchPrediction>({
         operation: 'prediction', model: 'wav2vec2', audio_ids: assets.map((asset) => asset.audio_id),
       });
@@ -458,8 +458,8 @@ export const ScalersVisualization = ({ model, dataset }: ScalersVisualizationPro
                     <div className="text-sm-tight font-medium flex items-center gap-2">
                       Top 5 Most Common Features
                       <Tooltip>
-                        <TooltipTrigger>
-                          <HelpCircle className="h-3 w-3 text-muted-foreground" />
+                        <TooltipTrigger aria-label="More information">
+                          <HelpCircle className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
                         </TooltipTrigger>
                         <TooltipContent className="max-w-xs">
                           Features ranked by prevalence and stability across all audio files
@@ -475,8 +475,8 @@ export const ScalersVisualization = ({ model, dataset }: ScalersVisualizationPro
                                 {feature.feature.replace(/_/g, ' ').toUpperCase()}
                               </span>
                               <Tooltip>
-                                <TooltipTrigger>
-                                  <HelpCircle className="h-3 w-3 text-gray-400 hover:text-gray-600" />
+                                <TooltipTrigger aria-label="More information">
+                                  <HelpCircle className="h-3 w-3 text-gray-400 hover:text-gray-600" aria-hidden="true" />
                                 </TooltipTrigger>
                                 <TooltipContent className="max-w-sm">
                                   <div className="space-y-1">
@@ -501,8 +501,8 @@ export const ScalersVisualization = ({ model, dataset }: ScalersVisualizationPro
                     <div className="text-sm-tight font-medium flex items-center gap-2">
                       Feature Categories
                       <Tooltip>
-                        <TooltipTrigger>
-                          <HelpCircle className="h-3 w-3 text-muted-foreground" />
+                        <TooltipTrigger aria-label="More information">
+                          <HelpCircle className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
                         </TooltipTrigger>
                         <TooltipContent className="max-w-xs">
                           Audio features grouped by type: spectral (frequency-based), temporal (time-based), and harmonic (pitch-based)

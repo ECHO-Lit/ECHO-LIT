@@ -9,7 +9,7 @@ from typing import Any
 
 import torch
 
-from .settings import settings
+from .settings import DEVICE_PREFERENCE, settings
 
 
 logger = logging.getLogger(__name__)
@@ -76,6 +76,12 @@ def detect_inference_runtime(preference: str | None = None) -> InferenceRuntime:
     HIP devices through the torch.cuda API.
     """
     requested = (preference or settings.ML_DEVICE or "auto").strip().lower()
+    # The grammar is checked before any hardware probe, so a malformed value
+    # fails on every host rather than only on the GPU worker it was meant for.
+    if not DEVICE_PREFERENCE.fullmatch(requested):
+        raise ValueError(
+            "ML_DEVICE must be one of: auto, cpu, mps, cuda, cuda:<index>, nvidia, rocm, amd"
+        )
     if requested in {"gpu", "accelerator"}:
         requested = "auto"
 
@@ -103,19 +109,11 @@ def detect_inference_runtime(preference: str | None = None) -> InferenceRuntime:
             or (wants_nvidia and not hip_version)
         )
         if cuda_available and runtime_matches:
-            try:
-                index = int(requested.split(":", 1)[1]) if requested.startswith("cuda:") else 0
-            except ValueError as exc:
-                raise ValueError("ML_DEVICE CUDA index must be an integer") from exc
-            if index < 0:
-                raise ValueError("ML_DEVICE CUDA index must be zero or greater")
+            # The grammar above admits only a non-negative integer index.
+            index = int(requested.split(":", 1)[1]) if requested.startswith("cuda:") else 0
             if index < torch.cuda.device_count():
                 return _cuda_runtime(index)
             logger.warning("ML_DEVICE=%s requested a missing GPU index", requested)
-    else:
-        raise ValueError(
-            "ML_DEVICE must be one of: auto, cpu, mps, cuda, cuda:<index>, nvidia, rocm, amd"
-        )
 
     logger.warning("ML_DEVICE=%s is unavailable; falling back to CPU", requested)
     return InferenceRuntime(torch.device("cpu"), "cpu", platform.processor() or "CPU")

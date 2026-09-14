@@ -324,9 +324,29 @@ export const PredictionPanel = ({ selectedFile, selectedEmbeddingFile, model, da
   const hasJacobianLens = !!model && (model.includes('whisper') || customModelHasJacobianLens);
   const tabCount = 4 + Number(hasAttention) + Number(hasJacobianLens);
 
+  // Tabs stay mounted once visited. Radix unmounts inactive TabsContent by
+  // default, which threw away each visualization's state on every tab switch:
+  // the saliency method snapped back to GradCAM, and the remount re-submitted
+  // the analysis job while the abandoned one was still running server-side, so
+  // the new job queued behind it (and behind the attention job) before
+  // finishing instantly from cache. First mount stays lazy so a tab that is
+  // never opened never submits a job.
+  const [activeTab, setActiveTab] = useState('saliency');
+  const [visitedTabs, setVisitedTabs] = useState<ReadonlySet<string>>(() => new Set(['saliency']));
+  const selectTab = (value: string) => {
+    setActiveTab(value);
+    setVisitedTabs((visited) => (visited.has(value) ? visited : new Set(visited).add(value)));
+  };
+  const keepMounted = (value: string): true | undefined => (visitedTabs.has(value) ? true : undefined);
+  // A model switch can remove the tab the user is on; fall back rather than
+  // leave the panel body empty.
+  const tabGone = (activeTab === 'attention' && !hasAttention)
+    || (activeTab === 'jacobian-lens' && !hasJacobianLens);
+  const shownTab = tabGone ? 'saliency' : activeTab;
+
   return (
     <div className="h-full bg-panel-background border-t border-border">
-      <Tabs defaultValue="saliency" className="h-full">
+      <Tabs value={shownTab} onValueChange={selectTab} className="h-full">
         <div className="bg-panel-header border-b border-border px-3 py-2">
           <TabsList className="h-7 grid w-full bg-muted" style={{ gridTemplateColumns: `repeat(${tabCount}, minmax(0, 1fr))` }}>
             <TabsTrigger value="saliency" className="text-xs">Saliency</TabsTrigger>
@@ -339,7 +359,7 @@ export const PredictionPanel = ({ selectedFile, selectedEmbeddingFile, model, da
         </div>
 
         <div className="h-[calc(100%-2.5rem)] overflow-auto bg-background">
-          <TabsContent value="saliency" className="m-0 h-full">
+          <TabsContent value="saliency" className="m-0 h-full data-[state=inactive]:hidden" forceMount={keepMounted('saliency')}>
             <div className="p-3">
               <SaliencyVisualization
                 selectedFile={selectedFile || selectedEmbeddingFile}
@@ -351,7 +371,7 @@ export const PredictionPanel = ({ selectedFile, selectedEmbeddingFile, model, da
           </TabsContent>
 
           {hasAttention && (
-            <TabsContent value="attention" className="m-0 h-full">
+            <TabsContent value="attention" className="m-0 h-full data-[state=inactive]:hidden" forceMount={keepMounted('attention')}>
               <div className="p-3">
                 <AttentionVisualization
                   selectedFile={selectedFile || selectedEmbeddingFile}
@@ -363,7 +383,7 @@ export const PredictionPanel = ({ selectedFile, selectedEmbeddingFile, model, da
           )}
 
           {hasJacobianLens && (
-            <TabsContent value="jacobian-lens" className="m-0 h-full">
+            <TabsContent value="jacobian-lens" className="m-0 h-full data-[state=inactive]:hidden" forceMount={keepMounted('jacobian-lens')}>
               <div className="p-3">
                 <JacobianLensVisualization
                   selectedFile={selectedFile || selectedEmbeddingFile}
@@ -375,7 +395,7 @@ export const PredictionPanel = ({ selectedFile, selectedEmbeddingFile, model, da
             </TabsContent>
           )}
 
-          <TabsContent value="perturbation" className="m-0 h-full">
+          <TabsContent value="perturbation" className="m-0 h-full data-[state=inactive]:hidden" forceMount={keepMounted('perturbation')}>
             <div className="p-3">
               <PerturbationTools
                 selectedFile={selectedFile}
@@ -388,7 +408,7 @@ export const PredictionPanel = ({ selectedFile, selectedEmbeddingFile, model, da
             </div>
           </TabsContent>
 
-          <TabsContent value="diagnostics" className="m-0 h-full">
+          <TabsContent value="diagnostics" className="m-0 h-full data-[state=inactive]:hidden" forceMount={keepMounted('diagnostics')}>
             <PerturbationDiagnosticsPanel
               selectedFile={selectedFile}
               model={model}

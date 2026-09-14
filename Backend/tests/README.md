@@ -28,13 +28,10 @@ This test suite implements the comprehensive Master Test Plan for LIT for Voice 
 
 #### 🟡 **Important Priority Tests**
 
-3. **Performance and Load Testing** (`test_performance_load.py`)
-   - Model inference performance benchmarks
-   - Concurrent user load testing
-   - Cache performance under load
-   - Memory usage monitoring
-   - **Coverage**: Sections 3.1.4 & 3.1.5 of Test Plan
-   - **Time**: ~15 minutes
+3. **Performance and Load Testing** (`test_perf_*.py`, `test_load_*.py`)
+   - Control-plane latency, event-loop blocking, worker compute budgets (SRS PE-1..PE-3)
+   - Workload profiles, background load, worker scaling, capacity growth
+   - **Coverage**: Sections 3.1.4 & 3.1.5 of Test Plan (`tests/plans/3.1.4-*.md`, `3.1.5-*.md`)
 
 4. **Security Testing** (`test_security.py`)
    - Session security validation
@@ -49,11 +46,11 @@ This test suite implements the comprehensive Master Test Plan for LIT for Voice 
 ### Prerequisites
 
 ```bash
-# Install test dependencies
-pip install pytest pytest-asyncio httpx fakeredis soundfile librosa psutil
+# Backend test dependencies (includes pytest-cov)
+pip install -r requirements-dev.txt
 
-# For frontend tests (when available)
-npm install --save-dev @testing-library/react @testing-library/jest-dom @testing-library/user-event jest
+# Frontend: Vitest, React Testing Library and @vitest/coverage-v8 are devDependencies
+cd ../Frontend && npm install
 ```
 
 ### Test Execution Commands
@@ -74,27 +71,20 @@ python tests/run_tests.py security
 # Run with pytest directly
 pytest tests/ -v
 pytest tests/test_data_integrity.py -v
-pytest tests/test_performance_load.py::TestPerformanceProfiling -v
+pytest tests/test_perf_event_loop.py -v
 
 # Run tests with specific markers
 pytest -m "critical" -v
 pytest -m "performance" -v
 pytest -m "security" -v
 
-# Generate HTML test report
+# Coverage + test evaluation summary (see "Test Results and Reporting")
 python tests/run_tests.py report
 ```
 
 ### Performance Benchmarks
 
-The tests include performance thresholds based on the Master Test Plan:
-
-- **Model Inference**: ≤10 seconds for 30-second audio clips
-- **Audio Processing**: ≤5 seconds for files under 10MB
-- **Cache Operations**: ≤50ms for Redis operations  
-- **UI Response**: ≤100ms for user interactions
-- **Concurrent Users**: Support for 10+ concurrent users
-- **Memory Usage**: ≤2GB peak memory usage
+Performance budgets are asserted by the `performance`-marked cases themselves, sourced from SRS PE-1..PE-3 — see `tests/plans/3.1.4-performance-profiling.md` and `tests/plans/3.1.5-load-testing.md`.
 
 ## Test Configuration
 
@@ -127,73 +117,72 @@ Tests provide detailed console output including:
 - Security vulnerability detection
 - Error handling validation
 
-### HTML Reports
+### Test Evaluation Summary and Coverage Reports (Test Plan Section 4)
 
-Generate comprehensive HTML reports with:
 ```bash
-python tests/run_tests.py report
+cd Frontend && npm run test:coverage       # frontend tier (optional, run first)
+cd Backend && python tests/run_tests.py report   # backend tier + summary of both
+python tests/run_tests.py summary          # re-render the summary, running nothing
 ```
 
-Reports include:
-- Test execution summary
-- Performance benchmarks
-- Coverage analysis
-- Failed test details
-- Screenshots (for UI tests)
+`report` runs the backend suite twice, as child processes with `HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1`:
+coverage run (`-m "not performance"`, under coverage) and a timing run (`-m performance`, no coverage),
+since the tracer would inflate the wall-clock budgets the performance cases assert. It exits non-zero
+if either run fails, including the coverage floor. What it produces:
+
+| Artifact | Contents |
+|---|---|
+| `tests/test_reports/evaluation-summary.md` | Verdict (PASS / FAIL / INCOMPLETE), environment and commands, per-run and per-test-plan-section totals for both tiers, every failure with its first message line, coverage against floors, the 10 lowest-covered backend modules |
+| `tests/test_reports/coverage-html/index.html` | Backend line + branch coverage, per file |
+| `tests/test_reports/junit-backend.xml`, `junit-performance.xml`, `coverage.json` | Machine-readable inputs to the summary |
+| `Frontend/coverage/index.html`, `Frontend/coverage/coverage-summary.json` | Frontend v8 coverage |
+| `Frontend/test-reports/junit.xml` | Frontend results |
+
+All of it is gitignored. Form, content and frequency are specified in `tests/plans/4-deliverables.md`.
 
 ## Integration with CI/CD
 
-### GitHub Actions Example
+There is no CI pipeline in this repository; the reports are produced locally. A pipeline would run:
 
 ```yaml
-name: LIT for Voice Tests
-on: [push, pull_request]
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-python@v2
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
-      
-      - name: Install dependencies
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Backend tests, coverage and evaluation summary
         run: |
-          pip install -r requirements.txt
-          pip install pytest pytest-asyncio httpx fakeredis soundfile librosa psutil
-      
-      - name: Run critical tests
-        run: python Backend/tests/run_tests.py critical
-      
-      - name: Run all tests
-        run: python Backend/tests/run_tests.py all
-        
-      - name: Generate test report
-        run: python Backend/tests/run_tests.py report
-        
-      - name: Upload test results
-        uses: actions/upload-artifact@v2
+          pip install -r Backend/requirements-dev.txt
+          cd Backend && python tests/run_tests.py report
+      - name: Frontend tests and coverage
+        run: cd Frontend && npm ci && npm run test:coverage
+      - name: Upload reports
+        uses: actions/upload-artifact@v4
         with:
-          name: test-results
-          path: Backend/tests/test_reports/
+          name: test-reports
+          path: |
+            Backend/tests/test_reports/
+            Frontend/coverage/
+            Frontend/test-reports/
 ```
 
-## Test Coverage Goals
+## Test Coverage
 
-Based on the Master Test Plan requirements:
+Coverage floors are enforced, not stated here:
 
-### Backend Coverage Targets
-- **Code Coverage**: >85% line coverage
-- **API Coverage**: All endpoints tested
-- **Model Integration**: All supported models tested
-- **Error Scenarios**: All error paths validated
+| Tier | Metric | Enforced by |
+|---|---|---|
+| Backend | statements + branches over `app/` | `fail_under` in `Backend/.coveragerc` |
+| Frontend | lines, statements, branches, functions over `src/` | `coverage.thresholds` in `Frontend/vite.config.ts` |
 
-### Frontend Coverage Targets  
-- **Component Coverage**: All React components tested
-- **User Workflows**: End-to-end scenarios covered
-- **Browser Compatibility**: Chrome, Firefox, Safari, Edge
-- **Accessibility**: WCAG 2.1 AA compliance verified
+Each floor was set just below the measured baseline. It is raised when a test-plan section lands and
+coverage rises, and never lowered without a recorded reason. The measured figures and floors are in
+every evaluation summary (`tests/test_reports/evaluation-summary.md`).
+
+Backend coverage is measured without the `performance`-marked cases. The frontend figure counts every
+file under `src/`, including files no test imports. Functional coverage (which requirements and use
+cases are exercised) is tracked per section in the Requirements Traceability tables of `tests/plans/`.
 
 ## Test Maintenance
 

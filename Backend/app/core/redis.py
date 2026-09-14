@@ -1,6 +1,7 @@
 import json, logging, re, uuid
 from typing import Any
 from redis.asyncio import from_url
+from redis.exceptions import ResponseError
 from .settings import settings
 
 logger = logging.getLogger(__name__)
@@ -49,17 +50,28 @@ def k_queue(sid: str) -> str: return f"{k_sess(sid)}:queue"
 def k_meta(sid: str) -> str:  return f"{k_sess(sid)}:meta"
 def k_result(model: str, h: str) -> str: return f"result:{model}:{h}"
 
-async def ensure_session(sid: str | None) -> str:
-    # Validate rather than trust: a malformed or absent cookie yields a fresh
-    # session (the same outcome a first-time visitor already gets), never a
-    # session keyed on attacker-chosen text. See `_VALID_SID`.
-    if not sid or not _VALID_SID.match(sid):
-        sid = uuid.uuid4().hex
+async def _touch_session(sid: str) -> None:
     p = redis.pipeline()
     p.hsetnx(k_meta(sid), "created", "1")
     p.expire(k_queue(sid), settings.SESSION_TTL_SECONDS)
     p.expire(k_meta(sid), settings.SESSION_TTL_SECONDS)
     await p.execute()
+
+async def ensure_session(sid: str | None) -> str:
+    if not sid: sid = uuid.uuid4().hex
+    try:
+        await _touch_session(sid)
+    except ResponseError as exc:
+        # A meta key of the wrong type fails HSETNX with WRONGTYPE on every
+        # request, and the same pipeline refreshes its TTL, so the session
+        # could never expire its way out.  Start a new one instead.  Any other
+        # refusal (an OOM under noeviction) is the store's problem, not this
+        # session's, and propagates.
+        if "WRONGTYPE" not in str(exc):
+            raise
+        logger.warning("Session %s has a key of the wrong type; issuing a new session", sid)
+        sid = uuid.uuid4().hex
+        await _touch_session(sid)
     return sid
 
 def _empty_queue() -> dict[str, Any]:

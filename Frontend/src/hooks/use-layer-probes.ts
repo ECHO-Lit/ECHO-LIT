@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { readEdaCache, writeEdaCache } from '@/lib/edaCache';
-import { materializeAudio } from '@/lib/jobs';
+import { materializeAll } from '@/lib/jobs';
 import {
   fetchDatasetMetadata,
   extractProperties,
@@ -129,10 +129,9 @@ export function useLayerProbes({ dataset, model, availableFiles }: UseLayerProbe
       try {
         // Materialised in file order, and the labels below are built in that
         // same order. The backend joins the two positionally, so these two
-        // lines must stay adjacent and must not be reordered.
-        const assets = await Promise.all(
-          availableFiles.map((filename) => materializeAudio(dataset, filename, controller.signal)),
-        );
+        // lines must stay adjacent and must not be reordered. materializeAll
+        // bounds concurrency but keeps input order.
+        const assets = await materializeAll(dataset, availableFiles, controller.signal);
         const properties = extractProperties(metadata, availableFiles, selected);
 
         const response = await runLayerProbe(

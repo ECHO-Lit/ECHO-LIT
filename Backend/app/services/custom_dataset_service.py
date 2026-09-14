@@ -2,11 +2,13 @@ import json
 import logging
 import csv
 import io
+import shutil
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from datetime import datetime
 import hashlib
 from app.core.audio_probe import probe_audio
+from app.core.settings import settings
 from app.services.dataset_labels_service import (
     attach_duration_bands,
     label_columns,
@@ -116,42 +118,43 @@ class CustomDatasetManager:
         logger.info(f"Created custom dataset '{dataset_name}' for session {self.session_id}")
         return metadata
     
-    def add_file_to_dataset(self, dataset_name: str, filename: str, file_data: bytes) -> Dict:
-        """Add a file to an existing custom dataset"""
+    def _load_for_write(self, dataset_name: str) -> tuple[Path, Path, Dict]:
         dataset_dir = self.datasets_dir / dataset_name
         metadata_file = dataset_dir / "dataset_metadata.json"
-        
         if not dataset_dir.exists() or not metadata_file.exists():
             raise ValueError(f"Dataset '{dataset_name}' does not exist")
-        
-        # Load existing metadata
-        metadata = _read_json_or_raise(metadata_file, dataset_name)
+        return dataset_dir, metadata_file, _read_json_or_raise(metadata_file, dataset_name)
 
-        # Generate unique filename to avoid conflicts
+    @staticmethod
+    def _store_file(dataset_dir: Path, filename: str, place: Callable[[Path], None]) -> Dict:
+        """Place one file under a collision-free name and describe it.
+
+        `place` writes the content to the path it is given, so the same logic
+        serves in-memory bytes and a file already staged on disk.
+        """
         file_path = dataset_dir / filename
         counter = 1
         original_filename = filename
         name, ext = Path(filename).stem, Path(filename).suffix
-        
         while file_path.exists():
             filename = f"{name}_{counter}{ext}"
             file_path = dataset_dir / filename
             counter += 1
-        
-        # Save the file
-        with file_path.open("wb") as f:
-            f.write(file_data)
-        
-        # Calculate audio metadata
+
+        place(file_path)
+
         try:
             duration, sample_rate, _ = probe_audio(file_path)
         except Exception as e:
             logger.warning(f"Could not extract audio metadata for {filename}: {e}")
             duration = 0.0
             sample_rate = 0
-        
-        # Add file metadata
-        file_metadata = {
+        # PE-3 / FR-1: the same 10 minute cap POST /upload enforces.
+        if duration > settings.MAX_AUDIO_DURATION_SECONDS:
+            file_path.unlink(missing_ok=True)
+            raise ValueError("Audio exceeds the 10 minute duration limit")
+
+        return {
             "filename": filename,
             "original_filename": original_filename,
             "duration": round(duration, 2),
@@ -159,20 +162,55 @@ class CustomDatasetManager:
             "size": file_path.stat().st_size,
             "uploaded_at": datetime.utcnow().isoformat()
         }
-        
-        metadata["files"].append(file_metadata)
+
+    @staticmethod
+    def _record_files(metadata: Dict, added: List[Dict]) -> None:
+        metadata["files"].extend(added)
         metadata["total_files"] = len(metadata["files"])
         if metadata.get("manifest") and metadata.get("transcripts"):
             stored_files = {item["filename"] for item in metadata["files"]}
             unmatched = sorted(name for name in metadata["transcripts"] if name not in stored_files)
             metadata["manifest"]["matched_audio_count"] = len(metadata["transcripts"]) - len(unmatched)
             metadata["manifest"]["unmatched_filenames"] = unmatched[:20]
-        
-        # Save updated metadata
+
+    def add_file_to_dataset(self, dataset_name: str, filename: str, file_data: bytes) -> Dict:
+        """Add a file to an existing custom dataset"""
+        dataset_dir, metadata_file, metadata = self._load_for_write(dataset_name)
+        file_metadata = self._store_file(dataset_dir, filename, lambda path: path.write_bytes(file_data))
+        self._record_files(metadata, [file_metadata])
         _write_json_atomic(metadata_file, metadata)
 
-        logger.info(f"Added file '{filename}' to dataset '{dataset_name}' in session {self.session_id}")
+        logger.info(f"Added file '{file_metadata['filename']}' to dataset '{dataset_name}' in session {self.session_id}")
         return file_metadata
+
+    def add_files_to_dataset(
+        self, dataset_name: str, staged: List[tuple[str, Path]]
+    ) -> tuple[List[Dict], List[str]]:
+        """Add a batch of files already staged on disk, rewriting metadata once.
+
+        Blocking by design -- file moves, a probe per file, one JSON write --
+        so the upload route runs it in a worker thread under a per-dataset lock.
+        Adding files one call at a time re-read and rewrote the whole metadata
+        document per file, which made an n-file batch O(n^2) in bytes written.
+        A file that fails is reported and skipped; the rest of the batch lands.
+        """
+        dataset_dir, metadata_file, metadata = self._load_for_write(dataset_name)
+        added: List[Dict] = []
+        errors: List[str] = []
+        for original_name, source in staged:
+            try:
+                added.append(self._store_file(
+                    dataset_dir, original_name, lambda path, src=source: shutil.move(str(src), str(path))
+                ))
+            except Exception as e:
+                errors.append(f"Failed to upload {original_name}: {e}")
+        if added:
+            self._record_files(metadata, added)
+            _write_json_atomic(metadata_file, metadata)
+        logger.info(
+            "Added %d file(s) to dataset '%s' in session %s", len(added), dataset_name, self.session_id
+        )
+        return added, errors
 
     def add_manifest_to_dataset(self, dataset_name: str, filename: str, manifest_data: bytes) -> Dict:
         """Attach a CSV manifest with filename-to-reference-transcript pairs.
@@ -420,6 +458,28 @@ def cleanup_session_datasets(session_id: str) -> bool:
     except Exception as e:
         logger.error(f"Could not cleanup session {session_id}: {e}")
         return False
+
+
+def cleanup_expired_session_datasets(session_exists: Callable[[str], bool]) -> int:
+    """Remove the dataset trees of sessions that no longer exist; return how many.
+
+    PE-3 bounds cumulative storage by a 24-hour expiry on transient objects.
+    Session state in Redis expires on that clock, but custom datasets live on
+    disk under SESSIONS_BASE_DIR -- outside the object store the hourly
+    `cleanup_expired_local_objects` sweeps -- and `cleanup_session_datasets`
+    had no caller but a manual endpoint, so every dataset ever uploaded stayed
+    on disk forever.  Keying on the session's own existence (rather than file
+    age) deletes a dataset exactly when its owner's session has expired and
+    never under a session that is still in use.
+    """
+    if not SESSIONS_BASE_DIR.exists():
+        return 0
+    removed = 0
+    for session_dir in SESSIONS_BASE_DIR.iterdir():
+        if session_dir.is_dir() and not session_exists(session_dir.name):
+            if cleanup_session_datasets(session_dir.name):
+                removed += 1
+    return removed
 
 
 def is_custom_dataset(dataset_name: str) -> bool:

@@ -1,4 +1,6 @@
 import { API_BASE, AudioReference } from './api';
+import { mapWithConcurrency } from './concurrency';
+import { describeHttpError } from './httpError';
 
 export type JobOperation =
   | 'prediction'
@@ -38,14 +40,9 @@ export interface CreateJobInput {
   parameters?: Record<string, unknown>;
 }
 
-async function parseError(response: Response): Promise<Error> {
-  try {
-    const body = await response.json();
-    return new Error(body.detail || `Request failed (${response.status})`);
-  } catch {
-    return new Error(`Request failed (${response.status})`);
-  }
-}
+// Delegates to the single US-4 error describer. Kept as a local name so the
+// call sites below read unchanged.
+const parseError = (response: Response): Promise<Error> => describeHttpError(response);
 
 export async function materializeAudio(
   dataset: string,
@@ -63,6 +60,24 @@ export async function materializeAudio(
   return response.json();
 }
 
+/**
+ * At most this many materialise requests per batch are in flight at once. The
+ * API probes, hashes and copies each file on a thread pool shared by every
+ * user, so one dashboard loading a dataset should not claim all of it.
+ */
+export const MATERIALIZE_CONCURRENCY = 4;
+
+/** Materialise many dataset files, bounded and in input order. */
+export function materializeAll(
+  dataset: string,
+  filenames: readonly string[],
+  signal?: AbortSignal,
+): Promise<AudioReference[]> {
+  return mapWithConcurrency(filenames, MATERIALIZE_CONCURRENCY, (filename) =>
+    materializeAudio(dataset, filename, signal),
+  );
+}
+
 export async function resolveAudioId(
   file: { audio_id?: string; file_id?: string; filename?: string } | string,
   dataset?: string,
@@ -78,7 +93,7 @@ export async function resolveAudioId(
   return (await materializeAudio(dataset, filename, signal)).audio_id;
 }
 
-export async function createJob(input: CreateJobInput, signal?: AbortSignal): Promise<JobStatus> {
+async function submitJob(input: CreateJobInput, signal?: AbortSignal): Promise<string> {
   const response = await fetch(`${API_BASE}/jobs`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -87,8 +102,11 @@ export async function createJob(input: CreateJobInput, signal?: AbortSignal): Pr
     signal,
   });
   if (!response.ok) throw await parseError(response);
-  const created = await response.json();
-  return getJob(created.job_id, signal);
+  return (await response.json()).job_id;
+}
+
+export async function createJob(input: CreateJobInput, signal?: AbortSignal): Promise<JobStatus> {
+  return getJob(await submitJob(input, signal), signal);
 }
 
 export async function getJob(jobId: string, signal?: AbortSignal): Promise<JobStatus> {
@@ -126,9 +144,20 @@ function wait(milliseconds: number, signal?: AbortSignal): Promise<void> {
 
 export async function runJob<T = unknown>(
   input: CreateJobInput,
-  options: { signal?: AbortSignal; onProgress?: (status: JobStatus) => void } = {},
+  options: {
+    signal?: AbortSignal;
+    onProgress?: (status: JobStatus) => void;
+    /** Receives the job id as soon as the server accepts the job. */
+    onCreated?: (jobId: string) => void;
+  } = {},
 ): Promise<T> {
-  let status = await createJob(input, options.signal);
+  // With `onCreated` the submit is not bound to the signal: aborting it
+  // mid-flight could leave a job created server-side whose id the caller never
+  // learns, so it could never be cancelled. The abort is honoured just after.
+  const jobId = await submitJob(input, options.onCreated ? undefined : options.signal);
+  options.onCreated?.(jobId);
+  if (options.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+  let status = await getJob(jobId, options.signal);
   let delay = 1000;
   while (!['success', 'failure', 'cancelled'].includes(status.status)) {
     options.onProgress?.(status);

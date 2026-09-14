@@ -49,7 +49,9 @@ Gap: no test imports a real component from the app source tree. This is scaffold
 
 ---
 
-## 3.1.4 & 3.1.5 Performance Profiling / Load Testing — IMPLEMENTED
+## 3.1.4 & 3.1.5 Performance Profiling / Load Testing — SUPERSEDED
+
+> **Superseded 2026-09-11** by `Backend/tests/plans/3.1.4-performance-profiling.md` and `Backend/tests/plans/3.1.5-load-testing.md`. `test_performance_load.py` described below was vacuous (it timed its own mocks' `sleep`) and has been deleted; 90 new cases and 15 fixed defects replace it. The analysis below is kept as the original record.
 
 `test_performance_load.py`:
 - `TestPerformanceProfiling` — Whisper/Wav2Vec2 inference timing, memory usage monitoring
@@ -72,19 +74,25 @@ Template's "system-level security" (login/remote-access gateway testing) is expl
 
 ---
 
-## 3.1.7 Failover and Recovery Testing — NOT IMPLEMENTED
+## 3.1.7 Failover and Recovery Testing — SUPERSEDED
+
+> **Superseded 2026-09-12** by `Backend/tests/plans/3.1.7-failover-and-recovery.md`: 159 new cases in five `test_failover_*.py` modules, 11 fixed defects (BUG-50..60). The analysis below is kept as the original record.
 
 No test simulates power interruption, network/DASD interruption, incomplete-cycle abort, or corrupted DB pointers/keys, and no recovery-procedure validation exists anywhere in the suite.
 
 ---
 
-## 3.1.8 Configuration Testing — NOT IMPLEMENTED
+## 3.1.8 Configuration Testing — SUPERSEDED
+
+> **Superseded 2026-09-12** by `Backend/tests/plans/3.1.8-configuration-testing.md`: 204 new cases (five `test_config_*.py` modules plus `Frontend/src/tests/configuration.test.tsx`), 18 fixed defects (BUG-61..78) and one fixed test-run defect (TEST-02). The analysis below is kept as the original record.
 
 No test varies hardware/software configuration combinations, cross-browser behavior, or concurrent non-target-software resource contention. `test_device.py` (CUDA/ROCm/MPS/CPU selection) is adjacent but is functional device-selection logic, not the template's multi-configuration deployment testing.
 
 ---
 
-## Section 4 — Deliverables
+## Section 4 — Deliverables — SUPERSEDED
+
+> **Superseded 2026-09-12** by `Backend/tests/plans/4-deliverables.md`: `run_tests.py report` now writes a Markdown evaluation summary from junit XML and measures coverage in both tiers (pytest-cov, `@vitest/coverage-v8`) against ratchet floors; TEST-03..05 fixed. The analysis below is kept as the original record.
 
 - **4.1 Test Evaluation Summaries**: `run_tests.py` prints console summaries and claims HTML report generation (`python tests/run_tests.py report`) — present as tooling, not verified against actual report output in this scan.
 - **4.2 Reporting on Test Coverage**: no coverage tooling found in the repo (no `pytest-cov` / coverage config detected). README's ">85% line coverage" target is stated but unmeasured.
@@ -105,9 +113,9 @@ No formal risk register exists. `Backend/tests/README.md` has an informal Troubl
 | 3.1.4 Performance Profiling | Implemented |
 | 3.1.5 Load Testing | Implemented |
 | 3.1.6 Security & Access Control | Implemented |
-| 3.1.7 Failover & Recovery | Missing |
-| 3.1.8 Configuration Testing | Missing |
-| 4. Deliverables | Partial — reporting tooling claimed, coverage measurement absent |
+| 3.1.7 Failover & Recovery | Implemented (superseded 2026-09-12 — see `Backend/tests/plans/3.1.7-failover-and-recovery.md`) |
+| 3.1.8 Configuration Testing | Implemented (superseded 2026-09-12 — see `Backend/tests/plans/3.1.8-configuration-testing.md`) |
+| 4. Deliverables | Implemented (superseded 2026-09-12 — see `Backend/tests/plans/4-deliverables.md`) |
 | 5. Risks/Dependencies | Missing formal doc — informal equivalent exists |
 
 ---
@@ -154,7 +162,7 @@ Grounded against actual repo shape, checked 2026-09-02:
 - No dependency/package vulnerability scan wired into the suite (e.g. `pip-audit`, `npm audit` as a test-suite gate).
 - **To implement:** concurrent cross-session isolation test (race two sessions against shared cache namespace, assert no bleed); wire `pip-audit`/`npm audit` as a CI-gated test; explicit written decision in the plan on system-level security ownership.
 
-## 3.1.7 Failover and Recovery — gaps (fully missing)
+## 3.1.7 Failover and Recovery — gaps (closed 2026-09-12, see `Backend/tests/plans/3.1.7-failover-and-recovery.md`)
 - No power/communication-interruption simulation at any level (client, server, Redis).
 - No **incomplete-cycle abort** test (kill a job mid-worker-execution, verify job status lands in a consistent terminal state rather than stuck/corrupted) — closest existing coverage is `test_fr10_cancellation_and_failures.py`, which tests *requested* cancellation, not an unplanned crash/kill.
 - No test for **Redis connection loss mid-request** and recovery behavior (reconnect, retry, or fail cleanly).
@@ -165,7 +173,7 @@ Grounded against actual repo shape, checked 2026-09-02:
   3. Corrupted-cache-entry test: write a malformed value under a known cache key and assert the read path detects and recomputes rather than crashing.
   (Full DASD/hardware-level failover from the literal template is not applicable to this architecture — no failover cluster exists — so this scope should be explicitly narrowed to worker/Redis/API resilience in the written plan.)
 
-## 3.1.8 Configuration Testing — gaps (fully missing)
+## 3.1.8 Configuration Testing — gaps (closed 2026-09-12, see `Backend/tests/plans/3.1.8-configuration-testing.md`)
 - `docker-compose.yml` + separate `Backend/Dockerfile` / `Frontend/Dockerfile` exist but nothing in the test suite runs against the containerized configuration — all current tests run against the local dev environment directly.
 - No test matrix across the device-backend permutations `test_device.py` already validates in isolation (CUDA/ROCm/MPS/CPU) combined with actual model inference — device selection logic is tested, but not "does inference actually run correctly on each detected backend."
 - No browser-compatibility pass for the frontend (template asks Chrome/Firefox/Safari/Edge — README claims this as a goal, nothing implements it; no Playwright/Cypress cross-browser config found).
@@ -175,7 +183,8 @@ Grounded against actual repo shape, checked 2026-09-02:
   2. Cross-browser E2E smoke pass (Playwright, 2–3 browsers) covering the core upload → analyze → view-results flow.
   3. Resource-constrained CI job variant (cgroup/container memory+CPU cap) running the existing performance suite to confirm graceful degradation rather than crashes.
 
-## Section 4 — Deliverables gaps
+## Section 4 — Deliverables gaps (closed 2026-09-12, see `Backend/tests/plans/4-deliverables.md`)
+- (The frontend runner is Vitest, not Jest — corrected here.)
 - No coverage tool wired in (`pytest-cov` absent from `Backend/tests/`, no Jest coverage config confirmed for frontend) — the README's ">85% line coverage" and "component coverage" targets are unmeasured claims.
 - No actual generated HTML report artifact found — `run_tests.py report` is a claimed command, not something this scan could verify produces output.
 - **To implement:** add `pytest-cov` + `--cov-report=html` to the pytest config and wire it into `run_tests.py`; add Jest `--coverage` to the frontend test command; publish both as CI artifacts so the README's coverage claims become verifiable numbers instead of stated goals.

@@ -1,10 +1,11 @@
-import os
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Response
 from fastapi.responses import JSONResponse
+from redis.exceptions import RedisError
 
 from .api.routes import (
     analyses as analyses_routes,
@@ -17,34 +18,40 @@ from .api.routes import (
     session as session_routes,
     upload as upload_routes,
 )
-from .core.session import SessionMiddleware
+from .core.session import SessionMiddleware, service_unavailable
 from .core.settings import settings
+from .core.storage import StorageUnavailable
 
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="ECHO API", version="2.0")
 
-allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "")
-origins = (
-    [origin.strip() for origin in allowed_origins_env.split(",") if origin.strip()]
-    if allowed_origins_env
-    else ["http://localhost:3000", "http://localhost:8080", "http://127.0.0.1:8080"]
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 app.add_middleware(SessionMiddleware)
 
 
+@app.exception_handler(RedisError)
+async def redis_unavailable(request: Request, exc: RedisError):
+    # A Redis failure inside a route gets the same readable 503 the session
+    # middleware returns, rather than a bare 500 the browser cannot use.
+    logger.warning("redis unavailable during %s %s: %s", request.method, request.url.path, exc)
+    return service_unavailable()
+
+
+@app.exception_handler(StorageUnavailable)
+async def storage_unavailable(request: Request, exc: StorageUnavailable):
+    # The object store's equivalent of the Redis handler above: an S3 bucket
+    # the deployment cannot reach is a readable, retryable 503, not a 500.
+    logger.warning("storage unavailable during %s %s: %s", request.method, request.url.path, exc)
+    return JSONResponse(
+        {"detail": "Storage is temporarily unavailable. Wait a moment and try again."},
+        status_code=503,
+        headers={"Retry-After": "5"},
+    )
+
+
 LEGACY_PREFIXES = ("/inferences", "/saliency", "/perturb", "/results")
-legacy_sync_enabled = (
-    settings.ENABLE_LEGACY_SYNC_INFERENCE
-    and settings.ENVIRONMENT.strip().lower() not in {"production", "prod"}
-)
+legacy_sync_enabled = settings.ENABLE_LEGACY_SYNC_INFERENCE and not settings.is_production
 
 
 @app.middleware("http")
@@ -82,6 +89,20 @@ async def legacy_api_gate(request: Request, call_next):
         response.headers["Deprecation"] = "true"
         response.headers["Sunset"] = "one release after the /jobs migration"
     return response
+
+
+# Added last, so outermost: every response -- including the session
+# middleware's 503 and the gate's 410 -- carries the CORS headers a
+# cross-origin browser needs to read it, and a preflight is answered here
+# without ever reaching the session store.  The allow-list is validated by
+# Settings (SE-2): explicit origins only, never "*" alongside credentials.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 app.include_router(session_routes.router, tags=["Session"])

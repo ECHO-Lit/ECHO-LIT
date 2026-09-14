@@ -189,8 +189,19 @@ export const SaliencyVisualization = ({ selectedFile, model, dataset, originalDa
     return '';
   }, [selectedFile]);
 
+  // Only the latest request may touch state. A superseded one used to land its
+  // AbortError as "Error: Aborted" and clear the spinner while its replacement
+  // was still running.
+  const requestSeq = useRef(0);
+
   const fetchSaliencyData = async (fullAudio = false) => {
-    if (!selectedFile || !model) return;
+    const seq = ++requestSeq.current;
+    const isLatest = () => seq === requestSeq.current;
+    if (!selectedFile || !model) {
+      saliencyJob.abandon();
+      setLoading(false);
+      return;
+    }
 
     setLoading(true);
     setError(null);
@@ -202,17 +213,21 @@ export const SaliencyVisualization = ({ selectedFile, model, dataset, originalDa
       const datasetToUse = originalDataset && originalDataset !== "custom" ? originalDataset : dataset;
 
       const audioId = await resolveAudioId(selectedFile, datasetToUse);
+      // A newer request may have started while this one was resolving the ID;
+      // submitting now would supersede (and cancel) that newer job.
+      if (!isLatest()) return;
       const data = firstJobResult<SaliencyData>(await saliencyJob.start({
         operation: 'saliency',
         model,
         audio_ids: [audioId],
         parameters: { method: selectedMethod, full_audio: fullAudio },
       }));
-      setSaliencyData(data);
+      if (isLatest()) setSaliencyData(data);
     } catch (err) {
+      if (!isLatest() || (err instanceof DOMException && err.name === 'AbortError')) return;
       setError(err instanceof Error ? err.message : 'Failed to fetch saliency data');
     } finally {
-      setLoading(false);
+      if (isLatest()) setLoading(false);
     }
   };
 
@@ -504,7 +519,8 @@ export const SaliencyVisualization = ({ selectedFile, model, dataset, originalDa
           {!loading && !error && saliencyData && (
             <div className="text-xs space-y-2">
               <div className="font-medium">Top Salient Segments:</div>
-              {saliencyData.segments
+              {/* Copy first: sorting state in place reorders the time-ordered overlay bars on the next render. */}
+              {[...saliencyData.segments]
                 .sort((a, b) => b.intensity - a.intensity)
                 .slice(0, 5)
                 .map((segment, idx) => (

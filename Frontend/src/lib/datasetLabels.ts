@@ -13,6 +13,7 @@
  */
 
 import { API_BASE } from './api';
+import { describeHttpError } from './httpError';
 
 export interface PropertyPreview {
   property: string;
@@ -55,10 +56,7 @@ export interface LabelPattern {
 }
 
 async function readOrThrow<T>(response: Response): Promise<T> {
-  if (!response.ok) {
-    const body = await response.json().catch(() => null);
-    throw new Error(body?.detail ?? `Request failed (${response.status})`);
-  }
+  if (!response.ok) throw await describeHttpError(response);
   return response.json();
 }
 

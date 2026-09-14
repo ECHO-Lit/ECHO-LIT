@@ -5,6 +5,9 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  SelectSeparator,
+  SelectLabel,
+  SelectGroup,
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +18,8 @@ import { API_BASE } from '@/lib/api';
 import { CustomDatasetManager } from '@/components/dataset/CustomDatasetManager';
 import { CustomModelManager } from '@/components/model/CustomModelManager';
 import { listCustomModels, type CustomModel } from '@/lib/models';
+import { toast } from 'sonner';
+import { describeHttpError } from '@/lib/httpError';
 
 interface UploadedFile {
   audio_id?: string;
@@ -44,6 +49,8 @@ interface ToolbarProps {
   onToggleLeftPanel?: () => void;
   onToggleRightPanel?: () => void;
   onToggleBottomPanel?: () => void;
+  /** Opens the dataset panel's file picker. Without it the Upload button is inert. */
+  onUploadClick?: () => void;
 }
 
 interface CustomDataset {
@@ -64,7 +71,7 @@ const defaultDatasetForModel: Record<string, string> = {
   "wav2vec2": "ravdess",
 };
 
-export const Toolbar = ({apiData, setApiData, selectedFile, uploadedFiles, onFileSelect, model, setModel, dataset, setDataset, onBatchInference, leftPanelOpen, rightPanelOpen, bottomPanelOpen, onToggleLeftPanel, onToggleRightPanel, onToggleBottomPanel}: ToolbarProps) => {
+export const Toolbar = ({apiData, setApiData, selectedFile, uploadedFiles, onFileSelect, model, setModel, dataset, setDataset, onBatchInference, leftPanelOpen, rightPanelOpen, bottomPanelOpen, onToggleLeftPanel, onToggleRightPanel, onToggleBottomPanel, onUploadClick}: ToolbarProps) => {
   const [customDatasets, setCustomDatasets] = useState<CustomDataset[]>([]);
   const [customModels, setCustomModels] = useState<CustomModel[]>([]);
 
@@ -77,9 +84,16 @@ export const Toolbar = ({apiData, setApiData, selectedFile, uploadedFiles, onFil
       if (response.ok) {
         const data = await response.json();
         setCustomDatasets(data.datasets || []);
+      } else {
+        // An HTTP error used to be swallowed entirely here — the `if (response.ok)`
+        // had no else, so a 500 did not even reach console.error. The dropdown
+        // simply rendered with no custom datasets and the user concluded their
+        // uploads were gone.
+        throw await describeHttpError(response);
       }
     } catch (err) {
       console.error('Error fetching custom datasets:', err);
+      toast.error('Could not load your custom datasets. They are still there — reload the page to try again.');
     }
   };
 
@@ -90,6 +104,7 @@ export const Toolbar = ({apiData, setApiData, selectedFile, uploadedFiles, onFil
   useEffect(() => {
     listCustomModels().then(setCustomModels).catch((error) => {
       console.error('Error fetching custom models:', error);
+      toast.error('Could not load your registered models. Reload the page to try again.');
     });
   }, []);
 
@@ -157,7 +172,13 @@ const onModelChange = (value: string) => {
                 <span className="text-xs font-medium text-foreground">Model:</span>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <HelpCircle className="h-3 w-3 text-muted-foreground hover:text-primary cursor-help transition-colors" />
+                    <button
+                      type="button"
+                      aria-label="About the model options"
+                      className="text-muted-foreground hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm"
+                    >
+                      <HelpCircle className="h-3 w-3" aria-hidden="true" />
+                    </button>
                   </TooltipTrigger>
                     <TooltipContent className="space-y-1">
                     <p className="text-xs">Choose the AI model for audio analysis:</p>
@@ -167,7 +188,7 @@ const onModelChange = (value: string) => {
                 </Tooltip>
               </div>
               <Select value={model} onValueChange={onModelChange}>
-                <SelectTrigger className="w-32 h-7 border-border text-xs">
+                <SelectTrigger className="w-32 h-7 border-border text-xs" aria-label="Model">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -187,7 +208,13 @@ const onModelChange = (value: string) => {
                 <span className="text-xs font-medium text-foreground">Dataset:</span>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <HelpCircle className="h-3 w-3 text-muted-foreground hover:text-primary cursor-help transition-colors" />
+                    <button
+                      type="button"
+                      aria-label="About the dataset options"
+                      className="text-muted-foreground hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm"
+                    >
+                      <HelpCircle className="h-3 w-3" aria-hidden="true" />
+                    </button>
                   </TooltipTrigger>
                   <TooltipContent className="space-y-1">
                     <p className="text-xs">Select the audio dataset to analyze:</p>
@@ -200,7 +227,7 @@ const onModelChange = (value: string) => {
                 </Tooltip>
               </div>
               <Select value={dataset} onValueChange={onDatasetChange}>
-              <SelectTrigger className="w-40 h-7 border-border text-xs">
+              <SelectTrigger className="w-40 h-7 border-border text-xs" aria-label="Dataset">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -221,14 +248,15 @@ const onModelChange = (value: string) => {
                 {/* Custom datasets */}
                 {customDatasets.length > 0 && (
                   <>
-                    <SelectItem disabled value="separator">
-                      ── Custom Datasets ──
-                    </SelectItem>
-                    {customDatasets.map((customDataset) => (
-                      <SelectItem key={customDataset.formatted_name} value={customDataset.formatted_name}>
-                        {customDataset.dataset_name}
-                      </SelectItem>
-                    ))}
+                    <SelectSeparator />
+                    <SelectGroup>
+                      <SelectLabel>Custom Datasets</SelectLabel>
+                      {customDatasets.map((customDataset) => (
+                        <SelectItem key={customDataset.formatted_name} value={customDataset.formatted_name}>
+                          {customDataset.dataset_name}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
                   </>
                 )}
               </SelectContent>
@@ -272,9 +300,11 @@ const onModelChange = (value: string) => {
                 variant={leftPanelOpen ? "secondary" : "ghost"}
                 size="icon"
                 className="h-7 w-7"
+                aria-label="Toggle left panel"
+                aria-pressed={Boolean(leftPanelOpen)}
                 onClick={onToggleLeftPanel}
               >
-                <PanelLeft className="h-3.5 w-3.5" />
+                <PanelLeft className="h-3.5 w-3.5" aria-hidden="true" />
               </Button>
             </TooltipTrigger>
             <TooltipContent>
@@ -288,9 +318,11 @@ const onModelChange = (value: string) => {
                 variant={bottomPanelOpen ? "secondary" : "ghost"}
                 size="icon"
                 className="h-7 w-7"
+                aria-label="Toggle bottom panel"
+                aria-pressed={Boolean(bottomPanelOpen)}
                 onClick={onToggleBottomPanel}
               >
-                <PanelBottom className="h-3.5 w-3.5" />
+                <PanelBottom className="h-3.5 w-3.5" aria-hidden="true" />
               </Button>
             </TooltipTrigger>
             <TooltipContent>
@@ -304,9 +336,11 @@ const onModelChange = (value: string) => {
                 variant={rightPanelOpen ? "secondary" : "ghost"}
                 size="icon"
                 className="h-7 w-7"
+                aria-label="Toggle right panel"
+                aria-pressed={Boolean(rightPanelOpen)}
                 onClick={onToggleRightPanel}
               >
-                <PanelRight className="h-3.5 w-3.5" />
+                <PanelRight className="h-3.5 w-3.5" aria-hidden="true" />
               </Button>
             </TooltipTrigger>
             <TooltipContent>
@@ -323,13 +357,19 @@ const onModelChange = (value: string) => {
 
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button variant="default" size="sm" className="h-7 text-xs shadow-aws-sm">
-              <Upload className="h-3.5 w-3.5 mr-1.5" />
+            <Button
+              variant="default"
+              size="sm"
+              className="h-7 text-xs shadow-aws-sm"
+              onClick={onUploadClick}
+            >
+              <Upload className="h-3.5 w-3.5 mr-1.5" aria-hidden="true" />
               Upload
             </Button>
           </TooltipTrigger>
           <TooltipContent>
             <p>Upload audio files for analysis</p>
+            <p className="text-xs text-muted-foreground">WAV, MP3, M4A or FLAC · up to 100 MB and 10 minutes per file</p>
           </TooltipContent>
         </Tooltip>
       </div>

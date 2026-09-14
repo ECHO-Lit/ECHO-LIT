@@ -14,7 +14,6 @@ export const WaveformViewer = ({ audioUrl, isPlaying, onReady, onProgress }: Wav
   const wavesurferRef = useRef<WaveSurfer | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const currentBlobUrlRef = useRef<string | null>(null);
 
   // Initialize WaveSurfer instance
   useEffect(() => {
@@ -44,6 +43,9 @@ export const WaveformViewer = ({ audioUrl, isPlaying, onReady, onProgress }: Wav
       barRadius: 1,
       cursorWidth: 1,
       hideScrollbar: true,
+      // The API is another origin (port 8000) and serves audio only to the
+      // session that owns it, so wavesurfer's own fetch must carry the cookie.
+      fetchParams: { credentials: 'include', mode: 'cors' },
     });
 
     wavesurferRef.current = wavesurfer;
@@ -94,121 +96,35 @@ export const WaveformViewer = ({ audioUrl, isPlaying, onReady, onProgress }: Wav
         wavesurferRef.current.destroy();
         wavesurferRef.current = null;
       }
-      // Clean up blob URLs to prevent memory leaks
-      if (currentBlobUrlRef.current) {
-        URL.revokeObjectURL(currentBlobUrlRef.current);
-        currentBlobUrlRef.current = null;
-      }
     };
   }, []); // Only run once when component mounts
 
   // Handle audio URL changes
   useEffect(() => {
-    if (!wavesurferRef.current || !audioUrl) {
+    const wavesurfer = wavesurferRef.current;
+    if (!wavesurfer || !audioUrl) {
       return;
     }
 
     setIsLoading(true);
     setError(null);
-    
-    // First, test if the URL is accessible with proper credentials for cross-origin
-    const fetchOptions: RequestInit = { 
-      method: 'HEAD',
-      credentials: 'include',  // Include credentials for CORS
-      mode: 'cors',           // Explicit CORS mode
-      headers: {
-        'Accept': 'audio/*',
-      }
+
+    // wavesurfer fetches the audio itself, with the credentials configured on
+    // create(), so the session cookie travels for every URL scheme. (A HEAD
+    // probe used to run first; the API answers only GET, so it always failed,
+    // and the fallback then loaded http:// URLs without the cookie.) The
+    // 'error' listener reports a failed load; the flag stops a load that
+    // settles after this effect is superseded or unmounted from touching state.
+    let cancelled = false;
+    Promise.resolve(wavesurfer.load(audioUrl)).catch((err: unknown) => {
+      if (cancelled) return;
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      setError(`Failed to load audio file: ${message}`);
+      setIsLoading(false);
+    });
+    return () => {
+      cancelled = true;
     };
-    
-    fetch(audioUrl, fetchOptions)
-      .then(response => {
-        if (!response.ok) {
-          throw new Error(`Server responded with ${response.status}: ${response.statusText}`);
-        }
-        
-        // If HEAD request succeeds, try to load with WaveSurfer
-        try {
-          // For cross-origin requests (like ngrok) or custom datasets, try to preload audio data
-          if (audioUrl.includes('ngrok') || audioUrl.includes('colab') || audioUrl.includes('https://') || audioUrl.includes('custom%3A')) {
-            // First try to fetch audio data
-            fetch(audioUrl, {
-              credentials: 'include',
-              mode: 'cors'
-            }).then(audioResponse => {
-              if (audioResponse.ok) {
-                return audioResponse.blob();
-              }
-              throw new Error(`Failed to fetch audio data: ${audioResponse.status} ${audioResponse.statusText}`);
-            }).then(blob => {
-              // Clean up previous blob URL if exists
-              if (currentBlobUrlRef.current) {
-                URL.revokeObjectURL(currentBlobUrlRef.current);
-              }
-              const audioBlob = URL.createObjectURL(blob);
-              currentBlobUrlRef.current = audioBlob;
-              wavesurferRef.current?.load(audioBlob);
-            }).catch(blobErr => {
-              console.warn('Blob loading failed, trying direct URL:', blobErr);
-              // Fallback to direct URL loading
-              wavesurferRef.current?.load(audioUrl);
-            });
-          } else {
-            // Local files can be loaded directly
-            wavesurferRef.current?.load(audioUrl);
-          }
-        } catch (err) {
-          console.error('WaveSurfer load error:', err);
-          setError(`WaveSurfer failed to load: ${err?.message || 'Unknown error'}`);
-          setIsLoading(false);
-        }
-      })
-      .catch(err => {
-        console.error('Audio URL accessibility test failed:', err);
-        setError(`Cannot access audio file: ${err.message}`);
-        setIsLoading(false);
-        
-        // Try with GET request as fallback
-        const getFallbackOptions: RequestInit = {
-          method: 'GET',
-          credentials: 'include',
-          mode: 'cors',
-          headers: {
-            'Accept': 'audio/*',
-          }
-        };
-        
-        fetch(audioUrl, getFallbackOptions)
-          .then(response => {
-            console.log('Audio URL GET fallback response:', response.status);
-            if (response.ok) {
-              setError('File accessible, trying blob loading for cross-origin compatibility');
-              // Try blob loading for cross-origin
-              try {
-                if (audioUrl.includes('ngrok') || audioUrl.includes('colab') || audioUrl.includes('https://')) {
-                  response.blob().then(blob => {
-                    // Clean up previous blob URL if exists
-                    if (currentBlobUrlRef.current) {
-                      URL.revokeObjectURL(currentBlobUrlRef.current);
-                    }
-                    const audioBlob = URL.createObjectURL(blob);
-                    currentBlobUrlRef.current = audioBlob;
-                    wavesurferRef.current?.load(audioBlob);
-                  }).catch(blobErr => {
-                    setError(`Blob loading failed: ${blobErr?.message || 'Unknown error'}`);
-                  });
-                } else {
-                  wavesurferRef.current?.load(audioUrl);
-                }
-              } catch (wsErr: any) {
-                setError(`WaveSurfer error: ${wsErr?.message || 'Unknown error'}`);
-              }
-            }
-          })
-          .catch(() => {
-            setError('Audio file completely inaccessible');
-          });
-      });
   }, [audioUrl]);
 
   // Handle play/pause state
@@ -258,7 +174,8 @@ export const WaveformViewer = ({ audioUrl, isPlaying, onReady, onProgress }: Wav
                       setError(null);
                       setIsLoading(true);
                       if (wavesurferRef.current && audioUrl) {
-                        wavesurferRef.current.load(audioUrl);
+                        // A failed retry is reported by the 'error' listener.
+                        Promise.resolve(wavesurferRef.current.load(audioUrl)).catch(() => {});
                       }
                     }}
                     className="px-2 py-1 bg-blue-600 text-white rounded text-xs hover:bg-blue-700"

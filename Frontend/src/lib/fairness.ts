@@ -1,4 +1,5 @@
 import { API_BASE } from './api';
+import { describeHttpError } from './httpError';
 
 export type FairnessMetricId =
   | 'wer' | 'cer' | 'accuracy' | 'macro_f1' | 'ece'
@@ -243,17 +244,7 @@ export interface FairnessReport {
   dataset_extensions: FairnessDatasetExtensions | null;
 }
 
-async function parseError(response: Response): Promise<Error> {
-  try {
-    const body = await response.json();
-    if (Array.isArray(body.detail)) {
-      return new Error(body.detail.map((entry: any) => entry.msg).join('; '));
-    }
-    return new Error(body.detail || `Request failed (${response.status})`);
-  } catch {
-    return new Error(`Request failed (${response.status})`);
-  }
-}
+const parseError = (response: Response): Promise<Error> => describeHttpError(response);
 
 export async function fetchGroupableColumns(dataset: string, signal?: AbortSignal): Promise<GroupableColumnsResponse> {
   const response = await fetch(
