@@ -1,9 +1,21 @@
-import json, logging, uuid
+import json, logging, re, uuid
 from typing import Any
 from redis.asyncio import from_url
 from .settings import settings
 
 logger = logging.getLogger(__name__)
+
+# A minted session id is `uuid.uuid4().hex` -- 32 lowercase hex characters.
+# The id is not merely a Redis key: `SessionMiddleware` puts it on every request
+# and it is then used verbatim as a *filesystem path segment*
+# (`uploads/sessions/<sid>/…`, `datasets/<sid>/…`, `results/<sid>/…`) and as an
+# object-storage key prefix. Because it arrives from a client-controlled cookie,
+# a value containing path separators or `..` escapes all of those namespaces at
+# once -- in the worst case `POST /upload/dataset/cleanup` resolves
+# `SESSIONS_BASE_DIR / ".."` and `rmtree`s the parent of the sessions root,
+# destroying every session's data. Anything that is not the exact shape we mint
+# is therefore not a session we issued, and is replaced rather than trusted.
+_VALID_SID = re.compile(r"\A[0-9a-f]{32}\Z")
 
 # Initialize Redis connection with connection pool
 redis = from_url(
@@ -38,7 +50,11 @@ def k_meta(sid: str) -> str:  return f"{k_sess(sid)}:meta"
 def k_result(model: str, h: str) -> str: return f"result:{model}:{h}"
 
 async def ensure_session(sid: str | None) -> str:
-    if not sid: sid = uuid.uuid4().hex
+    # Validate rather than trust: a malformed or absent cookie yields a fresh
+    # session (the same outcome a first-time visitor already gets), never a
+    # session keyed on attacker-chosen text. See `_VALID_SID`.
+    if not sid or not _VALID_SID.match(sid):
+        sid = uuid.uuid4().hex
     p = redis.pipeline()
     p.hsetnx(k_meta(sid), "created", "1")
     p.expire(k_queue(sid), settings.SESSION_TTL_SECONDS)
