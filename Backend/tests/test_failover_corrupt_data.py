@@ -31,6 +31,7 @@ from app.repositories.jobs import JobRepository
 from app.schemas.jobs import JobOperation, JobStatus, TaskEnvelope
 from app.services import fairness_service, linguistic_acoustic_service
 from app.worker import executor, tasks
+from tests._corpora import requires_corpora
 from tests._faults import ORIGIN, FaultHarness, envelope_for, seed_job, tolerant_client
 from tests._fixtures import wav_bytes
 
@@ -187,6 +188,7 @@ class TestCorruptCaches:
         assert output["cache_hit"] is False
         assert len(predictions) == 1
 
+    @requires_corpora("saa")
     async def test_corrupt_fr10_caches_are_recomputed(self, monkeypatch, tmp_path):
         """FO-75: guards BUG-57 -- the FR-10 result cache and per-item prediction cache.
 

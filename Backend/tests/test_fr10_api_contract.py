@@ -13,6 +13,7 @@ import pytest
 from app.api.routes import analyses as analyses_routes
 from app.core.settings import settings
 from app.core.storage import get_storage
+from tests._corpora import requires_corpora
 
 
 @pytest.fixture(autouse=True)
@@ -33,6 +34,7 @@ def fake_broker(monkeypatch):
 
 
 @pytest.mark.asyncio
+@requires_corpora("saa")
 async def test_groupable_columns_saa(client):
     response = await client.get("/api/v1/analyses/fairness/groupable", params={"dataset": "saa"})
     assert response.status_code == 200

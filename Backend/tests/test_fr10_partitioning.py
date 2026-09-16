@@ -22,19 +22,10 @@ from __future__ import annotations
 
 import pytest
 
-from app.services import dataset_service
 from app.services.fairness_service import FairnessInputError, build_index
+from tests._corpora import requires_corpora
 
-pytestmark = pytest.mark.critical
-
-_REQUIRED = ("saa", "l2-arctic", "common-voice")
-pytestmark = [
-    pytest.mark.critical,
-    pytest.mark.skipif(
-        not all(dataset_service.DATASET_PATHS[name].exists() for name in _REQUIRED),
-        reason="Bundled datasets live under Backend/data/, which is gitignored",
-    ),
-]
+pytestmark = [pytest.mark.critical, requires_corpora("saa", "l2-arctic", "common-voice")]
 
 
 def _groups(index) -> dict[str, int]:

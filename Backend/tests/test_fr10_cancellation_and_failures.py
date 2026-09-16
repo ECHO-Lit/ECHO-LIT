@@ -26,6 +26,7 @@ from app.services.fairness_service import (
     build_plan,
     infer_shard,
 )
+from tests._corpora import requires_corpora
 
 
 @pytest.fixture(autouse=True)
@@ -78,6 +79,7 @@ async def test_infer_shard_raises_and_marks_cancelled_when_cancel_requested():
 
 
 @pytest.mark.asyncio
+@requires_corpora("saa")
 async def test_aggregate_is_noop_when_cancel_requested_between_stages():
     session_id = "sess-cancel-2"
     params = {"dataset": "saa", "grouping_key": ["native_language"], "model": "whisper-base",
@@ -100,6 +102,7 @@ async def test_aggregate_is_noop_when_cancel_requested_between_stages():
 
 
 @pytest.mark.asyncio
+@requires_corpora("saa")
 async def test_aggregate_shrinks_group_on_partial_failure_and_excludes_below_threshold():
     session_id = "sess-fail-1"
     params = {

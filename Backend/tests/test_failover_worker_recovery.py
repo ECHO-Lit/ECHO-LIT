@@ -42,6 +42,7 @@ from app.repositories.jobs import JobRepository
 from app.schemas.jobs import JobError, JobOperation, JobStatus
 from app.services import fairness_service, linguistic_acoustic_service
 from app.worker import executor, tasks
+from tests._corpora import requires_corpora
 from tests._faults import (
     ORIGIN,
     FaultHarness,
@@ -277,6 +278,7 @@ class TestSoftTimeLimit:
         assert record.status == JobStatus.failure
         assert record.error.code == "time_limit_exceeded"
 
+    @requires_corpora("saa")
     @pytest.mark.parametrize("stage", ["infer", "explain"])
     async def test_fr10_items_do_not_swallow_the_soft_limit(self, monkeypatch, tmp_path, stage):
         """FO-26: guards BUG-53.
@@ -464,6 +466,9 @@ class TestRemainingWorkers:
         payload = get_storage().get_json(record.result_key)
         assert [item["audio_id"] for item in payload["items"]] == ["batch-a0", "batch-a1", "batch-a2"]
 
+    # Asserts PE-1's wall-clock budget, so it belongs to the untraced timing run
+    # (TEST-07, tests/plans/5-risks-dependencies-assumptions-constraints.md).
+    @pytest.mark.performance
     async def test_the_api_stays_available_without_workers_and_the_queue_drains_on_a_replacement(
         self, monkeypatch
     ):

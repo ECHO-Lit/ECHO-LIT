@@ -8,14 +8,14 @@ perturbed audio one panel read "I will be over there." and the other
 "I will be overexposed.". Both paths now make the same decoding call, and word
 timing is aligned afterwards from cross-attention without re-decoding.
 """
-from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 import torch
 
-from app.services import model_loader_service as loader
+from app.services import dataset_service, model_loader_service as loader
+from tests._corpora import requires_corpora
 
 
 # --------------------------------------------------------------------------
@@ -141,7 +141,8 @@ class TestDynamicTimeWarping:
 # The real model, when it is already in the local Hugging Face cache
 # --------------------------------------------------------------------------
 
-CLIPS = Path(__file__).resolve().parents[1] / "data" / "common_voice_valid_dev"
+CLIPS = dataset_service.DATASET_BASE_DIRS["common-voice"]
+CLIP_NAMES = ("sample-000037.mp3", "sample-000454.mp3")
 
 
 def _cached_whisper_base():
@@ -153,18 +154,20 @@ def _cached_whisper_base():
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(not CLIPS.is_dir(), reason="bundled Common Voice clips not present")
+@requires_corpora(files=tuple(CLIPS / name for name in CLIP_NAMES))
 def test_real_whisper_base_agrees_on_clean_and_noisy_speech(tmp_path):
     """Measured before the fix: the timestamp decode disagreed on 5 of 36
     clean/noisy clips, including this set's clean sample-000037
-    ("Mines in the door." vs "Minds in the door.")."""
+    ("Mines in the door." vs "Minds in the door.").
+
+    Offline, this runs only when whisper-base is already cached (OBS-60)."""
     if not _cached_whisper_base():
         pytest.skip("openai/whisper-base is not in the local Hugging Face cache")
     import librosa
     import soundfile
 
     rng = np.random.default_rng(0)
-    for name in ("sample-000037.mp3", "sample-000454.mp3"):
+    for name in CLIP_NAMES:
         audio, _ = librosa.load(CLIPS / name, sr=16000)
         noise = rng.standard_normal(audio.shape).astype(np.float32)
         for label, wave in (("clean", audio), ("snr5", audio + noise * np.sqrt(np.mean(audio**2) / 10**0.5))):

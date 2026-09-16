@@ -7,14 +7,14 @@ import pytest
 
 from app.services import dataset_service, l2_arctic_annotations as l2, saa_reference_analysis as saa
 from app.services.fairness_service import build_index
+from tests._corpora import ANNOTATIONS, requires_corpora
 
 # Backend/data/ is gitignored, so these corpora are absent on a clean checkout.
 # Without this guard the module fixtures raise and every test here ERRORs rather
 # than skipping, which reads as a broken suite instead of an absent dependency.
-pytestmark = pytest.mark.skipif(
-    not all(dataset_service.DATASET_PATHS[name].exists() for name in ("saa", "l2-arctic")),
-    reason="Bundled datasets live under Backend/data/, which is gitignored",
-)
+# The phone-error annotations are a separate file the guard must name too
+# (TEST-06): without it the grounding cases failed while the datasets were present.
+pytestmark = requires_corpora("saa", "l2-arctic", ANNOTATIONS)
 
 
 @pytest.fixture(scope="module")

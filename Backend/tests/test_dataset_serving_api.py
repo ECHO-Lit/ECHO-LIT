@@ -12,11 +12,12 @@ but no imbalance flag and no threshold -- the flagging is a Frontend behaviour.
 This module asserts the API supplies everything a threshold needs (FT-69); the
 flag itself belongs to Section 3.1.3.
 
-The bundled datasets under Backend/data/ are gitignored, so the built-in cases
-are guarded by a module-level skip rather than failing on a clean checkout.  The
-Range/415 cases deliberately use a *custom* dataset instead: resolve_file shares
-the entire serving path between the two, custom gives byte-level control of the
-file, and it avoids the 0.3s sleep on the built-in missing-file branch.
+The bundled datasets under Backend/data/ are gitignored, so each built-in case
+carries a skip guard for the corpora it reads, and a clean checkout skips it
+rather than failing (TEST-06).  The Range/415 cases deliberately use a *custom*
+dataset instead: resolve_file shares the entire serving path between the two,
+custom gives byte-level control of the file, and it avoids the 0.3s sleep on the
+built-in missing-file branch.
 """
 
 from __future__ import annotations
@@ -30,15 +31,12 @@ from app.core.settings import settings
 from app.core.storage import get_storage
 from app.main import app
 from app.services import custom_dataset_service, dataset_service
+from tests._corpora import corpora_present, requires_corpora
 from tests._fixtures import upload_files, wav_bytes
 
 pytestmark = pytest.mark.critical
 
-BUNDLED_AVAILABLE = dataset_service.DATASET_PATHS["ravdess"].exists()
-requires_bundled = pytest.mark.skipif(
-    not BUNDLED_AVAILABLE,
-    reason="Bundled datasets live under Backend/data/, which is gitignored",
-)
+BUNDLED = ["common-voice", "cv-valid-dev", "ravdess", "l2-arctic", "saa"]
 
 
 @pytest.fixture(autouse=True)
@@ -64,7 +62,7 @@ def warm_metadata_cache():
     `dataset_service._metadata_cache` is a process-global that no fixture clears;
     the first load of a bundled dataset probes ~150 audio files.
     """
-    if BUNDLED_AVAILABLE:
+    if corpora_present("ravdess"):
         dataset_service.load_metadata("ravdess", None)
 
 
@@ -89,9 +87,8 @@ async def _custom_dataset(client, name="serving", filenames=("tone.wav",)):
 
 
 class TestBuiltinMetadata:
-    @requires_bundled
     @pytest.mark.parametrize(
-        "dataset", ["common-voice", "cv-valid-dev", "ravdess", "l2-arctic", "saa"]
+        "dataset", [pytest.param(name, marks=requires_corpora(name)) for name in BUNDLED]
     )
     async def test_every_bundled_dataset_loads_with_normalised_keys(self, client, dataset):
         """FT-64: FR-3 retrieval -- each registered dataset is readable."""
@@ -105,7 +102,7 @@ class TestBuiltinMetadata:
         assert all(key == key.lower() for key in rows[0])
         assert "filename" in rows[0]
 
-    @requires_bundled
+    @requires_corpora("ravdess")
     async def test_dataset_names_are_case_insensitive(self, client):
         """FT-65a: the registry lookup lowercases, so display casing still works."""
         response = await client.get("/RAVDESS/metadata")
@@ -127,7 +124,7 @@ class TestBuiltinMetadata:
 
 
 class TestEda:
-    @requires_bundled
+    @requires_corpora("ravdess")
     async def test_class_counts_sum_to_the_item_count(self, client):
         """FT-66: FR-3 acceptance criterion, first half."""
         response = await client.get("/ravdess/eda")
@@ -142,7 +139,7 @@ class TestEda:
         assert summary["num_classes"] == len(balance)
         assert summary["total_files"] > 0
 
-    @requires_bundled
+    @requires_corpora("ravdess")
     async def test_the_duration_histogram_is_self_consistent(self, client):
         """FT-67: FR-3 processing -- the histogram describes the rows it came from."""
         body = (await client.get("/ravdess/eda")).json()
@@ -155,7 +152,7 @@ class TestEda:
         assert all(isinstance(count, int) for count in histogram["histogram"])
         assert all(edge == edge for edge in histogram["bins"])  # no NaN
 
-    @requires_bundled
+    @requires_corpora("common-voice")
     async def test_an_unlabelled_dataset_reports_zero_classes_without_failing(self, client):
         """FT-68: a degenerate but legitimate input -- no labels is not an error."""
         response = await client.get("/common-voice/eda")
@@ -166,7 +163,7 @@ class TestEda:
         assert body["class_balance"] == {}
         assert body["summary"]["total_files"] > 0
 
-    @requires_bundled
+    @requires_corpora("ravdess")
     async def test_the_imbalance_ratio_is_derivable_from_the_response(self, client):
         """FT-69: FR-3's second half is satisfied across two tiers, not by the API.
 
