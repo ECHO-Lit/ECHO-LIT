@@ -73,16 +73,21 @@ def load_metadata(dataset: str, session_id: Optional[str] = None) -> List[Dict[s
             raise ValueError("session_id is required for custom datasets")
         
         session_id_from_name, dataset_name = parse_custom_dataset_name(dataset)
-        logger.info(f"Custom dataset metadata: session_id_from_name='{session_id_from_name}', current_session_id='{session_id}'")
+        # Datasets provisioned under the "__global__" owner are shared corpora,
+        # not another session's data, so they are served to any session.
         if session_id_from_name == "__global__":
             manager = get_custom_dataset_manager(session_id or "__global__")
             return manager.get_global_dataset_files_as_csv_format(dataset_name)
         if session_id_from_name != session_id:
-            logger.warning(f"Session ID mismatch in metadata: dataset has '{session_id_from_name}' but request has '{session_id}'")
-            # Use the dataset's session ID instead
-            manager = get_custom_dataset_manager(session_id_from_name)
-            return manager.get_dataset_files_as_csv_format(dataset_name)
-        
+            # The qualified name is not a secret -- it is returned to the client,
+            # appears in URLs and is logged -- so holding one must not be enough
+            # to read the data behind it. Refuse rather than serving the owner's
+            # rows to whoever asked (FR-1 and FR-2 session isolation).
+            logger.warning(
+                "Refusing cross-session custom dataset read: dataset belongs to another session"
+            )
+            raise ValueError(f"Unknown dataset: {dataset}")
+
         manager = get_custom_dataset_manager(session_id)
         return manager.get_dataset_files_as_csv_format(dataset_name)
     
@@ -155,20 +160,18 @@ def resolve_file(dataset: str, file_path: str, session_id: Optional[str] = None)
             raise ValueError("session_id is required for custom datasets")
         
         session_id_from_name, dataset_name = parse_custom_dataset_name(dataset)
-        logger.info(f"Custom dataset: session_id_from_name='{session_id_from_name}', current_session_id='{session_id}'")
+        # Shared corpora, as in load_metadata.
         if session_id_from_name == "__global__":
             manager = get_custom_dataset_manager(session_id or "__global__")
             return manager.resolve_global_file(dataset_name, file_path)
         if session_id_from_name != session_id:
-            logger.warning(f"Session ID mismatch: dataset has '{session_id_from_name}' but request has '{session_id}'")
-            # For debugging, let's check if the file exists with the dataset's session ID
-            manager = get_custom_dataset_manager(session_id_from_name)
-            try:
-                return manager.resolve_file_path(dataset_name, file_path)
-            except Exception as e:
-                logger.error(f"Could not resolve file with dataset session ID: {e}")
-                raise ValueError(f"Session ID mismatch for custom dataset. Dataset session: {session_id_from_name}, Request session: {session_id}")
-        
+            # Same rule as load_metadata: a name from another session resolves to
+            # nothing, not to that session's audio.
+            logger.warning(
+                "Refusing cross-session custom dataset file read: dataset belongs to another session"
+            )
+            raise ValueError(f"Unknown dataset: {dataset}")
+
         manager = get_custom_dataset_manager(session_id)
         return manager.resolve_file_path(dataset_name, file_path)
     

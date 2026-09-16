@@ -87,17 +87,17 @@ if not rows:
 
   echo
   echo "=== workers ==================================================="
-  # NOTE: the heartbeat key should end in a worker hostname, but
-  # publish_worker_heartbeat() in app/worker/tasks.py receives a Heart object
-  # with no .hostname and falls back to str(sender) -- so the key carries an
-  # object repr with a memory address. Count them rather than print them, and
-  # read the real identities from Celery.
+  # Heartbeats are one sorted set scored by time (app/core/heartbeat.py), so
+  # "live" is a range count, not a KEYS scan of the job database.
   local beats
-  beats=$(docker exec "$REDIS" redis-cli -n $JOB_DB keys 'worker-heartbeat:*' 2>/dev/null | grep -c .)
+  beats=$(docker exec "$REDIS" redis-cli -n $JOB_DB zcount worker-heartbeats "$(( $(date +%s) - 90 ))" +inf 2>/dev/null)
   echo "  heartbeats: ${beats:-0}"
   docker exec "$REDIS" redis-cli -n $BROKER_DB client list 2>/dev/null >/dev/null
   printf '  consumers:  '
-  docker exec echo-worker-model-local \
+  # Workers carry no fixed container name (they can be scaled, and the GPU
+  # profiles run no worker-model-local at all), so the broadcast is sent from
+  # the scheduler: a singleton in every topology, with celery installed.
+  docker exec echo-scheduler \
     celery -A app.core.celery_app:celery_app inspect ping --timeout 5 2>/dev/null \
     | grep -o 'celery@[a-z0-9]*' | paste -sd' ' - || echo '(unreachable)'
 }

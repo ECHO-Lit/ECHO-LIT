@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
-import { materializeAudio, runJob } from '@/lib/jobs';
+import { materializeAll, runJob } from '@/lib/jobs';
 import { readEdaCache, writeEdaCache } from '@/lib/edaCache';
 
 export interface EmbeddingPoint {
@@ -59,7 +59,9 @@ interface EmbeddingContextType {
     files: string[],
     reductionMethod?: string,
     nComponents?: number,
-    minClusterSize?: number
+    minClusterSize?: number,
+    /** Bypass the sessionStorage cache (the Refresh button). */
+    force?: boolean
   ) => Promise<void>;
   clearEmbeddings: () => void;
 }
@@ -85,7 +87,8 @@ export const EmbeddingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     files: string[],
     reductionMethod: string = 'pca',
     nComponents: number = 3,
-    minClusterSize: number = 5
+    minClusterSize: number = 5,
+    force: boolean = false
   ) => {
     if (!files || files.length === 0) {
       setError('No files provided');
@@ -94,7 +97,7 @@ export const EmbeddingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
     // Everything that changes the result must be part of the cache identity.
     const cacheKind = `embedding:${model}:${reductionMethod}:${nComponents}:${minClusterSize}`;
-    const cached = readEdaCache<EmbeddingData>(cacheKind, dataset, files);
+    const cached = force ? null : readEdaCache<EmbeddingData>(cacheKind, dataset, files);
     if (cached) {
       setEmbeddingData(cached);
       setError(null);
@@ -105,7 +108,7 @@ export const EmbeddingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setError(null);
 
     try {
-      const assets = await Promise.all(files.map((filename) => materializeAudio(dataset, filename)));
+      const assets = await materializeAll(dataset, files);
       const result: any = await runJob({
         operation: 'embedding',
         model,

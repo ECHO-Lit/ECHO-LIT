@@ -3,7 +3,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { firstJobResult, resolveAudioId } from '@/lib/jobs';
 import { useJob } from '@/hooks/use-job';
 
@@ -43,7 +43,12 @@ export const AttentionVisualization = ({ selectedFile, model, dataset }: Attenti
   const attentionJob = useJob<any>();
   const isAttentionModel = Boolean(model?.includes('whisper') || model?.startsWith('custom-'));
 
+  // Only the latest request may touch state; see SaliencyVisualization.
+  const requestSeq = useRef(0);
+
   const fetchAttentionData = async () => {
+    const seq = ++requestSeq.current;
+    const isLatest = () => seq === requestSeq.current;
     console.log("AttentionVisualization - fetchAttentionData called:", {
       selectedFile,
       model,
@@ -53,6 +58,8 @@ export const AttentionVisualization = ({ selectedFile, model, dataset }: Attenti
 
     if (!selectedFile || !model || !isAttentionModel) {
       console.log("AttentionVisualization - Skipping fetch due to conditions");
+      attentionJob.abandon();
+      setIsLoading(false);
       return;
     }
 
@@ -62,19 +69,21 @@ export const AttentionVisualization = ({ selectedFile, model, dataset }: Attenti
 
     try {
       const audioId = await resolveAudioId(selectedFile, dataset);
+      if (!isLatest()) return;
       const data = firstJobResult(await attentionJob.start({
         operation: 'attention',
         model,
         audio_ids: [audioId],
         parameters: { layer_idx: selectedLayer, head_idx: selectedHead },
       }));
-      setAttentionData(data);
+      if (isLatest()) setAttentionData(data);
 
     } catch (err: any) {
+      if (!isLatest() || err?.name === 'AbortError') return;
       console.error("AttentionVisualization - Error:", err);
       setError(err.message);
     } finally {
-      setIsLoading(false);
+      if (isLatest()) setIsLoading(false);
     }
   };
 

@@ -19,6 +19,7 @@ from app.services.fairness_service import (
     prepare_analysis,
 )
 from app.schemas.jobs import TaskEnvelope
+from tests._corpora import requires_corpora
 
 
 @pytest.fixture(autouse=True)
@@ -51,6 +52,7 @@ def _envelope(job_id: str, session_id: str, params: dict) -> dict:
 
 
 @pytest.mark.asyncio
+@requires_corpora("saa")
 async def test_prepare_analysis_partitions_saa_and_advances_progress():
     session_id = "sess-a"
     params = {
@@ -76,6 +78,7 @@ async def test_prepare_analysis_partitions_saa_and_advances_progress():
 
 
 @pytest.mark.asyncio
+@requires_corpora("common-voice")
 async def test_prepare_analysis_insufficient_groups_fails_job_not_raises_uncaught():
     session_id = "sess-b"
     # Common Voice grouped by accent with a very high min_group_size -> every

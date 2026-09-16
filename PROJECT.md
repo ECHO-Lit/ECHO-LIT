@@ -247,7 +247,7 @@ Backend/
 
 - **Result cache** keyed by `md5(file_path + size + mtime)` × model × method. Cache invalidates automatically when the audio file changes.
 - **Session state** is cookie-driven (`sid`), and every session has a Redis namespace.
-- Redis config in [docker-compose.yml](Backend/docker-compose.yml): 256 MB max, `allkeys-lru` eviction, `redis-cli ping` healthcheck.
+- Redis config in [docker-compose.yml](docker-compose.yml): append-only persistence, `noeviction` with a `maxmemory` bound (`REDIS_MAXMEMORY`, default 1 GB) so a full Redis refuses writes rather than dropping data, `redis-cli ping` healthcheck.
 - **Long-term artifacts** (audio, custom datasets, metadata CSVs) live on disk. No object store.
 
 Cache-key patterns to grep for when debugging:
@@ -310,20 +310,24 @@ Test files under [Backend/tests/](Backend/tests/):
 
 - `test_data_integrity.py` — audio processing correctness.
 - `test_function_testing.py` — unit tests over services.
-- `test_performance_load.py` — batch inference load.
+- `test_perf_*.py` / `test_load_*.py` — performance profiling and load (Test Plan 3.1.4 / 3.1.5).
 - `test_queue.py` — queue helpers.
 - `test_results_cache.py` — cache hit / miss / TTL.
-- `test_security.py` — auth / CORS / cookies.
+- `test_access_control.py` — cross-session isolation, session identity, deployment surface (Test Plan 3.1.6).
+- `test_security.py` — older security probes; most pass whatever the app does (see `Backend/tests/plans/3.1.6-security-testing.md`).
 - `test_session_cookie.py` — session middleware.
+
+The full module-to-section map is `TEST_CATEGORIES` in [run_tests.py](Backend/tests/run_tests.py); per-section plans are in [Backend/tests/plans/](Backend/tests/plans/).
 
 ### 10.2 Frontend
 
-Minimal — `tests/ui-components.test.tsx` under [Frontend/](Frontend/). No configured test runner in `package.json` scripts; expand if adding coverage.
+Vitest + React Testing Library + jsdom; suites under `Frontend/src/tests/`. `npm test` runs them, `npm run test:coverage` adds v8 coverage and a junit report.
 
 Run backend tests:
 ```
 cd Backend
 pytest
+python tests/run_tests.py report   # coverage + tests/test_reports/evaluation-summary.md
 ```
 
 ---
@@ -332,7 +336,7 @@ pytest
 
 - **Eager attention required.** Whisper must be instantiated with `attn_implementation="eager"` — the SDPA / FlashAttention paths do not return attentions. See top of [model_loader_service.py](Backend/app/services/model_loader_service.py).
 - **Saliency length caps** exist for a reason (OOM on longer audio). Do not raise `MAX_SALIENCY_SECONDS_SHAP` above 6 without profiling.
-- **Session isolation.** Custom datasets are scoped by `sid` cookie. Cross-session leakage would be a security bug — see [test_security.py](Backend/tests/test_security.py).
+- **Session isolation.** Custom datasets are scoped by `sid` cookie. Cross-session leakage would be a security bug — see [test_access_control.py](Backend/tests/test_access_control.py). The `sid` is also a filesystem path segment, so `ensure_session` must keep replacing any sid that is not 32 lowercase hex (BUG-79).
 - **AbortController pattern.** [MainLayout.tsx](Frontend/src/components/layout/MainLayout.tsx) holds per-request abort refs to cancel stale inference calls when the user changes model or dataset mid-flight. Reuse this pattern when adding new long-running endpoints.
 - **Cache schema version.** Saliency uses `saliency_v2_*` — bump the version when the response shape changes to invalidate cleanly instead of writing migration code.
 - **Range-request audio streaming.** [datasets.py](Backend/app/api/routes/datasets.py) supports `Range` headers so `<audio>` seek works without downloading whole files. Preserve this when adding new file-serving endpoints.

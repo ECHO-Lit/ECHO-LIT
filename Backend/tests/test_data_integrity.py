@@ -133,43 +133,48 @@ class TestAudioFileIntegrity:
 
 # Test Session Management Integrity (Important Priority)
 class TestSessionIntegrity:
-    """Test session data storage, retrieval, and consistency."""
-    
+    """Test session data storage, retrieval, and consistency.
+
+    These go through the real session API rather than ad-hoc key names: a test
+    that writes and reads `session_1` exercises Redis, not ECHO.  Deeper
+    coverage of the session key family, its TTLs and cross-session ownership
+    lives in test_data_integrity_store.py.
+    """
+
     @pytest.mark.asyncio
-    async def test_session_storage_and_retrieval(self, fake_redis, test_session_data):
-        """Test session data storage and retrieval integrity."""
-        from app.core import redis as redis_module
-        redis_client = redis_module.redis
-        
-        session_id = test_session_data['session_id']
-        session_key = f"session_{session_id}"
-        
-        # Store session
-        await redis_client.set(session_key, json.dumps(test_session_data))
-        
-        # Retrieve and verify
-        stored_data = json.loads(await redis_client.get(session_key))
-        assert stored_data == test_session_data
-        assert stored_data['user_id'] == 'test_user'
-    
+    async def test_session_storage_and_retrieval(self, fake_redis):
+        """Session queue state round-trips through the real access methods."""
+        from app.core.redis import ensure_session, get_queue, put_queue
+
+        sid = await ensure_session(None)
+        state = {
+            "items": [{"id": "clip-1"}],
+            "processing": "clip-1",
+            "completed": [],
+        }
+
+        await put_queue(sid, state)
+
+        assert await get_queue(sid) == state
+
     @pytest.mark.asyncio
     async def test_session_isolation(self, fake_redis):
-        """Test that different sessions don't interfere with each other."""
-        from app.core import redis as redis_module
-        redis_client = redis_module.redis
-        
-        # Create multiple sessions
-        sessions = {
-            'session_1': {'user_id': 'user1', 'data': 'session1_data'},
-            'session_2': {'user_id': 'user2', 'data': 'session2_data'},
-            'session_3': {'user_id': 'user3', 'data': 'session3_data'}
+        """Sessions are namespaced, so one session's queue cannot read another's."""
+        from app.core.redis import ensure_session, get_queue, put_queue
+
+        sids = [await ensure_session(None) for _ in range(3)]
+        for index, sid in enumerate(sids):
+            await put_queue(
+                sid, {"items": [{"id": f"clip-{index}"}], "processing": None, "completed": []}
+            )
+
+        for index, sid in enumerate(sids):
+            state = await get_queue(sid)
+            assert state["items"] == [{"id": f"clip-{index}"}]
+
+        # A session that never wrote sees the empty default, not a neighbour's data.
+        assert await get_queue(await ensure_session(None)) == {
+            "items": [],
+            "processing": None,
+            "completed": [],
         }
-        
-        # Store all sessions
-        for session_id, session_data in sessions.items():
-            await redis_client.set(f"session_{session_id}", json.dumps(session_data))
-        
-        # Verify isolation - each session has correct data
-        for session_id, expected_data in sessions.items():
-            stored_data = json.loads(await redis_client.get(f"session_{session_id}"))
-            assert stored_data == expected_data

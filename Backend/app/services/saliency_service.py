@@ -1,5 +1,4 @@
 import logging
-import os
 import torch
 import numpy as np
 import librosa
@@ -9,6 +8,7 @@ from captum.attr import IntegratedGradients, GradientShap, Lime
 from captum.attr._utils.lrp_rules import EpsilonRule
 from captum.attr._core.lrp import LRP
 from app.core.device import accelerator_memory_allocated_mb, clear_accelerator_cache
+from app.core.settings import settings
 from app.services.model_loader_service import (
     transcribe_whisper_base,
     transcribe_whisper_large,
@@ -19,6 +19,9 @@ from app.services.model_loader_service import (
 )
 
 logger = logging.getLogger(__name__)
+# The analysis window (MAX_SALIENCY_SECONDS, MAX_SALIENCY_SECONDS_SHAP for the
+# stricter SHAP path) and SALIENCY_SHAP_SAMPLES are validated settings, read
+# at each call.
 
 # Which estimator actually produced a map.  Both generators fall back to an
 # encoder energy map when attribution OOMs or comes back flat; without this in
@@ -30,9 +33,6 @@ ATTRIBUTION_SOURCES = {
     "shap": "gradient_shap",
 }
 ENERGY_FALLBACK = "energy_fallback"
-MAX_SALIENCY_SECONDS = int(os.getenv("MAX_SALIENCY_SECONDS", "12"))  # cap analysis window
-MAX_SALIENCY_SECONDS_SHAP = int(os.getenv("MAX_SALIENCY_SECONDS_SHAP", "6"))  # stricter for SHAP
-SALIENCY_SHAP_SAMPLES = int(os.getenv("SALIENCY_SHAP_SAMPLES", "8"))
 
 def detect_model_type(model: str) -> str:
     if "whisper" in model.lower():
@@ -69,7 +69,7 @@ def generate_whisper_saliency(audio_file_path: str, model_size: str = "base", me
             logger.warning(f"generate_whisper_saliency: non-finite samples in {audio_file_path}; zeroing them")
             audio = np.nan_to_num(audio, nan=0.0, posinf=0.0, neginf=0.0)
         if not full_audio:
-            max_seconds = MAX_SALIENCY_SECONDS_SHAP if method == "shap" else MAX_SALIENCY_SECONDS
+            max_seconds = settings.MAX_SALIENCY_SECONDS_SHAP if method == "shap" else settings.MAX_SALIENCY_SECONDS
             max_len = int(max_seconds * 16000)
             if len(audio) > max_len:
                 audio = audio[:max_len]
@@ -162,7 +162,7 @@ def generate_whisper_saliency(audio_file_path: str, model_size: str = "base", me
             attributions = gs.attribute(
                 input_features,
                 baselines=baseline,
-                n_samples=max(2, min(16, SALIENCY_SHAP_SAMPLES)),
+                n_samples=max(2, min(16, settings.SALIENCY_SHAP_SAMPLES)),
                 stdevs=0.09,
             )
         except RuntimeError as e:
@@ -172,7 +172,7 @@ def generate_whisper_saliency(audio_file_path: str, model_size: str = "base", me
                 attributions = gs.attribute(
                     input_features,
                     baselines=baseline,
-                    n_samples=max(2, min(8, SALIENCY_SHAP_SAMPLES // 2 if SALIENCY_SHAP_SAMPLES > 2 else 2)),
+                    n_samples=max(2, min(8, settings.SALIENCY_SHAP_SAMPLES // 2 if settings.SALIENCY_SHAP_SAMPLES > 2 else 2)),
                     stdevs=0.07,
                 )
             else:
@@ -376,7 +376,7 @@ def generate_wav2vec2_saliency(audio_file_path: str, method: str = "gradcam", ex
         )
     # Crop to safe max duration to bound memory (skipped when full_audio requested)
     if not full_audio:
-        max_seconds = MAX_SALIENCY_SECONDS_SHAP if method == "shap" else MAX_SALIENCY_SECONDS
+        max_seconds = settings.MAX_SALIENCY_SECONDS_SHAP if method == "shap" else settings.MAX_SALIENCY_SECONDS
         max_len = int(max_seconds * rate)
         if len(audio) > max_len:
             audio = audio[:max_len]
@@ -449,7 +449,7 @@ def generate_wav2vec2_saliency(audio_file_path: str, method: str = "gradcam", ex
                 input_values,
                 baselines=baseline,
                 additional_forward_args=(attention_mask, target_idx),
-                n_samples=max(2, min(16, SALIENCY_SHAP_SAMPLES)),
+                n_samples=max(2, min(16, settings.SALIENCY_SHAP_SAMPLES)),
                 stdevs=0.09,
             )
         except RuntimeError as e:
@@ -460,7 +460,7 @@ def generate_wav2vec2_saliency(audio_file_path: str, method: str = "gradcam", ex
                     input_values,
                     baselines=baseline,
                     additional_forward_args=(attention_mask, target_idx),
-                    n_samples=max(2, min(8, SALIENCY_SHAP_SAMPLES // 2 if SALIENCY_SHAP_SAMPLES > 2 else 2)),
+                    n_samples=max(2, min(8, settings.SALIENCY_SHAP_SAMPLES // 2 if settings.SALIENCY_SHAP_SAMPLES > 2 else 2)),
                     stdevs=0.07,
                 )
             else:

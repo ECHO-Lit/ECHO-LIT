@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { HelpCircle, RefreshCw, BarChart3, Download, AlertTriangle } from "lucide-react";
 import { API_BASE } from "@/lib/api";
-import { materializeAudio, runJob } from "@/lib/jobs";
+import { materializeAll, runJob } from "@/lib/jobs";
 import { EDA_CHART_EXPLANATIONS, getFeatureExplanation } from "@/lib/audioFeatures";
 import { correlationMatrix, topCorrelatedPairs, quartiles, zScores, bucketize, recomputeHistogram, type Quartiles } from "@/lib/edaStats";
 import { exportAcousticFeaturesCsv, exportEdaJson } from "@/lib/edaExport";
@@ -175,7 +175,7 @@ export const DatasetEdaView = ({
     setAcousticsError(null);
     setAcousticsProgress({ current: 0, total: availableFiles.length });
     try {
-      const assets = await Promise.all(availableFiles.map((f) => materializeAudio(dataset, f)));
+      const assets = await materializeAll(dataset, availableFiles);
       const analysis = await runJob<AcousticEda>(
         { operation: "audio_features", audio_ids: assets.map((a) => a.audio_id) },
         { onProgress: (status) => setAcousticsProgress({ current: status.progress?.current ?? 0, total: availableFiles.length }) },
@@ -317,8 +317,8 @@ export const DatasetEdaView = ({
               ))}
             </select>
             <Tooltip>
-              <TooltipTrigger>
-                <HelpCircle className="h-3 w-3 text-muted-foreground" />
+              <TooltipTrigger aria-label="More information">
+                <HelpCircle className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
               </TooltipTrigger>
               <TooltipContent className="max-w-xs text-xs">
                 {EDA_CHART_EXPLANATIONS.dataset_comparison}
@@ -419,12 +419,14 @@ export const DatasetEdaView = ({
 
       {/* Acoustic EDA */}
       <div className="border-t border-border pt-3 space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
+        {/* Wraps instead of pushing "Compute acoustics" past the panel edge
+            when the CSV/JSON buttons appear in a narrow panel. */}
+        <div className="flex flex-wrap items-center justify-between gap-1.5">
+          <div className="flex items-center gap-1.5 whitespace-nowrap">
             <BarChart3 className="h-3.5 w-3.5 text-primary" />
             <span className="text-xs font-medium">Acoustic features</span>
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             {acousticEda && (
               <>
                 <Tooltip>
@@ -500,7 +502,10 @@ export const DatasetEdaView = ({
               <Badge variant="outline" className="text-[10px]">
                 {acousticEda.summary.total_files} files &middot; {acousticEda.summary.total_features_extracted} features
               </Badge>
-              {acousticEda.cache_info && (
+              {/* A restored result's counts describe the run that produced it,
+                  not this view: "0/100 cached" beside "restored" read as a
+                  contradiction. */}
+              {acousticEda.cache_info && !acousticsFromCache && (
                 <Badge variant="outline" className="text-[10px] bg-primary/5">
                   {acousticEda.cache_info.cached_count}/{acousticEda.cache_info.cached_count + acousticEda.cache_info.missing_count} cached
                 </Badge>
@@ -589,8 +594,8 @@ export const DatasetEdaView = ({
                   <AlertTriangle className="h-3 w-3 text-amber-500" />
                   <span className="text-xs font-medium">Statistical outliers</span>
                   <Tooltip>
-                    <TooltipTrigger>
-                      <HelpCircle className="h-3 w-3 text-muted-foreground" />
+                    <TooltipTrigger aria-label="More information">
+                      <HelpCircle className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
                     </TooltipTrigger>
                     <TooltipContent className="max-w-xs text-xs">
                       Files where a feature value sits more than {OUTLIER_Z_THRESHOLD} standard deviations from the dataset mean. This flags statistical anomalies, not confirmed defects — click a row to inspect the file.

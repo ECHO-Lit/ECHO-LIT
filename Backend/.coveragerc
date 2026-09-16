@@ -1,0 +1,22 @@
+[run]
+source = app
+branch = True
+parallel = True
+# Some cases run app code in `sys.executable` children (test_config_roles,
+# test_config_hardware, test_fr10_api_contract); without this their lines are
+# invisible to the report.
+patch = subprocess
+
+[report]
+# Ratchet floor: floor(measured baseline) - 1. Raise it when a section lands and
+# the baseline rises; never lower it without a recorded reason.
+fail_under = 50
+# fail_under compares the total rounded to this precision; at the default 0, a
+# total half a point under the floor rounds up and passes (guarded by TD-14).
+precision = 2
+show_missing = True
+skip_covered = True
+exclude_also =
+    if TYPE_CHECKING:
+    if __name__ == .__main__.:
+    raise NotImplementedError

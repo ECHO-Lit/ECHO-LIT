@@ -1,28 +1,45 @@
 name: echo
 
-x-runtime-environment: &runtime-environment
-  ENVIRONMENT: development
+# Every backend service reads Backend/.env (copied from Backend/.env.example):
+# TTLs, upload limits, cookie flags, CORS origins, device and worker tunables.
+# `required: false` keeps a fresh clone bootable before that file exists; the
+# code defaults then apply.  Needs Docker Compose 2.24 or later.
+x-backend-env-file: &backend-env-file
+  - path: ./Backend/.env
+    required: false
+
+# What a container needs because of where it runs -- the compose network and
+# its mounts -- not how it is tuned.  `environment:` overrides `env_file`, so
+# a Backend/.env written for native runs (Redis on localhost, storage relative
+# to Backend/) cannot point a container at the wrong place.  Only these are
+# pinned here; everything tunable lives in Backend/.env.
+x-topology-environment: &topology-environment
   REDIS_URL: redis://redis:6379/0
   JOB_REDIS_URL: redis://redis:6379/1
   CELERY_BROKER_URL: redis://redis:6379/2
   CELERY_RESULT_BACKEND: redis://redis:6379/3
   STORAGE_BACKEND: local
   STORAGE_LOCAL_ROOT: /app/shared-storage
-  SESSION_TTL_SECONDS: "604800"
-  JOB_TTL_SECONDS: "604800"
-  MAX_UPLOAD_BYTES: "104857600"
-  MAX_AUDIO_DURATION_SECONDS: "600"
-  TASK_SOFT_TIME_LIMIT_SECONDS: "3300"
-  TASK_TIME_LIMIT_SECONDS: "3600"
-  ENABLE_LEGACY_SYNC_INFERENCE: "false"
   HF_HOME: /home/appuser/.cache/huggingface
   PYTHONUNBUFFERED: "1"
+
+# Liveness for a Celery worker: its own node must answer a broker round trip.
+# `$$` reaches the container as `$`; a single `$` would be interpolated by
+# Compose, on the host.
+x-worker-healthcheck: &worker-healthcheck
+  test: ["CMD-SHELL", "celery -A app.core.celery_app:celery_app inspect ping -d celery@$$HOSTNAME --timeout 10 || exit 1"]
+  interval: 30s
+  timeout: 20s
+  retries: 3
+  start_period: 60s
 
 x-worker-common: &worker-common
   working_dir: /app
   shm_size: '2gb'
+  env_file: *backend-env-file
   environment:
-    <<: *runtime-environment
+    <<: *topology-environment
+    # Follows each service's hardware; see the gpu/amd profiles below.
     ML_DEVICE: auto
     # Celery's prefork pool forks children that inherit native thread-pool state.
     # OpenMP/BLAS pools do not survive fork intact, which shows up as a bare
@@ -55,6 +72,16 @@ x-worker-common: &worker-common
     # (verified directly: beat_track and yin both ran clean under this pair).
     NUMBA_CPU_NAME: "generic"
     NUMBA_CPU_FEATURES: ""
+    # Same family, different JIT: torch's native-DSL ops (torch/_native) are
+    # Triton kernels. Compiling bmm_outer_product segfaults inside libtriton
+    # in a pool child -- deterministically, three children lost in a row on
+    # the identical frame. Only Whisper's language detection reaches that op,
+    # so faithfulness runs hit it and transcription never does. The same call
+    # compiles and runs clean in this image outside the pool, and wiping the
+    # Triton cache changes nothing, so neither the cache nor the model is at
+    # fault. This routes the op to its ATen kernel: one fused kernel lost,
+    # crash class gone.
+    TORCH_DISABLE_NATIVE_JIT: "1"
     TOKENIZERS_PARALLELISM: "false"
     # Turns a future native crash into a Python traceback naming the offending
     # module, instead of just "signal 11 (SIGSEGV)".
@@ -74,11 +101,19 @@ x-worker-common: &worker-common
       condition: service_healthy
   restart: unless-stopped
 
+# Workers carry no container_name, so any of them can be scaled for more
+# throughput or a spare (`docker compose up --scale worker-cpu=2`).  The
+# scheduler keeps its name: Celery beat must run exactly once.
+
 services:
   redis:
     image: redis:7-alpine
     container_name: echo-redis
-    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    # Durable and non-evicting (RE-2, DC-2): append-only persistence, and a
+    # memory bound so that when it is reached Redis refuses writes -- which the
+    # API reports as a 503 -- instead of growing until the host kills it.
+    # Set REDIS_MAXMEMORY in the shell or a root .env to size it.
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "${REDIS_MAXMEMORY:-1gb}", "--maxmemory-policy", "noeviction"]
     ports:
       - "6379:6379"
     volumes:
@@ -99,11 +134,12 @@ services:
         VARIANT: cpu
     container_name: echo-api
     working_dir: /app
+    env_file: *backend-env-file
     environment:
-      <<: *runtime-environment
-      ALLOWED_ORIGINS: http://localhost:8080,http://127.0.0.1:8080
-      COOKIE_SECURE: "false"
-      COOKIE_SAMESITE: lax
+      <<: *topology-environment
+      # The legacy synchronous routes import torch, which this image does not
+      # install (DC-2): enabling them here would stop the API starting.
+      ENABLE_LEGACY_SYNC_INFERENCE: "false"
     volumes:
       - ./Backend/app:/app/app
       - ./Backend/data:/app/data:ro
@@ -125,7 +161,7 @@ services:
 
   worker-cpu:
     <<: *worker-common
-    container_name: echo-worker-cpu
+    healthcheck: *worker-healthcheck
     build:
       context: ./Backend
       dockerfile: Dockerfile
@@ -136,7 +172,7 @@ services:
 
   worker-model-local:
     <<: *worker-common
-    container_name: echo-worker-model-local
+    healthcheck: *worker-healthcheck
     build:
       context: ./Backend
       dockerfile: Dockerfile
@@ -158,7 +194,7 @@ services:
 
   worker-gpu:
     <<: *worker-common
-    container_name: echo-worker-gpu
+    healthcheck: *worker-healthcheck
     build:
       context: ./Backend
       dockerfile: Dockerfile
@@ -177,7 +213,7 @@ services:
 
   worker-amd:
     <<: *worker-common
-    container_name: echo-worker-amd
+    healthcheck: *worker-healthcheck
     build:
       context: ./Backend
       dockerfile: Dockerfile
@@ -199,8 +235,10 @@ services:
       dockerfile: Dockerfile
       target: dev
     container_name: echo-frontend
+    # No VITE_API_BASE_URL: the client derives the API from the page's own
+    # host on port 8000, so http://localhost:8080 and http://127.0.0.1:8080
+    # each reach the API as the same site and the session cookie is sent.
     environment:
-      VITE_API_BASE_URL: http://localhost:8000
       CHOKIDAR_USEPOLLING: "true"
     volumes:
       - ./Frontend:/app

@@ -14,13 +14,14 @@ import uuid
 from app.core import redis as redis_module
 from app.core.model_catalog import MODEL_REVISIONS
 from app.core.settings import settings
-from app.core.storage import ObjectStorage, get_storage
+from app.core.storage import ObjectStorage, get_storage, is_item_entry, read_cache_entry
 from app.core.storage import StorageError
 from redis.exceptions import RedisError
 from app.repositories.audio import AudioRepository
 from app.repositories.jobs import JobRepository
 from app.schemas.jobs import AudioAsset, JobError, JobProgress, JobStatus, TaskEnvelope
 from app.worker.cache_policy import item_cache_identity
+from app.worker.recovery import describe_failure
 
 
 logger = logging.getLogger(__name__)
@@ -211,7 +212,9 @@ async def _cached_item_result(envelope: TaskEnvelope, sha256: str, storage: Obje
     pointer = f"analysis-item-cache:{item_cache_key(envelope, sha256)}"
     cached_key = await redis_module.redis.get(pointer)
     if cached_key and storage.exists(cached_key):
-        return storage.get_json(cached_key)["result"]
+        entry = read_cache_entry(storage, cached_key, valid=is_item_entry)
+        if entry is not None:
+            return entry["result"]
     return None
 
 
@@ -325,6 +328,25 @@ def _aggregate_batch(result: dict[str, Any], filenames: list[str]) -> None:
             "cached_count": cached_count,
             "missing_count": len(items) - cached_count,
             "cache_hit_rate": cached_count / len(items) if items else 0,
+        }
+
+
+def _mark_all_cached(payload: dict[str, Any]) -> None:
+    """Restate a replayed whole-job cache entry's counts for this job.
+
+    The stored entry carries the counts of the run that produced it -- usually
+    0/N, the cold first run -- so a job served entirely from it would report
+    that none of its files were cached.
+    """
+    items = payload.get("items") or []
+    for item in items:
+        if isinstance(item, dict):
+            item["cache_hit"] = True
+    if "cache_info" in payload:
+        payload["cache_info"] = {
+            "cached_count": len(items),
+            "missing_count": 0,
+            "cache_hit_rate": 1.0 if items else 0,
         }
 
 
@@ -579,11 +601,15 @@ async def execute(envelope_data: dict[str, Any], celery_task_id: str) -> None:
             await redis_module.job_redis.hincrby("metrics:jobs", "success", 1)
             return
         cached_key = await redis_module.redis.get(cache_pointer_key) if cacheable else None
-        if cached_key and storage.exists(cached_key):
+        cached_payload = (
+            read_cache_entry(storage, cached_key, valid=lambda value: isinstance(value, dict))
+            if cached_key and storage.exists(cached_key) else None
+        )
+        if cached_payload is not None:
             job_result_key = f"results/{envelope.session_id}/{envelope.job_id}/result.json"
-            cached_payload = storage.get_json(cached_key)
             cached_payload["job_id"] = envelope.job_id
             cached_payload.setdefault("metadata", {})["cache_hit"] = True
+            _mark_all_cached(cached_payload)
             cached_payload["metadata"]["queue_latency_seconds"] = queue_latency
             cached_payload["metadata"]["execution_seconds"] = time.monotonic() - started_at
             storage.put_json(job_result_key, cached_payload)
@@ -729,7 +755,7 @@ async def execute(envelope_data: dict[str, Any], celery_task_id: str) -> None:
         await jobs.update(
             envelope.job_id,
             status=JobStatus.failure,
-            error=JobError(code="execution_failed", message=str(exc)[:500], retryable=False),
+            error=describe_failure(exc, "execution_failed"),
         )
         await redis_module.job_redis.hincrby("metrics:jobs", "failure", 1)
         logger.exception("job_failed job_id=%s", envelope.job_id)
@@ -755,6 +781,7 @@ async def execute_batch_item(
         )
         storage = get_storage()
         output = await _cached_item_result(envelope, asset.sha256, storage)
+        item_cache_hit = output is not None
         if output is None:
             with tempfile.TemporaryDirectory(prefix=f"echo-{envelope.job_id}-{asset_index}-") as temp_dir:
                 local_path = Path(temp_dir) / f"{asset.audio_id}{Path(asset.filename).suffix}"
@@ -784,6 +811,7 @@ async def execute_batch_item(
             "audio_id": asset.audio_id,
             "filename": asset.filename,
             "result": _jsonable(output),
+            "cache_hit": item_cache_hit,
             "task_id": celery_task_id,
         }
     except JobCancelled:
@@ -800,7 +828,7 @@ async def execute_batch_item(
         await jobs.update(
             envelope.job_id,
             status=JobStatus.failure,
-            error=JobError(code="batch_item_failed", message=str(exc)[:500], retryable=False),
+            error=describe_failure(exc, "batch_item_failed"),
         )
         raise
 
@@ -821,8 +849,10 @@ async def finalize_batch(
         "job_id": envelope.job_id,
         "operation": envelope.operation.value,
         "model": envelope.model,
+        # `cache_hit` is carried through for `_aggregate_batch`'s cache_info;
+        # dropping it here reported every batch as 0/N cached.
         "items": [
-            {"audio_id": item["audio_id"], "result": item["result"]}
+            {"audio_id": item["audio_id"], "result": item["result"], "cache_hit": item.get("cache_hit", False)}
             for item in ordered
         ],
         "metadata": {
@@ -872,9 +902,12 @@ async def complete_batch_from_cache(envelope_data: dict[str, Any]) -> bool:
     storage = get_storage()
     if not cached_key or not storage.exists(cached_key):
         return False
-    payload = storage.get_json(cached_key)
+    payload = read_cache_entry(storage, cached_key, valid=lambda value: isinstance(value, dict))
+    if payload is None:
+        return False
     payload["job_id"] = envelope.job_id
     payload.setdefault("metadata", {})["cache_hit"] = True
+    _mark_all_cached(payload)
     job_result_key = f"results/{envelope.session_id}/{envelope.job_id}/result.json"
     storage.put_json(job_result_key, payload)
     await JobRepository().update(

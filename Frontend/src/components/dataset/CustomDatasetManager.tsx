@@ -29,6 +29,7 @@ import {
   X
 } from "lucide-react";
 import { API_BASE } from '@/lib/api';
+import { uploadWithProgress } from '@/lib/upload';
 import { DatasetLabelsTab } from './DatasetLabelsTab';
 
 interface CustomDataset {
@@ -76,7 +77,8 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
   // Upload files form
   const [selectedDataset, setSelectedDataset] = useState<string>("");
   const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null);
-  const [uploadProgress, setUploadProgress] = useState(0);
+  // Percentage of request bytes sent; null until the browser reports a total.
+  const [uploadPercent, setUploadPercent] = useState<number | null>(null);
   const [uploadLoading, setUploadLoading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<Array<{file: string, status: 'pending' | 'uploading' | 'success' | 'error', error?: string}>>([]);
   const [selectedManifest, setSelectedManifest] = useState<File | null>(null);
@@ -161,7 +163,7 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
 
     setUploadLoading(true);
     setError(null);
-    setUploadProgress(0);
+    setUploadPercent(null);
 
     // Reference datasets are hundreds of clips; one giant multipart body is
     // fragile, so audio is sent in bounded batches with cumulative progress.
@@ -172,7 +174,8 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
       batches.push(allFiles.slice(index, index + batchSize));
     }
 
-    const statusMap = new Map(allFiles.map(file => [file.name, {
+    type FileUploadStatus = { file: string; status: 'pending' | 'uploading' | 'success' | 'error'; error?: string };
+    const statusMap = new Map<string, FileUploadStatus>(allFiles.map(file => [file.name, {
       file: file.name,
       status: 'pending' as const,
     }]));
@@ -185,29 +188,35 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
           formData.append('files', file);
         });
 
-        const response = await fetch(`${API_BASE}/upload/dataset/${selectedDataset}/files`, {
-          method: 'POST',
-          credentials: 'include',
-          body: formData,
-        });
-
-        if (!response.ok && response.status !== 207) {
-          const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.detail || `Failed to upload files: ${response.status}`);
-        }
-
-        const data = await response.json();
+        // XMLHttpRequest rather than fetch: only XHR reports upload bytes, so
+        // the bar shows real transfer progress (BUG-45, completing 3.1.3's
+        // BUG-22). Batches already sent count as whole.
+        const data = await uploadWithProgress<{
+          uploaded_files?: Array<{ original_filename: string }>;
+          errors?: string[];
+        }>(
+          `${API_BASE}/upload/dataset/${selectedDataset}/files`,
+          formData,
+          {
+            context: 'Upload failed',
+            onProgress: ({ fraction }) =>
+              setUploadPercent(
+                fraction === null
+                  ? null
+                  : Math.round(((batchIndex + fraction) / batches.length) * 100),
+              ),
+          },
+        );
 
         batches[batchIndex].forEach(file => {
           const entry = statusMap.get(file.name);
           if (!entry) return;
           const hasError = (data.errors || []).some((error: string) => error.includes(file.name));
-          const uploaded = (data.uploaded_files || []).some((f: any) => f.original_filename === file.name);
+          const uploaded = (data.uploaded_files || []).some((f) => f.original_filename === file.name);
           entry.status = hasError ? 'error' : uploaded ? 'success' : 'error';
           entry.error = hasError ? (data.errors || []).find((error: string) => error.includes(file.name)) : undefined;
         });
         setUploadStatus(Array.from(statusMap.values()));
-        setUploadProgress(Math.round(((batchIndex + 1) / batches.length) * 100));
       }
 
       // Clear form
@@ -387,8 +396,9 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
                             size="sm"
                             onClick={() => deleteDataset(dataset.dataset_name)}
                             className="text-red-600 hover:text-red-700"
+                            aria-label={`Delete dataset ${dataset.dataset_name}`}
                           >
-                            <Trash2 className="h-4 w-4" />
+                            <Trash2 className="h-4 w-4" aria-hidden="true" />
                           </Button>
                         )}
                       </div>
@@ -521,9 +531,17 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
                 </div>
                 
                 {uploadLoading && (
-                  <div className="space-y-2">
-                    <Progress value={uploadProgress} className="w-full" />
-                    <p className="text-sm text-center">Uploading files...</p>
+                  <div className="space-y-2" role="status" aria-live="polite">
+                    <Progress
+                      className="w-full"
+                      value={uploadPercent ?? undefined}
+                      aria-label="Upload progress"
+                    />
+                    <p className="text-sm text-center">
+                      {uploadPercent === 100
+                        ? `Processing ${selectedFiles?.length ?? 0} file${(selectedFiles?.length ?? 0) === 1 ? "" : "s"} on the server…`
+                        : `Uploading ${selectedFiles?.length ?? 0} file${(selectedFiles?.length ?? 0) === 1 ? "" : "s"}${uploadPercent === null ? "…" : ` — ${uploadPercent}%`}`}
+                    </p>
                   </div>
                 )}
                 

@@ -2,6 +2,15 @@
 httpx==0.27.0
 pytest==8.2.0
 pytest-asyncio==0.23.7
+# Coverage for `run_tests.py report` (Test Plan Section 4); pulls coverage 7.16.
+pytest-cov==7.1.0
 fakeredis==2.23.2
 anyio==4.4.0
 psutil
+# The configuration and failover suites read docker-compose.yml.
+PyYAML>=6.0
+# The Section 5 register guards (test_risk_register.py) read the offline flag
+# and parse the requirement files.  Both already arrive with transformers and
+# pytest; declared because the suite imports them directly (CF-65).
+huggingface-hub
+packaging

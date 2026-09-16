@@ -1,5 +1,15 @@
 import asyncio
 import os
+
+# Offline by default (TEST-08, tests/plans/5-risks-dependencies-assumptions-constraints.md).
+# huggingface_hub reads these once, at import, so they must be set before the app
+# or transformers is imported below.  setdefault keeps an explicit value from the
+# shell: `ECHO_MODEL_TESTS=1 HF_HUB_OFFLINE=0` is the opt-out for the real-model
+# cases (the hub evaluates `HF_HUB_OFFLINE or TRANSFORMERS_OFFLINE` as strings,
+# so HF_HUB_OFFLINE=0 alone switches it off).
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
 import pytest
 import tempfile
 import shutil
@@ -8,6 +18,7 @@ from pathlib import Path
 from typing import Generator, Dict, Any
 from unittest.mock import Mock, patch
 from httpx import AsyncClient
+import fakeredis
 from fakeredis.aioredis import FakeRedis
 
 # Make app importable
@@ -17,15 +28,26 @@ from app.core import redis as redis_module
 @pytest.fixture(autouse=True, scope="function")
 async def fake_redis(monkeypatch):
     """
-    Replace the global redis client with fakeredis for each test.
+    Replace the global redis clients with fakeredis for each test.
+
+    Production splits state across three logical databases -- sessions on DB0,
+    job/control-plane records on DB1, the Celery broker on DB2 -- so the fakes
+    mirror that over one shared server.  Pointing all three at a single database
+    would hide any cross-database key collision, and would let a test seed a key
+    through the "wrong" client and still pass.
     """
-    client = FakeRedis(decode_responses=True)
-    monkeypatch.setattr(redis_module, "redis", client)
-    monkeypatch.setattr(redis_module, "job_redis", client)
-    monkeypatch.setattr(redis_module, "broker_redis", client)
+    server = fakeredis.FakeServer()
+    clients = {
+        "redis": FakeRedis(server=server, db=0, decode_responses=True),
+        "job_redis": FakeRedis(server=server, db=1, decode_responses=True),
+        "broker_redis": FakeRedis(server=server, db=2, decode_responses=True),
+    }
+    for name, client in clients.items():
+        monkeypatch.setattr(redis_module, name, client)
     yield
-    await client.flushall()
-    await client.aclose()
+    for client in clients.values():
+        await client.flushall()
+        await client.aclose()
 
 @pytest.fixture
 async def client():

@@ -192,6 +192,11 @@ loaded and evicted independently.
 ## Production configuration
 
 Set `STORAGE_BACKEND=s3` and configure the `S3_*` settings for both API and
-workers. Use private authenticated Redis endpoints for `JOB_REDIS_URL`,
-`CELERY_BROKER_URL`, and `CELERY_RESULT_BACKEND`; an evicting cache may use a
-separate `REDIS_URL`. Keep `ENABLE_LEGACY_SYNC_INFERENCE=false`.
+workers. Use private authenticated Redis endpoints for all four roles
+(`REDIS_URL`, `JOB_REDIS_URL`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`),
+each in its own logical database and all persistent and non-evicting:
+`REDIS_URL` holds the sessions, so an evicting policy there would silently log
+users out and lose their uploads. Set `ENVIRONMENT=production`, which requires
+`COOKIE_SECURE=true` and https `ALLOWED_ORIGINS`. Keep
+`ENABLE_LEGACY_SYNC_INFERENCE=false`. `Backend/.env.example` carries the
+complete production configuration as a commented block.

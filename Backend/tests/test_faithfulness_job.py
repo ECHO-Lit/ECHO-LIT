@@ -81,6 +81,7 @@ class TestParameters:
         parameters = _request().parameters
         assert parameters == {
             "method": "gradcam",
+            "full_audio": False,
             "n_steps": 9,
             "top_fraction": 0.2,
             "random_repeats": 3,

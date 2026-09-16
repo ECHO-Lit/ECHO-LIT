@@ -1,8 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { cancelJob, getJob, getJobResult, JobStatus } from '@/lib/jobs';
+import { cancelJob, getJob, getJobResult, JobProgress, JobStatus } from '@/lib/jobs';
 
 const TERMINAL = new Set(['success', 'failure', 'cancelled']);
 const isTerminal = (status?: JobStatus) => !!status && TERMINAL.has(status.status);
+
+/** Shown between the server's 202 and the first status poll. */
+const ACCEPTED_PROGRESS: JobProgress = { current: 0, total: 0, message: 'Queued — waiting for a worker…' };
 
 /**
  * Non-blocking job lifecycle on top of TanStack Query: a mutation to submit,
@@ -75,19 +78,29 @@ export function useAnalysisJob<TResult, TSubmitArgs>(
     queryClient.removeQueries({ queryKey: [queryKeyPrefix, 'job'] });
   };
 
+  // A job is running from the moment the server accepts it, not from the
+  // moment its first status poll returns. Keying this on `status.data` left a
+  // window -- one full GET round trip after the 202 -- in which the mutation
+  // was no longer pending and no status existed yet: the Run button re-enabled
+  // and the progress indication vanished (SRS US-3), inviting a double submit.
+  // A failed poll with nothing to show is not "running": it would otherwise sit
+  // at "Queued" forever. The failure is surfaced through `error` below.
+  const awaitingFirstStatus = !!jobId && !status.data && !status.isError;
+
   return {
     start: start.mutateAsync,
     cancel: () => jobId && cancelJob(jobId),
     reset,
     jobId,
     status: status.data,
-    progress: status.data?.progress,
+    progress: status.data?.progress ?? (awaitingFirstStatus ? ACCEPTED_PROGRESS : undefined),
     result: result.data,
     isSubmitting: start.isPending,
-    isRunning: !!status.data && !isTerminal(status.data),
+    isRunning: awaitingFirstStatus || (!!status.data && !isTerminal(status.data)),
     error:
       (start.error as Error | undefined)?.message ??
       status.data?.error?.message ??
+      (!status.data ? (status.error as Error | null | undefined)?.message : undefined) ??
       (result.error as Error | undefined)?.message ??
       null,
   };

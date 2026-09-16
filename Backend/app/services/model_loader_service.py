@@ -93,6 +93,143 @@ def _safe_to_device(model, device):
         return cls.from_pretrained(name_or_path, **load_kwargs)
 
 
+def _generate_transcript_ids(gen_model, input_features):
+    """The one decoding call behind every Whisper transcript.
+
+    The prediction and the word-timed transcript (saliency and attention
+    labels) both go through here, so the same audio always yields the same
+    words. The timed transcript used to decode with `return_timestamps=True`;
+    timestamp tokens change what greedy decoding picks, and on perturbed audio
+    the two diverged ("over there" vs "overexposed").
+    """
+    with torch.no_grad():
+        return gen_model.generate(
+            input_features,
+            max_length=448,
+            num_beams=1,
+            do_sample=False,
+            task="transcribe",
+            language="en",
+        )
+
+
+# Whisper encoder output rate: 16 kHz, 160-sample hop, stride-2 conv.
+_WHISPER_FRAMES_PER_SECOND = 50
+
+
+def _median_filter_last_axis(x: np.ndarray, width: int) -> np.ndarray:
+    """Median over the last axis with reflect padding, as whisper.timing does."""
+    pad = width // 2
+    if width <= 1 or x.shape[-1] <= pad:
+        return x
+    padded = np.pad(x, [(0, 0)] * (x.ndim - 1) + [(pad, pad)], mode="reflect")
+    return np.median(np.lib.stride_tricks.sliding_window_view(padded, width, axis=-1), axis=-1)
+
+
+def _dynamic_time_warping(cost: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Monotonic token-to-frame alignment of a [tokens, frames] cost matrix.
+
+    Pure NumPy/Python on purpose: numba's JIT has segfaulted in the worker
+    containers (see NUMBA_CPU_NAME in docker-compose.yml).
+    """
+    n, m = cost.shape
+    acc = np.full((n + 1, m + 1), np.inf)
+    trace = np.full((n + 1, m + 1), -1, dtype=np.int8)
+    acc[0, 0] = 0.0
+    for j in range(1, m + 1):
+        for i in range(1, n + 1):
+            c0, c1, c2 = acc[i - 1, j - 1], acc[i - 1, j], acc[i, j - 1]
+            if c0 < c1 and c0 < c2:
+                best, step = c0, 0
+            elif c1 < c0 and c1 < c2:
+                best, step = c1, 1
+            else:
+                best, step = c2, 2
+            acc[i, j] = cost[i - 1, j - 1] + best
+            trace[i, j] = step
+    trace[0, :] = 2
+    trace[:, 0] = 1
+    i, j = n, m
+    path = []
+    while i > 0 or j > 0:
+        path.append((i - 1, j - 1))
+        step = trace[i, j]
+        if step == 0:
+            i, j = i - 1, j - 1
+        elif step == 1:
+            i -= 1
+        else:
+            j -= 1
+    text_indices, time_indices = np.array(path[::-1]).T
+    return text_indices, time_indices
+
+
+def _group_word_tokens(tokenizer, text_tokens: list[int]) -> list[list[int]]:
+    """Split BPE tokens into words: a token with a leading space starts one."""
+    words: list[list[int]] = []
+    for token in text_tokens:
+        piece = tokenizer.convert_ids_to_tokens(token) or ""
+        if not words or piece.startswith("Ġ"):
+            words.append([token])
+        else:
+            words[-1].append(token)
+    return words
+
+
+def _align_words(gen_model, gen_proc, input_features, text_tokens: list[int], num_samples: int) -> list[Dict[str, Any]]:
+    """Word timings for an already-decoded transcript, without re-decoding it.
+
+    Teacher-forces the decoded tokens through the model once and aligns the
+    cross-attention of Whisper's alignment heads to the audio with DTW -- the
+    method of openai/whisper's `timing.py`. The words are exactly the ones
+    decoded; only their timing is computed here. Returns [start, end] seconds
+    relative to the start of `input_features`.
+    """
+    tokenizer = gen_proc.tokenizer
+    word_tokens = _group_word_tokens(tokenizer, text_tokens)
+    if not word_tokens:
+        return []
+    prefix = tokenizer.convert_tokens_to_ids(
+        ["<|startoftranscript|>", "<|en|>", "<|transcribe|>", "<|notimestamps|>"]
+    )
+    tokens = [*prefix, *text_tokens, tokenizer.eos_token_id]
+    decoder_input_ids = torch.tensor([tokens], device=input_features.device)
+    with torch.no_grad():
+        outputs = gen_model(
+            input_features, decoder_input_ids=decoder_input_ids, output_attentions=True, return_dict=True
+        )
+    config = gen_model.config
+    heads = getattr(gen_model.generation_config, "alignment_heads", None) or [
+        [layer, head]
+        for layer in range(config.decoder_layers // 2, config.decoder_layers)
+        for head in range(config.decoder_attention_heads)
+    ]
+    weights = torch.stack(
+        [outputs.cross_attentions[layer][0, head] for layer, head in heads]
+    ).float().cpu().numpy()  # [heads, tokens, encoder frames]
+    hop = getattr(gen_proc.feature_extractor, "hop_length", 160)
+    num_frames = min(weights.shape[-1], max(1, num_samples // hop // 2))
+    weights = weights[:, :, :num_frames]
+    mean = weights.mean(axis=-2, keepdims=True)
+    std = weights.std(axis=-2, keepdims=True)
+    weights = (weights - mean) / (std + 1e-9)
+    weights = _median_filter_last_axis(weights, getattr(config, "median_filter_width", 7))
+    # Row p predicts token p+1: keep the rows that predict each text token and EOT.
+    matrix = weights.mean(axis=0)[len(prefix) - 1 : -1]
+    text_indices, time_indices = _dynamic_time_warping(-matrix)
+    jumps = np.pad(np.diff(text_indices), (1, 0), constant_values=1).astype(bool)
+    jump_times = time_indices[jumps] / _WHISPER_FRAMES_PER_SECOND  # one per text token, plus EOT
+
+    words = []
+    boundary = 0
+    for group in word_tokens:
+        start = float(jump_times[boundary])
+        boundary += len(group)
+        end = max(float(jump_times[boundary]), start + 1 / _WHISPER_FRAMES_PER_SECOND)
+        words.append({"text": tokenizer.decode(group).strip(), "timestamp": [start, end]})
+    return words
+
+
 def transcribe_whisper(model_id, audio_file, chunk_length_s=30, batch_size=8, return_timestamps=False, return_attention=False):
     device = INFERENCE_DEVICE
     # Load audio
@@ -159,11 +296,15 @@ def transcribe_whisper(model_id, audio_file, chunk_length_s=30, batch_size=8, re
             logger.info("Attempting Whisper attention extraction...")
             
             # Generate transcript first
+            # Same language and task as the prediction: left unset, Whisper
+            # guessed the language and could transcribe differently again.
             generated_ids = model.generate(
                 input_features,
                 max_length=448,
                 num_beams=1,
                 do_sample=False,
+                task="transcribe",
+                language="en",
             )
             transcript = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
             logger.info(f"Generated transcript: '{transcript}'")
@@ -429,42 +570,28 @@ def transcribe_whisper(model_id, audio_file, chunk_length_s=30, batch_size=8, re
                 inputs = gen_proc(
                     segment, sampling_rate=sample_rate, return_tensors="pt"
                 ).input_features.to(gen_model.device)
-                with torch.no_grad():
-                    gen_ids = gen_model.generate(
-                        inputs,
-                        max_length=448,
-                        num_beams=1,
-                        do_sample=False,
-                        return_timestamps=True,
-                        task="transcribe",
-                        language="en",
-                    )
-                decoded = gen_proc.tokenizer.decode(
-                    gen_ids[0], skip_special_tokens=True, decode_with_timestamps=False
-                )
+                # Decoded exactly as the prediction is, so the first window's
+                # words are the prediction's words; timing is aligned after.
+                gen_ids = _generate_transcript_ids(gen_model, inputs)
+                decoded = gen_proc.tokenizer.decode(gen_ids[0], skip_special_tokens=True)
                 text_parts.append(decoded.strip())
+                eos = gen_proc.tokenizer.eos_token_id
+                text_tokens = [int(t) for t in gen_ids[0].tolist() if int(t) < eos]
                 try:
-                    offsets = gen_proc.tokenizer.decode(
-                        gen_ids[0], skip_special_tokens=False, output_offsets=True
-                    ).get("offsets", [])
+                    words = _align_words(gen_model, gen_proc, inputs, text_tokens, int(segment.shape[0]))
                 except Exception:
-                    offsets = []
-                for off in offsets:
-                    ts = off.get("timestamp") or (None, None)
-                    if ts[0] is None or ts[1] is None:
-                        continue
-                    off_start = float(ts[0]) + offset_s
-                    off_end = float(ts[1]) + offset_s
-                    off_text = (off.get("text") or "").strip()
-                    words = off_text.split()
-                    if len(words) <= 1 or off_end <= off_start:
-                        chunks_out.append({"text": off_text, "timestamp": [off_start, off_end]})
-                        continue
-                    span = (off_end - off_start) / len(words)
-                    for i, w in enumerate(words):
-                        w_start = off_start + i * span
-                        w_end = off_start + (i + 1) * span
-                        chunks_out.append({"text": w, "timestamp": [w_start, w_end]})
+                    # Timing is best effort; the words are not. Spread them
+                    # evenly over the window rather than drop them.
+                    logger.exception("Whisper word alignment failed; spreading words evenly")
+                    pieces = decoded.split()
+                    span = (segment.shape[0] / sample_rate) / max(1, len(pieces))
+                    words = [
+                        {"text": piece, "timestamp": [i * span, (i + 1) * span]}
+                        for i, piece in enumerate(pieces)
+                    ]
+                for word in words:
+                    start, end = word["timestamp"]
+                    chunks_out.append({"text": word["text"], "timestamp": [start + offset_s, end + offset_s]})
                 offset_s += segment.shape[0] / sample_rate
             return {
                 "text": " ".join(p for p in text_parts if p).strip(),
@@ -480,15 +607,7 @@ def transcribe_whisper(model_id, audio_file, chunk_length_s=30, batch_size=8, re
         inputs = gen_proc(
             audio, sampling_rate=sample_rate, return_tensors="pt"
         ).input_features.to(gen_model.device)
-        with torch.no_grad():
-            gen_ids = gen_model.generate(
-                inputs,
-                max_length=448,
-                num_beams=1,
-                do_sample=False,
-                task="transcribe",
-                language="en",
-            )
+        gen_ids = _generate_transcript_ids(gen_model, inputs)
         return gen_proc.tokenizer.decode(gen_ids[0], skip_special_tokens=True)
 
 def transcribe_whisper_large(audio_file_path):

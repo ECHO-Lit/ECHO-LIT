@@ -1,9 +1,11 @@
 import asyncio
+import time
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from app.core import redis as redis_module
+from app.core.heartbeat import count_live_workers
 from app.core.storage import get_storage
 
 
@@ -12,11 +14,18 @@ router = APIRouter()
 
 @router.get("/metrics")
 async def metrics():
-    job_counts = await redis_module.job_redis.hgetall("metrics:jobs")
-    queue_depth = {
-        queue: await redis_module.broker_redis.llen(queue)
-        for queue in ("cpu", "gpu-fast", "gpu-large")
-    }
+    # A monitoring endpoint is needed most during an outage, so it degrades the
+    # way /health does rather than surfacing the dependency error as a 500.
+    try:
+        job_counts = await redis_module.job_redis.hgetall("metrics:jobs")
+        queue_depth = {
+            queue: await redis_module.broker_redis.llen(queue)
+            for queue in ("cpu", "gpu-fast", "gpu-large")
+        }
+    except Exception as exc:
+        return JSONResponse(
+            {"status": "degraded", "detail": f"metrics unavailable: {exc}"}, status_code=503
+        )
     return {
         "jobs": {key: int(value) for key, value in job_counts.items()},
         "queue_depth": queue_depth,
@@ -46,13 +55,13 @@ async def health():
     except Exception as exc:
         details.append(f"storage: {exc}")
     try:
-        worker_keys = await redis_module.job_redis.keys("worker-heartbeat:*")
+        workers = await count_live_workers(redis_module.job_redis, time.time())
     except Exception:
-        worker_keys = []
+        workers = 0
     payload = {
         "status": "ok" if all(checks.values()) else "degraded",
         **checks,
-        "workers": len(worker_keys),
+        "workers": workers,
         "queue_depth": {
             queue: await redis_module.broker_redis.llen(queue) if checks["broker_redis"] else None
             for queue in ("cpu", "gpu-fast", "gpu-large")

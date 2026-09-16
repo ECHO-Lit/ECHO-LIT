@@ -363,6 +363,25 @@ export const MainLayout = () => {
     else panel.collapse();
   }, []);
 
+  /**
+   * The toolbar's Upload button had no handler at all, so the most prominent
+   * affordance in the persistent toolbar did nothing when clicked. It now opens
+   * the dataset panel's existing file picker, expanding that panel first if the
+   * user has collapsed it — otherwise the picker would open behind a hidden
+   * panel and the uploaded file would appear with no visible confirmation.
+   */
+  const uploadTriggerRef = useRef<(() => void) | null>(null);
+
+  const registerUploadTrigger = useCallback((open: () => void) => {
+    uploadTriggerRef.current = open;
+  }, []);
+
+  const handleToolbarUpload = useCallback(() => {
+    const panel = bottomPanelRef.current;
+    if (panel?.isCollapsed()) panel.expand();
+    uploadTriggerRef.current?.();
+  }, []);
+
   const handlePredictionUpdate = (fileId: string, prediction: string) => {
     setPredictionMap(prev => {
       const updated = { ...prev, [fileId]: prediction };
@@ -523,7 +542,15 @@ export const MainLayout = () => {
   return (
     <EmbeddingProvider>
       <div className="h-screen flex flex-col bg-background">
+        <a
+          href="#analysis-workspace"
+          className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:m-2 focus:rounded focus:bg-background focus:px-3 focus:py-2 focus:text-sm focus:shadow"
+        >
+          Skip to the analysis workspace
+        </a>
+        <h1 className="sr-only">LIT for Voice — audio model analysis workspace</h1>
         {/* Top Navigation Bar */}
+        <header>
         <Toolbar
           apiData={apiData}
           setApiData={setApiData}
@@ -541,10 +568,12 @@ export const MainLayout = () => {
           onToggleLeftPanel={toggleLeftPanel}
           onToggleRightPanel={toggleRightPanel}
           onToggleBottomPanel={toggleBottomPanel}
+          onUploadClick={handleToolbarUpload}
         />
+        </header>
 
         {/* Main Content Area */}
-        <div className="flex-1 overflow-hidden bg-background">
+        <main id="analysis-workspace" className="flex-1 overflow-hidden bg-background">
           <PanelGroup direction="horizontal" className="h-full">
             {/* Left Panel: Embeddings & Scalar Plots */}
             <Panel
@@ -602,6 +631,7 @@ export const MainLayout = () => {
                     selectedFile={selectedFile}
                     onFileSelect={handleFileSelection}
                     onUploadSuccess={handleUploadSuccess}
+                    onRegisterUploadTrigger={registerUploadTrigger}
                     model={model}
                     dataset={effectiveDataset}
                     originalDataset={dataset}
@@ -648,7 +678,7 @@ export const MainLayout = () => {
               />
             </Panel>
           </PanelGroup>
-        </div>
+        </main>
       </div>
     </EmbeddingProvider>
   );

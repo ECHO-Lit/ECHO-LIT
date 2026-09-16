@@ -367,27 +367,17 @@ export const PredictionDisplay = ({
             )}
           </div>
         ) : !model?.includes("whisper") && model !== "wav2vec2" ? (
-          // Display placeholder/mock data for other models
-          [
-            { label: "Neutral", probability: 0.87, isTrue: true, isPredicted: true },
-            { label: "Happy", probability: 0.08, isTrue: false, isPredicted: false },
-            { label: "Sad", probability: 0.03, isTrue: false, isPredicted: false },
-            { label: "Angry", probability: 0.02, isTrue: false, isPredicted: false },
-          ].map((item, idx) => (
-            <div key={idx} className="flex items-center justify-between text-xs">
-              <div className="flex items-center gap-2">
-                <span>{item.label}</span>
-                {item.isPredicted && <Badge variant="default" className="text-[10px] px-1">P</Badge>}
-                {item.isTrue && <Badge variant="outline" className="text-[10px] px-1">T</Badge>}
-              </div>
-              <div className="flex items-center gap-2 flex-1 max-w-[120px]">
-                <Progress value={item.probability * 100} className="h-2" />
-                <span className="text-muted-foreground min-w-[2rem]">
-                  {(item.probability * 100).toFixed(0)}%
-                </span>
-              </div>
-            </div>
-          ))
+          // This branch used to render four hard-coded probabilities
+          // (Neutral 0.87 / Happy 0.08 / Sad 0.03 / Angry 0.02) with "P"
+          // predicted and "T" true-label badges, for EVERY model that is
+          // neither whisper nor wav2vec2 — i.e. every custom model. Nothing
+          // marked them as fabricated, so a researcher could screenshot
+          // invented numbers out of an interpretability tool and publish them.
+          <div className="rounded border border-dashed p-3 text-xs text-muted-foreground">
+            No prediction view is available for this model yet. Custom models can
+            be registered and analysed, but their predictions are not yet
+            rendered here.
+          </div>
         ) : null}
       </CardContent>
     </Card>

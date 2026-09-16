@@ -33,8 +33,8 @@ export const ClusteringSection = ({ labelsByFile }: ClusteringSectionProps) => {
       <Network className="h-3.5 w-3.5 text-primary" />
       <span className="text-xs font-medium">Clusters vs labels</span>
       <Tooltip>
-        <TooltipTrigger>
-          <HelpCircle className="h-3 w-3 text-muted-foreground" />
+        <TooltipTrigger aria-label="More information">
+          <HelpCircle className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
         </TooltipTrigger>
         <TooltipContent className="max-w-xs text-xs">
           {EDA_CHART_EXPLANATIONS.cluster_label_crosstab}

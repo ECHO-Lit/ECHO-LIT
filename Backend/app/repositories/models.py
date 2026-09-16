@@ -36,8 +36,12 @@ class CustomModelRepository:
 
     async def list_owned(self, session_id: str) -> list[CustomModelRecord]:
         ids = await redis_module.job_redis.zrevrange(self._session_key(session_id), 0, -1)
-        records = [await self.get(model_id) for model_id in ids]
-        return [record for record in records if record and record.session_id == session_id]
+        if not ids:
+            return []
+        # One MGET, not a GET per model: see AudioRepository.get_many.
+        raws = await redis_module.job_redis.mget([self._key(model_id) for model_id in ids])
+        records = [CustomModelRecord.model_validate_json(raw) for raw in raws if raw]
+        return [record for record in records if record.session_id == session_id]
 
     async def save(self, record: CustomModelRecord) -> None:
         record.updated_at = datetime.now(timezone.utc)
