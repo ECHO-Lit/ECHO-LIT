@@ -50,6 +50,9 @@ TEST_CATEGORIES = {
             "test_layer_probe_job.py",
             "test_layer_probe_schema.py",
             "test_jacobian_lens.py",
+            "test_faithfulness_job.py",
+            "test_faithfulness_runner.py",
+            "test_faithfulness_service.py",
             "test_fr7_acceptance.py",
             "test_fr7_api_contract.py",
             "test_fr7_dsp_invariants.py",
@@ -90,7 +93,7 @@ TEST_CATEGORIES = {
     "security": {
         "section": "3.1.6",
         "description": "Security and Access Control Testing (Section 3.1.6)",
-        "files": ["test_security.py", "test_session_cookie.py"],
+        "files": ["test_security.py", "test_session_cookie.py", "test_access_control.py"],
         "priority": "important",
     },
     "failover_recovery": {
@@ -123,6 +126,12 @@ TEST_CATEGORIES = {
         "section": "4",
         "description": "Test Deliverables Tooling (Section 4)",
         "files": ["test_deliverables_reporting.py"],
+        "priority": "important",
+    },
+    "risks": {
+        "section": "5",
+        "description": "Risks, Dependencies, Assumptions and Constraints (Section 5)",
+        "files": ["test_risk_register.py"],
         "priority": "important",
     },
 }
