@@ -1,5 +1,15 @@
 import asyncio
 import os
+
+# Offline by default (TEST-08, tests/plans/5-risks-dependencies-assumptions-constraints.md).
+# huggingface_hub reads these once, at import, so they must be set before the app
+# or transformers is imported below.  setdefault keeps an explicit value from the
+# shell: `ECHO_MODEL_TESTS=1 HF_HUB_OFFLINE=0` is the opt-out for the real-model
+# cases (the hub evaluates `HF_HUB_OFFLINE or TRANSFORMERS_OFFLINE` as strings,
+# so HF_HUB_OFFLINE=0 alone switches it off).
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
 import pytest
 import tempfile
 import shutil
