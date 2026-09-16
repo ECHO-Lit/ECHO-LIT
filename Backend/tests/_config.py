@@ -82,6 +82,9 @@ LIBRARY_VARS = {
     "NUMBA_CPU_NAME",
     "NUMBA_CPU_FEATURES",
     "TOKENIZERS_PARALLELISM",
+    # Read by torch/_native: keeps its Triton-JIT ops off the pool children,
+    # where compiling them segfaults.
+    "TORCH_DISABLE_NATIVE_JIT",
     # Set per pool child by app/worker/tasks.py (BUG-78), never by an operator.
     "NUMBA_CACHE_DIR",
 }

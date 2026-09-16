@@ -72,6 +72,16 @@ x-worker-common: &worker-common
     # (verified directly: beat_track and yin both ran clean under this pair).
     NUMBA_CPU_NAME: "generic"
     NUMBA_CPU_FEATURES: ""
+    # Same family, different JIT: torch's native-DSL ops (torch/_native) are
+    # Triton kernels. Compiling bmm_outer_product segfaults inside libtriton
+    # in a pool child -- deterministically, three children lost in a row on
+    # the identical frame. Only Whisper's language detection reaches that op,
+    # so faithfulness runs hit it and transcription never does. The same call
+    # compiles and runs clean in this image outside the pool, and wiping the
+    # Triton cache changes nothing, so neither the cache nor the model is at
+    # fault. This routes the op to its ATen kernel: one fused kernel lost,
+    # crash class gone.
+    TORCH_DISABLE_NATIVE_JIT: "1"
     TOKENIZERS_PARALLELISM: "false"
     # Turns a future native crash into a Python traceback naming the offending
     # module, instead of just "signal 11 (SIGSEGV)".
