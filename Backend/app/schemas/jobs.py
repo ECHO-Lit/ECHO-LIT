@@ -12,6 +12,7 @@ from app.core.model_catalog import MODEL_DEFINITIONS, ModelKind, is_supported_mo
 class JobOperation(str, Enum):
     prediction = "prediction"
     saliency = "saliency"
+    saliency_faithfulness = "saliency_faithfulness"
     attention = "attention"
     embedding = "embedding"
     perturbation = "perturbation"
@@ -37,6 +38,7 @@ SUPPORTED_MODELS = set(MODEL_DEFINITIONS)
 MODEL_REQUIRED_OPERATIONS = {
     JobOperation.prediction,
     JobOperation.saliency,
+    JobOperation.saliency_faithfulness,
     JobOperation.attention,
     JobOperation.embedding,
     JobOperation.linguistic_acoustic,
@@ -47,6 +49,7 @@ MODEL_REQUIRED_OPERATIONS = {
 }
 SINGLE_AUDIO_OPERATIONS = {
     JobOperation.saliency,
+    JobOperation.saliency_faithfulness,
     JobOperation.attention,
     JobOperation.perturbation,
     JobOperation.jacobian_lens_apply,
@@ -72,6 +75,26 @@ class SaliencyParameters(OperationParameters):
     # Bypasses MAX_SALIENCY_SECONDS(_SHAP) cropping to analyze the full clip.
     # Opt-in only — memory/runtime scale with duration, so the default stays capped.
     full_audio: bool = False
+
+
+class SaliencyFaithfulnessParameters(SaliencyParameters):
+    """Settings for testing whether a saliency map reflects what the model uses.
+
+    Inherits `method` because the evaluation always generates the map it scores:
+    a faithfulness number is a property of one attribution method, not of the
+    model alone.
+
+    Cost is `(3 + random_repeats) * n_steps + segments + 1` forward passes, so
+    the defaults are chosen to stay affordable on whisper-large. Raising
+    `n_steps` buys curve resolution; raising `random_repeats` tightens the
+    baseline that `faithfulness_gain` is measured against.
+    """
+
+    n_steps: int = Field(default=9, ge=3, le=20)
+    top_fraction: float = Field(default=0.2, gt=0, lt=1)
+    random_repeats: int = Field(default=3, ge=2, le=10)
+    seed: int = Field(default=42, ge=0, le=2**31 - 1)
+    include_occlusion: bool = True
 
 
 class AttentionParameters(OperationParameters):
@@ -116,16 +139,18 @@ class JacobianLensTrainingSample(BaseModel):
 
 
 class JacobianLensFitParameters(OperationParameters):
-    samples: list[JacobianLensTrainingSample] = Field(min_length=2, max_length=200)
+    samples: list[JacobianLensTrainingSample] = Field(min_length=2, max_length=1000)
+    probe_count: int = Field(default=4, ge=1, le=32)
     max_audio_seconds: float = Field(default=30.0, gt=0, le=60)
-    frame_samples: int = Field(default=32, ge=8, le=128)
-    ridge_regularization: float = Field(default=1e-3, gt=0, le=1.0)
 
 
 class JacobianLensApplyParameters(OperationParameters):
     lens_id: str = Field(min_length=1, max_length=128)
     top_k: int = Field(default=5, ge=1, le=20)
-    max_frames: int = Field(default=96, ge=8, le=256)
+    # Positions to read come from the model's own greedy transcript unless a
+    # reference transcript is provided for a teacher-forced reading.
+    transcript: str | None = Field(default=None, max_length=4096)
+    max_new_tokens: int = Field(default=64, ge=8, le=256)
 
 
 class HiddenStatesParameters(OperationParameters):
@@ -182,6 +207,7 @@ class LayerProbeParameters(HiddenStatesParameters):
 PARAMETER_MODELS: dict[JobOperation, type[OperationParameters]] = {
     JobOperation.prediction: PredictionParameters,
     JobOperation.saliency: SaliencyParameters,
+    JobOperation.saliency_faithfulness: SaliencyFaithfulnessParameters,
     JobOperation.attention: AttentionParameters,
     JobOperation.embedding: EmbeddingParameters,
     JobOperation.perturbation: PerturbationParameters,
@@ -196,7 +222,7 @@ PARAMETER_MODELS: dict[JobOperation, type[OperationParameters]] = {
 
 class JobCreateRequest(BaseModel):
     operation: JobOperation
-    audio_ids: list[str] = Field(min_length=1, max_length=200)
+    audio_ids: list[str] = Field(min_length=1, max_length=1000)
     model: str | None = None
     parameters: dict[str, Any] = Field(default_factory=dict)
 

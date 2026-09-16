@@ -5,6 +5,7 @@ import { describeHttpError } from './httpError';
 export type JobOperation =
   | 'prediction'
   | 'saliency'
+  | 'saliency_faithfulness'
   | 'attention'
   | 'embedding'
   | 'perturbation'

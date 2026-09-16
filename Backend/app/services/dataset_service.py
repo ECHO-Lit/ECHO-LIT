@@ -33,6 +33,7 @@ DATASET_PATHS: Dict[str, Path] = {
     "common-voice": DATA_DIR / "common_voice_valid_dev" / "common_voice_valid_data_metadata.csv",
     "cv-valid-dev": DATA_DIR / "common_voice_valid_dev" / "common_voice_valid_data_metadata.csv",
     "ravdess": DATA_DIR / "ravdess_subset" / "ravdess_subset_metadata.csv",
+    "librispeech-1000": DATA_DIR / "librispeech_1000" / "librispeech_1000_metadata.csv",
     "l2-arctic": DATA_DIR / "L2_ARCTIC_dataset" / "l2_metadata.csv",
     "saa": DATA_DIR / "SAA_dataset" / "saa_metadata.csv",
 }
@@ -42,6 +43,7 @@ DATASET_BASE_DIRS: Dict[str, Path] = {
     "common-voice": DATA_DIR / "common_voice_valid_dev",
     "cv-valid-dev": DATA_DIR / "common_voice_valid_dev",
     "ravdess": DATA_DIR / "ravdess_subset",
+    "librispeech-1000": DATA_DIR / "librispeech_1000",
     "l2-arctic": DATA_DIR / "L2_ARCTIC_dataset" / "audio",
     "saa": DATA_DIR / "SAA_dataset" / "audio",
 }
@@ -71,6 +73,11 @@ def load_metadata(dataset: str, session_id: Optional[str] = None) -> List[Dict[s
             raise ValueError("session_id is required for custom datasets")
         
         session_id_from_name, dataset_name = parse_custom_dataset_name(dataset)
+        # Datasets provisioned under the "__global__" owner are shared corpora,
+        # not another session's data, so they are served to any session.
+        if session_id_from_name == "__global__":
+            manager = get_custom_dataset_manager(session_id or "__global__")
+            return manager.get_global_dataset_files_as_csv_format(dataset_name)
         if session_id_from_name != session_id:
             # The qualified name is not a secret -- it is returned to the client,
             # appears in URLs and is logged -- so holding one must not be enough
@@ -91,7 +98,11 @@ def load_metadata(dataset: str, session_id: Optional[str] = None) -> List[Dict[s
 
     csv_path = DATASET_PATHS[ds]
     if not csv_path.exists():
-        raise FileNotFoundError(f"Dataset metadata not found for: {dataset}")
+        raise FileNotFoundError(
+            f"Dataset files for '{dataset}' are not provisioned in this deployment "
+            f"(expected metadata at {csv_path}). Upload a custom dataset via "
+            "Manage Datasets, or provision Backend/data."
+        )
 
     csv_mtime = csv_path.stat().st_mtime
     cached = _metadata_cache.get(ds)
@@ -149,6 +160,10 @@ def resolve_file(dataset: str, file_path: str, session_id: Optional[str] = None)
             raise ValueError("session_id is required for custom datasets")
         
         session_id_from_name, dataset_name = parse_custom_dataset_name(dataset)
+        # Shared corpora, as in load_metadata.
+        if session_id_from_name == "__global__":
+            manager = get_custom_dataset_manager(session_id or "__global__")
+            return manager.resolve_global_file(dataset_name, file_path)
         if session_id_from_name != session_id:
             # Same rule as load_metadata: a name from another session resolves to
             # nothing, not to that session's audio.

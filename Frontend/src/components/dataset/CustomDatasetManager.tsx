@@ -37,6 +37,7 @@ interface CustomDataset {
   formatted_name: string;
   created_at: string;
   session_id: string;
+  _global?: boolean;
   files: Array<{
     filename: string;
     original_filename: string;
@@ -97,7 +98,15 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
       }
       
       const data = await response.json();
-      setDatasets(data.datasets || []);
+      const nextDatasets: CustomDataset[] = data.datasets || [];
+      setDatasets(nextDatasets);
+      // Uploads target session-owned datasets only; a stale selection that
+      // points at a read-only shared dataset would fail every file.
+      setSelectedDataset(current =>
+        nextDatasets.some(dataset => dataset.dataset_name === current && !dataset._global)
+          ? current
+          : "",
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch datasets');
       console.error('Error fetching datasets:', err);
@@ -155,64 +164,77 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
     setUploadLoading(true);
     setError(null);
     setUploadPercent(null);
-    
-    // Initialize upload status
-    const initialStatus = Array.from(selectedFiles).map(file => ({
+
+    // Reference datasets are hundreds of clips; one giant multipart body is
+    // fragile, so audio is sent in bounded batches with cumulative progress.
+    const allFiles = Array.from(selectedFiles);
+    const batchSize = 25;
+    const batches: File[][] = [];
+    for (let index = 0; index < allFiles.length; index += batchSize) {
+      batches.push(allFiles.slice(index, index + batchSize));
+    }
+
+    type FileUploadStatus = { file: string; status: 'pending' | 'uploading' | 'success' | 'error'; error?: string };
+    const statusMap = new Map<string, FileUploadStatus>(allFiles.map(file => [file.name, {
       file: file.name,
-      status: 'pending' as const
-    }));
-    setUploadStatus(initialStatus);
+      status: 'pending' as const,
+    }]));
+    setUploadStatus(Array.from(statusMap.values()));
 
     try {
-      const formData = new FormData();
-      Array.from(selectedFiles).forEach(file => {
-        formData.append('files', file);
-      });
-      
-      // XMLHttpRequest rather than fetch: only XHR reports upload bytes, so the
-      // bar shows real transfer progress (BUG-45, completing 3.1.3's BUG-22).
-      const data = await uploadWithProgress<{
-        uploaded_files?: Array<{ original_filename: string }>;
-        errors?: string[];
-      }>(
-        `${API_BASE}/upload/dataset/${selectedDataset}/files`,
-        formData,
-        {
-          context: 'Upload failed',
-          onProgress: ({ fraction }) =>
-            setUploadPercent(fraction === null ? null : Math.round(fraction * 100)),
-        },
-      );
+      for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+        const formData = new FormData();
+        batches[batchIndex].forEach(file => {
+          formData.append('files', file);
+        });
 
-      // Update upload status based on response
-      const updatedStatus = initialStatus.map(item => {
-        const uploadedFile = data.uploaded_files?.find((f: any) => f.original_filename === item.file);
-        const hasError = data.errors?.some((error: string) => error.includes(item.file));
-        
-        return {
-          ...item,
-          status: hasError ? 'error' as const : uploadedFile ? 'success' as const : 'error' as const,
-          error: hasError ? data.errors?.find((error: string) => error.includes(item.file)) : undefined
-        };
-      });
-      setUploadStatus(updatedStatus);
-      
+        // XMLHttpRequest rather than fetch: only XHR reports upload bytes, so
+        // the bar shows real transfer progress (BUG-45, completing 3.1.3's
+        // BUG-22). Batches already sent count as whole.
+        const data = await uploadWithProgress<{
+          uploaded_files?: Array<{ original_filename: string }>;
+          errors?: string[];
+        }>(
+          `${API_BASE}/upload/dataset/${selectedDataset}/files`,
+          formData,
+          {
+            context: 'Upload failed',
+            onProgress: ({ fraction }) =>
+              setUploadPercent(
+                fraction === null
+                  ? null
+                  : Math.round(((batchIndex + fraction) / batches.length) * 100),
+              ),
+          },
+        );
+
+        batches[batchIndex].forEach(file => {
+          const entry = statusMap.get(file.name);
+          if (!entry) return;
+          const hasError = (data.errors || []).some((error: string) => error.includes(file.name));
+          const uploaded = (data.uploaded_files || []).some((f) => f.original_filename === file.name);
+          entry.status = hasError ? 'error' : uploaded ? 'success' : 'error';
+          entry.error = hasError ? (data.errors || []).find((error: string) => error.includes(file.name)) : undefined;
+        });
+        setUploadStatus(Array.from(statusMap.values()));
+      }
+
       // Clear form
       setSelectedFiles(null);
       const audioInput = document.getElementById('files-input') as HTMLInputElement | null;
       if (audioInput) audioInput.value = '';
-      
+
       await fetchDatasets(); // Refresh the list
-      
+
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to upload files');
       console.error('Error uploading files:', err);
-      
-      // Mark all files as error
+
+      // Mark remaining files as error
       setUploadStatus(prev => prev.map(item => ({
         ...item,
-        status: 'error' as const,
-        error: err instanceof Error ? err.message : 'Upload failed'
+        status: item.status === 'success' ? 'success' : 'error',
+        error: item.error ?? (err instanceof Error ? err.message : 'Upload failed'),
       })));
     } finally {
       setUploadLoading(false);
@@ -358,6 +380,9 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
                         <Badge variant="secondary">
                           {dataset.total_files} files
                         </Badge>
+                        {dataset._global && (
+                          <Badge variant="outline" className="text-[10px]">shared</Badge>
+                        )}
                         <Button
                           variant="outline"
                           size="sm"
@@ -365,15 +390,17 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
                         >
                           Select
                         </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => deleteDataset(dataset.dataset_name)}
-                          className="text-red-600 hover:text-red-700"
-                          aria-label={`Delete dataset ${dataset.dataset_name}`}
-                        >
-                          <Trash2 className="h-4 w-4" aria-hidden="true" />
-                        </Button>
+                        {!dataset._global && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => deleteDataset(dataset.dataset_name)}
+                            className="text-red-600 hover:text-red-700"
+                            aria-label={`Delete dataset ${dataset.dataset_name}`}
+                          >
+                            <Trash2 className="h-4 w-4" aria-hidden="true" />
+                          </Button>
+                        )}
                       </div>
                     </div>
                     <CardDescription>
@@ -464,7 +491,7 @@ export const CustomDatasetManager: React.FC<CustomDatasetManagerProps> = ({
                     className="w-full mt-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
                     <option value="">Choose a dataset...</option>
-                    {datasets.map((dataset) => (
+                    {datasets.filter((dataset) => !dataset._global).map((dataset) => (
                       <option key={dataset.dataset_name} value={dataset.dataset_name}>
                         {dataset.dataset_name} ({dataset.total_files} files)
                       </option>

@@ -23,6 +23,17 @@ logger = logging.getLogger(__name__)
 # stricter SHAP path) and SALIENCY_SHAP_SAMPLES are validated settings, read
 # at each call.
 
+# Which estimator actually produced a map.  Both generators fall back to an
+# encoder energy map when attribution OOMs or comes back flat; without this in
+# the payload a caller cannot tell a real attribution from that fallback, and
+# `faithfulness_service` would silently score the fallback instead.
+ATTRIBUTION_SOURCES = {
+    "gradcam": "integrated_gradients",
+    "lime": "lime",
+    "shap": "gradient_shap",
+}
+ENERGY_FALLBACK = "energy_fallback"
+
 def detect_model_type(model: str) -> str:
     if "whisper" in model.lower():
         return "whisper"
@@ -91,6 +102,8 @@ def generate_whisper_saliency(audio_file_path: str, model_size: str = "base", me
         enc = model.encoder(inputs).last_hidden_state  # [B, T, H]
         return enc.pow(2).mean(dim=(1, 2))             # [B]
     
+    attribution_source = ATTRIBUTION_SOURCES.get(method, "none")
+
     if method == "gradcam":
         clear_accelerator_cache(device)
 
@@ -197,6 +210,7 @@ def generate_whisper_saliency(audio_file_path: str, model_size: str = "base", me
     )
     if use_energy_fallback:
         logger.info("Using Whisper energy-map fallback for saliency")
+        attribution_source = ENERGY_FALLBACK
         try:
             with torch.no_grad():
                 enc = model.encoder(input_features).last_hidden_state  # [B, T, H]
@@ -321,6 +335,7 @@ def generate_whisper_saliency(audio_file_path: str, model_size: str = "base", me
     return {
         "model": f"whisper-{model_size}",
         "method": method,
+        "attribution_source": attribution_source,
         "segments": segments,
         "total_duration": total_duration,
         "series": series.tolist()
@@ -384,6 +399,8 @@ def generate_wav2vec2_saliency(audio_file_path: str, method: str = "gradcam", ex
         outputs = emo_model(input_values=inputs, attention_mask=mask)
         return outputs.logits[:, cls_idx]
     
+    attribution_source = ATTRIBUTION_SOURCES.get(method, "none")
+
     if method == "gradcam":
         ig = IntegratedGradients(model_forward)
         try:
@@ -470,6 +487,7 @@ def generate_wav2vec2_saliency(audio_file_path: str, method: str = "gradcam", ex
     # Fallback: if SHAP produced empty/flat attributions, use encoder energy
     if saliency_scores.size == 0 or (np.max(saliency_scores) - np.min(saliency_scores) if saliency_scores.size > 0 else 0.0) < 1e-6:
         logger.info("Using Wav2Vec2 energy-map fallback for saliency")
+        attribution_source = ENERGY_FALLBACK
         with torch.no_grad():
             hs = emo_model.wav2vec2(input_values=input_values, attention_mask=attention_mask).last_hidden_state  # [B,T,H]
             energy = hs.abs().mean(dim=2).squeeze(0).detach().cpu().numpy()
@@ -551,6 +569,7 @@ def generate_wav2vec2_saliency(audio_file_path: str, method: str = "gradcam", ex
     return {
         "model": "wav2vec2",
         "method": method,
+        "attribution_source": attribution_source,
         "emotion": emotion,
         "segments": segments,
         "total_duration": segment_duration,

@@ -14,6 +14,7 @@ from app.services.custom_dataset_service import (
     format_custom_dataset_name,
     cleanup_session_datasets
 )
+from app.core.settings import settings
 from app.services.dataset_labels_service import (
     available_patterns,
     derive_from_filenames,
@@ -112,23 +113,29 @@ async def upload_files_to_dataset(
 ):
     """Upload multiple audio files to an existing custom dataset"""
     session_id = get_session_id(request)
-    
+
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
-    
-    # Validate file types
+
+    # Validate file types.  Browsers label .flac/.m4a (and any unrecognised
+    # audio) as application/octet-stream, so that content type must be
+    # accepted exactly as the single-file /upload route does; the extension
+    # check below is the real gate.
     allowed_extensions = ['.wav', '.mp3', '.m4a', '.flac']
     for file in files:
-        if not file.content_type or not file.content_type.startswith('audio/'):
+        if file.content_type and not (
+            file.content_type.startswith('audio/')
+            or file.content_type == 'application/octet-stream'
+        ):
             raise HTTPException(
-                status_code=400, 
+                status_code=400,
                 detail=f"Invalid file type for {file.filename}. Only audio files are allowed."
             )
-        
-        file_extension = Path(file.filename).suffix.lower()
+
+        file_extension = Path(file.filename or "").suffix.lower()
         if file_extension not in allowed_extensions:
             raise HTTPException(
-                status_code=400, 
+                status_code=400,
                 detail=f"Invalid file extension for {file.filename}. Allowed: {', '.join(allowed_extensions)}"
             )
     
@@ -345,7 +352,7 @@ async def delete_dataset_labels(request: Request, dataset_name: str):
 
 @router.get("/dataset/list")
 async def list_custom_datasets(request: Request):
-    """List all custom datasets in the current session"""
+    """List all custom datasets in the current session plus shared global datasets"""
     session_id = get_session_id(request)
     
     try:
@@ -359,12 +366,19 @@ async def list_custom_datasets(request: Request):
                 dataset["dataset_name"]
             )
         
+        # Include globally-shared datasets (provisioned at startup)
+        global_datasets = manager.list_global_datasets()
+        for dataset in global_datasets:
+            dataset["formatted_name"] = f"custom:__global__:{dataset['dataset_name']}"
+        
+        all_datasets = datasets + global_datasets
+        
         return JSONResponse(
             status_code=200,
             content={
                 "session_id": session_id,
-                "datasets": datasets,
-                "total_datasets": len(datasets)
+                "datasets": all_datasets,
+                "total_datasets": len(all_datasets)
             }
         )
         

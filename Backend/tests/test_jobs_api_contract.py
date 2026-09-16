@@ -177,7 +177,7 @@ class TestSubmissionContract:
         assert expected in _detail(response)
 
     @pytest.mark.parametrize(
-        "audio_ids", [[], [f"a{i}" for i in range(201)]], ids=["empty", "over_max"]
+        "audio_ids", [[], [f"a{i}" for i in range(1001)]], ids=["empty", "over_max"]
     )
     async def test_the_audio_id_list_is_bounded(self, client, audio_ids):
         """FT-80b: a batch has a documented size range."""
