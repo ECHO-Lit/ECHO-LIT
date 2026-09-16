@@ -64,13 +64,17 @@ Thresholds are documented in `run_tests.py` (10s inference / 30s clip, 5s upload
 
 ---
 
-## 3.1.6 Security and Access Control Testing — IMPLEMENTED
+## 3.1.6 Security and Access Control Testing — SUPERSEDED
+
+> **Superseded 2026-09-14** by `Backend/tests/plans/3.1.6-security-testing.md`: Member 2's `test_access_control.py` (32 cases, SEC-nn) executed and reported; a session-id path-traversal fix lost in a merge was restored (BUG-79); the older `test_security.py` and `test_session_cookie.py` cases classified — 20 of `test_security.py`'s 24 pass whatever the app does (OBS-61). The analysis below is kept as the original record.
 
 `test_security.py`: `TestAuthenticationSecurity`, `TestInputValidationSecurity`, `TestDataProtectionSecurity`, `TestAPISecurityMeasures`, `TestFileUploadSecurity`, `TestSessionSecurity`, `TestXSSPrevention`, `TestCSRFProtection`.
 
 Plus `TestSessionCookieSecurity` in `test_session_cookie.py` (cookie flags, tampering resistance).
 
 Template's "system-level security" (login/remote-access gateway testing) is explicitly out of scope per that file's own Special Considerations note — consistent with template guidance that this may be an ops/infra concern.
+
+> **Correction (Section 5, OBS-59).** `test_security.py` has no Special Considerations note and no scope statement; nothing in it mentions system-level security. Whether system-level security is in scope is undecided, and belongs to the 3.1.6 owner.
 
 ---
 
@@ -97,7 +101,9 @@ No test varies hardware/software configuration combinations, cross-browser behav
 - **4.1 Test Evaluation Summaries**: `run_tests.py` prints console summaries and claims HTML report generation (`python tests/run_tests.py report`) — present as tooling, not verified against actual report output in this scan.
 - **4.2 Reporting on Test Coverage**: no coverage tooling found in the repo (no `pytest-cov` / coverage config detected). README's ">85% line coverage" target is stated but unmeasured.
 
-## Section 5 — Risks, Dependencies, Assumptions, Constraints
+## Section 5 — Risks, Dependencies, Assumptions, Constraints — SUPERSEDED
+
+> **Superseded 2026-09-14** by `Backend/tests/plans/5-risks-dependencies-assumptions-constraints.md`: a ranked risk register (R-01..R-14) with dependencies, assumptions and constraints, every in-force mitigation guarded by `test_risk_register.py` (RD-01..RD-15); TEST-06..08 fixed, the README Troubleshooting section rewritten (OBS-58). The analysis below is kept as the original record.
 
 No formal risk register exists. `Backend/tests/README.md` has an informal Troubleshooting section (missing models, memory limits, Redis connection) that covers similar ground ad hoc, not in the template's Risk/Mitigation/Contingency table format.
 
@@ -112,11 +118,11 @@ No formal risk register exists. `Backend/tests/README.md` has an informal Troubl
 | 3.1.3 UI Testing | Placeholder only (mock components, not real UI) |
 | 3.1.4 Performance Profiling | Implemented |
 | 3.1.5 Load Testing | Implemented |
-| 3.1.6 Security & Access Control | Implemented |
+| 3.1.6 Security & Access Control | Implemented (superseded 2026-09-14 — see `Backend/tests/plans/3.1.6-security-testing.md`) |
 | 3.1.7 Failover & Recovery | Implemented (superseded 2026-09-12 — see `Backend/tests/plans/3.1.7-failover-and-recovery.md`) |
 | 3.1.8 Configuration Testing | Implemented (superseded 2026-09-12 — see `Backend/tests/plans/3.1.8-configuration-testing.md`) |
 | 4. Deliverables | Implemented (superseded 2026-09-12 — see `Backend/tests/plans/4-deliverables.md`) |
-| 5. Risks/Dependencies | Missing formal doc — informal equivalent exists |
+| 5. Risks/Dependencies | Implemented (superseded 2026-09-14 — see `Backend/tests/plans/5-risks-dependencies-assumptions-constraints.md`) |
 
 ---
 
@@ -155,9 +161,10 @@ Grounded against actual repo shape, checked 2026-09-02:
 - No background-workload-during-test scenario (template's "background workload on the server" consideration) — nothing drives concurrent Redis/API traffic while a benchmark runs.
 - **To implement:** multi-shape load test (average vs peak vs sustained-peak) against the async job queue; latency/throughput benchmark for FR10 group-fairness aggregation at realistic group/row counts; concurrent-background-load variant of the existing inference benchmarks.
 
-## 3.1.6 Security & Access Control — gaps
+## 3.1.6 Security & Access Control — gaps (reported 2026-09-14, see `Backend/tests/plans/3.1.6-security-testing.md`; concurrency isolation, upload-filename traversal, XSS and CSRF remain open with Member 2)
 - Template's **application-level, per-user-type** security testing doesn't apply cleanly — there is no role system in this codebase (single-session-per-user model), so this is a legitimate scope reduction, not an oversight. Worth stating explicitly in the plan rather than leaving implicit.
 - **System-level security** (login/remote-access gateway) is explicitly declared out of scope inside `test_security.py` itself — consistent with template's "may not be required, function of network/systems administration" escape hatch, but no one has confirmed who (if anyone) owns that testing.
+  > **Correction (Section 5, OBS-59).** It is not declared there: `test_security.py` contains no scope note. The open question of ownership stands, with the 3.1.6 owner.
 - No test for **cross-session data leakage under concurrency** (two sessions racing on the same Redis keys/cache namespace) — isolation is tested serially in `TestSessionIntegrity`, not under concurrent load.
 - No dependency/package vulnerability scan wired into the suite (e.g. `pip-audit`, `npm audit` as a test-suite gate).
 - **To implement:** concurrent cross-session isolation test (race two sessions against shared cache namespace, assert no bleed); wire `pip-audit`/`npm audit` as a CI-gated test; explicit written decision in the plan on system-level security ownership.
@@ -189,9 +196,10 @@ Grounded against actual repo shape, checked 2026-09-02:
 - No actual generated HTML report artifact found — `run_tests.py report` is a claimed command, not something this scan could verify produces output.
 - **To implement:** add `pytest-cov` + `--cov-report=html` to the pytest config and wire it into `run_tests.py`; add Jest `--coverage` to the frontend test command; publish both as CI artifacts so the README's coverage claims become verifiable numbers instead of stated goals.
 
-## Section 5 — Risks/Dependencies gaps
+## Section 5 — Risks/Dependencies gaps (closed 2026-09-14, see `Backend/tests/plans/5-risks-dependencies-assumptions-constraints.md`)
 - No formal Risk / Mitigation / Contingency table exists per template Section 5. `Backend/tests/README.md`'s Troubleshooting section covers similar ground informally (missing models, memory limits, Redis connectivity) but isn't framed as risk-to-test-execution.
 - **To implement:** write a short Section-5 risk table covering at minimum: (1) GPU/model unavailability blocking function/performance tests, (2) fakeredis/real-Redis divergence masking integration bugs, (3) test dataset (SAVEE, L2-ARCTIC) licensing/availability as an external dependency for `test_dataset_labels_service.py` and `test_fr10_dataset_extensions.py`.
+  > **Correction (Section 5).** SAVEE appears in the suite only as filename strings (`test_dataset_labels_service.py` parses names like `DC_a01.wav`); no SAVEE data is read. The corpus dependency is on the four bundled corpora under `Backend/data/` (SAA, L2-ARCTIC, Common Voice, RAVDESS), and it reaches nine modules, not two (R-04, D-01).
 
 ---
 
