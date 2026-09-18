@@ -1,6 +1,4 @@
-<p align="center">
-  <img width="1920" height="1080" alt="AudioLens" src="https://raw.githubusercontent.com/ECHO-Lit/AudioLens-LandingPage/refs/heads/main/public/assets/AudioLens.png" />
-</p>
+</p><img src="https://raw.githubusercontent.com/ECHO-Lit/AudioLens-LandingPage/refs/heads/main/public/assets/AudioLens.png" alt="AudioLens" style="border-radius: 16px;" />
 
 # AudioLens
 
