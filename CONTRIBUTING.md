@@ -28,19 +28,17 @@ This project follows our [Code of Conduct](CODE_OF_CONDUCT.md). By participating
 
 ### Prerequisites
 
-- **Docker Desktop** (Windows/Mac) or Docker Engine + Compose plugin (Linux), Compose 2.24 or later — this runs the whole stack
-- **Frontend development** (optional, for native UI work):
-  - Node.js (v18 or higher)
-  - npm or bun package manager
-- **Backend development** (optional, for native API/worker work):
-  - Python 3.11
+- **Docker Desktop** (Windows/Mac) or Docker Engine + Compose plugin (Linux), Compose 2.24 or later — this runs everything
+- **Node.js v18+** and **Python 3.11** — only needed to run the test suites outside Docker
 
 See the [README](README.md#prerequisites) for GPU-specific requirements (NVIDIA/AMD/Mac).
 
 ### Setting Up the Development Environment
 
-The whole stack — API, Celery workers, scheduler, Redis, and frontend — runs from
-the root `docker-compose.yml`. There is no separate Redis-only compose file.
+Everything — API, Celery workers, scheduler, Redis, and frontend — runs from the
+root `docker-compose.yml`. You do not need a local Python or Node setup to develop:
+the API container runs `uvicorn --reload` and the frontend container runs Vite with
+polling-based HMR, so edits on your host reload inside the containers.
 
 1. **Fork and clone the repository**:
    ```bash
@@ -48,7 +46,9 @@ the root `docker-compose.yml`. There is no separate Redis-only compose file.
    cd AudioLens
    ```
 
-2. **Copy the env files** (defaults work out of the box):
+2. **Optional — copy the env files.** A fresh clone boots without them (Compose marks
+   `Backend/.env` as `required: false` and the code defaults apply). Copy them only
+   when you want to tune something:
    ```bash
    cp Backend/.env.example Backend/.env
    cp Frontend/.env.example Frontend/.env
@@ -59,48 +59,46 @@ the root `docker-compose.yml`. There is no separate Redis-only compose file.
    docker compose up --build
    ```
 
-   Or use the helper scripts, which build, start, and wait until both the API and
-   the UI answer:
-   ```bash
-   ./scripts/start.sh   # start and wait for readiness
-   ./scripts/stop.sh    # stop, preserving volumes and cached models
-   ```
+   This starts Redis, the API, the CPU worker, a local model worker, the scheduler,
+   and the frontend.
 
    - **Frontend**: http://localhost:8080
    - **API**: http://localhost:8000/health
 
-   See the [README](README.md#gpu-modes) for GPU profiles and worker scaling.
+4. **GPU profiles** — the local model worker runs models on CPU. To use a GPU,
+   disable it and start the matching profile instead:
 
-4. **Optional — native frontend dev server** (hot reload against the Dockerised API):
    ```bash
-   cd Frontend
-   npm install
-   npm run dev
+   # NVIDIA (Linux or WSL 2 with NVIDIA Container Toolkit)
+   docker compose --profile gpu up --build --scale worker-model-local=0 \
+     redis api scheduler frontend worker-cpu worker-gpu
+
+   # AMD ROCm (Linux with a supported ROCm host driver)
+   docker compose --profile amd up --build --scale worker-model-local=0 \
+     redis api scheduler frontend worker-cpu worker-amd
    ```
 
-5. **Optional — native backend** (for debugging the API or a worker directly):
+   macOS cannot pass the Metal GPU into a container — see the
+   [README](README.md#gpu-modes) for the native MPS worker setup.
+
+5. **Stopping**:
    ```bash
-   cd Backend
-   python -m venv .venv
-   .venv\Scripts\activate  # On Windows
-   source .venv/bin/activate  # On Unix or MacOS
-   python -m pip install --upgrade pip
-   pip install -r requirements.txt
-   uvicorn app.main:app --reload
+   docker compose down      # stop, keep volumes
+   docker compose down -v   # stop and wipe Redis, model cache, uploads
    ```
 
-   Redis must still be running for this to work — start it with
-   `docker compose up -d redis`. Inference runs in Celery workers, not in the API
-   process, so a worker also has to be running to execute jobs.
+### Optional helper scripts
 
-### Useful scripts
+Convenience wrappers around the Compose commands above — use them or don't.
 
 | Script | Purpose |
 |--------|---------|
-| `scripts/start.sh` | Build and start the stack, wait for API and UI readiness |
-| `scripts/stop.sh` | Stop the stack, preserving Docker volumes and local data |
-| `scripts/queue-status.sh` | Inspect the current Celery job queues |
-| `scripts/init-custom-datasets.sh` | Initialise custom dataset directories |
+| `scripts/start.sh` | `docker compose up -d --build`, then waits until the API and UI actually answer |
+| `scripts/stop.sh` | `docker compose down`, preserving volumes and cached models |
+| `scripts/queue-status.sh` | Compact view of what the Celery workers are doing now; `-w` refreshes every 3s |
+
+`scripts/init-custom-datasets.sh` is not run by hand — the API container executes it
+on every start to import the LibriSpeech-1000 global dataset.
 
 ## Development Workflow
 
