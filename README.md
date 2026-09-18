@@ -1,32 +1,21 @@
 <p align="center">
-  <img width="1920" height="1080" alt="ECHO" src="https://github.com/user-attachments/assets/9db0b7eb-a701-4f25-aa27-ec950762bd57" />
+  <img width="1920" height="1080" alt="AudioLens" src="https://raw.githubusercontent.com/ECHO-Lit/AudioLens-LandingPage/refs/heads/main/public/assets/AudioLens.png" />
 </p>
 
-# ECHO - Explainable Computation for Hearing Outputs
+# AudioLens
 
 <p align="center">
-  <a href="https://github.com/AnasSAV/ECHO">
-    <img src="https://img.shields.io/badge/version-v1.0-blue" alt="Version"/>
-  </a>
-  <a href="https://github.com/AnasSAV/ECHO/blob/main/LICENSE">
-    <img src="https://img.shields.io/github/license/AnasSAV/ECHO" alt="License"/>
-  </a>
-  <a href="https://github.com/AnasSAV/ECHO/stargazers">
-    <img src="https://img.shields.io/github/stars/AnasSAV/ECHO" alt="Stars"/>
-  </a>
-  <a href="https://github.com/AnasSAV/ECHO/network/members">
-    <img src="https://img.shields.io/github/forks/AnasSAV/ECHO" alt="Forks"/>
-  </a>
-  <a href="https://github.com/AnasSAV/ECHO/issues">
-    <img src="https://img.shields.io/github/issues/AnasSAV/ECHO" alt="Issues"/>
-  </a>
+  <img src="https://img.shields.io/badge/version-v1.0-blue" alt="Version"/>
+  <img src="https://img.shields.io/badge/license-MIT-green" alt="License"/>
 </p>
 
 > **Learning Interpretability Tool for Audio Models**
 
 Interpreting how deep learning models make decisions is crucial, especially in high-stakes applications like speech recognition, emotion detection, and speaker identification. While the Learning Interpretability Tool (LIT) enables exploration of text and tabular models, there's a lack of equivalent tools for voice-based models. Voice data poses additional challenges due to its temporal nature and multi-modal representations (e.g., waveform, spectrogram).
 
-ECHO extends the interpretability paradigm to audio models, providing researchers and developers with tools to analyze and debug speech models with greater transparency. Through interactive visualizations, attention mechanisms, and perturbation analyses, you can gain deeper insights into how your audio models make decisions.
+AudioLens extends the interpretability paradigm to audio models, providing researchers and developers with tools to analyze and debug speech models with greater transparency. Through interactive visualizations, attention mechanisms, and perturbation analyses, you can gain deeper insights into how your audio models make decisions.
+
+AudioLens is built on and extends [ECHO](https://github.com/AnasSAV/ECHO), an MIT-licensed audio interpretability tool created by Anas Hussaindeen, Chandupa Ambepitiya, and Dewmike Amarasinghe. See [Authors](#authors) and [Contributors](#contributors) below.
 
 ## Features
 
@@ -65,9 +54,9 @@ For S3 deployments, apply the included 24-hour lifecycle policy:
 ## Quickstart (Docker)
 
 ```bash
-# 1. Clone
-git clone https://github.com/AnasSAV/ECHO.git
-cd ECHO
+# 1. Clone (fork of ECHO, cloned into an AudioLens directory)
+git clone https://github.com/AnasSAV/ECHO.git AudioLens
+cd AudioLens
 
 # 2. Copy env files (edit if needed — defaults work out of the box)
 cp Backend/.env.example Backend/.env
@@ -159,7 +148,7 @@ pytest
 
 - Use the **WSL 2 backend** in Docker Desktop (Settings → General) for faster
   bind-mount I/O and GPU passthrough.
-- Keep the repo at a short path (`C:\dev\ECHO`) to avoid `MAX_PATH` issues.
+- Keep the repo at a short path (`C:\dev\AudioLens`) to avoid `MAX_PATH` issues.
 - If Vite HMR stops firing, confirm `CHOKIDAR_USEPOLLING=true` is set in
   `docker-compose.yml` (it already is by default).
 - Dataset paths inside the Linux container are **case-sensitive**:
@@ -172,7 +161,7 @@ Open your browser and navigate to [http://localhost:8080](http://localhost:8080)
 ## Project Structure
 
 ```
-ECHO/
+AudioLens/
 ├── Frontend/                # React frontend application
 │   ├── components/          # React components
 │   │   ├── analysis/        # Analysis and perturbation tools
@@ -235,15 +224,26 @@ For security-related issues, please refer to our [Security Policy](SECURITY.md).
 
 ## Authors
 
+Original creators of ECHO, the project AudioLens is built on:
+
 - **Anas Hussaindeen** - [GitHub Profile](https://github.com/AnasSAV)
 - **Chandupa Ambepitiya** - [GitHub Profile](https://github.com/Chand2103)
 - **Dewmike Amarasinghe** - [GitHub Profile](https://github.com/DewmikeAmarasinghe)
+
+## Contributors
+
+AudioLens is developed and maintained by Group 16, University of Moratuwa, extending ECHO's codebase and interpretability paradigm (full list in [CONTRIBUTORS.md](CONTRIBUTORS.md)):
+
+- **Januda Lelwala**
+- **Janith Mahanama**
+- **Hesandi Mallawarachchi**
 
 ## Mentor
 - **Dr Uthayasanker Thayasivam** - NLP Researcher & Senior Lecturer and Head of Department at Computer Science & Engineering, University of Moratuwa, Sri Lanka
 
 ## Acknowledgments
 
+- Built on [ECHO](https://github.com/AnasSAV/ECHO) by Anas Hussaindeen, Chandupa Ambepitiya, and Dewmike Amarasinghe, used and extended here under its MIT license
 - Inspired by Google's [Learning Interpretability Tool (LIT)](https://github.com/PAIR-code/lit)
 - Built with modern React ecosystem and TypeScript
 - Special thanks to the open-source community for the amazing tools and libraries
@@ -265,5 +265,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 <p align="center">
-  <sub>Built for audio model interpretability</sub>
+  <sub>AudioLens — built for audio model interpretability, extending ECHO</sub>
 </p>

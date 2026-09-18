@@ -1,6 +1,6 @@
-# ECHO Runtime Architecture
+# AudioLens Runtime Architecture
 
-ECHO uses FastAPI as a CPU-only control plane and Celery workers as the model
+AudioLens uses FastAPI as a CPU-only control plane and Celery workers as the model
 execution plane. The frontend communicates only with FastAPI.
 
 ## UML diagrams

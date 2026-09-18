@@ -1,16 +1,18 @@
-# ECHO — Full Project Reference
+# AudioLens — Full Project Reference
 
-> **Purpose of this file:** Single-source, exhaustive reference for the ECHO codebase. Written for both human developers and AI coding assistants. Every major directory, service, model, endpoint, config knob, and data flow is documented below with clickable file paths.
+> **Purpose of this file:** Single-source, exhaustive reference for the AudioLens codebase. Written for both human developers and AI coding assistants. Every major directory, service, model, endpoint, config knob, and data flow is documented below with clickable file paths.
 >
 > Read [README.md](README.md) for the user-facing pitch. Read this file when you need to *work in* the code.
+>
+> **Naming note:** this document originally described ECHO. AudioLens extends ECHO under its MIT license; the history below (commit `306ff85` and earlier) refers to ECHO's own codebase, which AudioLens is built on top of.
 
 ---
 
-## 1. What ECHO Is
+## 1. What AudioLens Is
 
-**ECHO** (Explainable Computation for Hearing Outputs) is a **Learning Interpretability Tool for audio models**. It is the audio-domain counterpart to Google's LIT (which targets text/tabular models).
+**AudioLens** is a **Learning Interpretability Tool for audio models**, extending [ECHO](https://github.com/AnasSAV/ECHO) (Explainable Computation for Hearing Outputs). It is the audio-domain counterpart to Google's LIT (which targets text/tabular models).
 
-Given a speech model (Whisper for ASR, Wav2Vec2 for emotion classification), ECHO lets a researcher:
+Given a speech model (Whisper for ASR, Wav2Vec2 for emotion classification), AudioLens lets a researcher:
 
 - Upload / browse audio datasets.
 - Run inference and inspect predictions + confidence.
@@ -19,16 +21,16 @@ Given a speech model (Whisper for ASR, Wav2Vec2 for emotion classification), ECH
 - Compute **saliency** maps (GradCAM, LIME, SHAP, IntegratedGradients, LRP) to see which audio regions drove a prediction.
 - Apply **perturbations** (Gaussian noise, time/frequency masking, pitch shift, time-stretch) and observe model robustness.
 
-The project was renamed from *"LIT for Voice"* to *ECHO* in commit `306ff85`. FastAPI title string still reads `"LIT for Voice – API"` — this is intentional and safe to leave, or rename in [Backend/app/main.py](Backend/app/main.py).
+The project was renamed from *"LIT for Voice"* to *ECHO* in commit `306ff85`, then extended and rebranded as *AudioLens*. FastAPI title string still reads `"LIT for Voice – API"` — this is intentional and safe to leave, or rename in [Backend/app/main.py](Backend/app/main.py).
 
-**Authors:** Anas Hussaindeen, Chandupa Ambepitiya, Dewmike Amarasinghe. Mentor: Dr. Uthayasanker Thayasivam (University of Moratuwa).
+**Original ECHO authors:** Anas Hussaindeen, Chandupa Ambepitiya, Dewmike Amarasinghe. **AudioLens contributors:** Januda Lelwala, Janith Mahanama, Hesandi Mallawarachchi. Mentor: Dr. Uthayasanker Thayasivam (University of Moratuwa).
 
 ---
 
 ## 2. Repository Layout
 
 ```
-d:\Projects\ECHO\
+AudioLens/
 ├── Frontend/              # React 18 + TS + Vite UI
 ├── Backend/               # FastAPI + Python 3.11 API
 ├── README.md              # User-facing overview
@@ -341,7 +343,7 @@ python tests/run_tests.py report   # coverage + tests/test_reports/evaluation-su
 - **Cache schema version.** Saliency uses `saliency_v2_*` — bump the version when the response shape changes to invalidate cleanly instead of writing migration code.
 - **Range-request audio streaming.** [datasets.py](Backend/app/api/routes/datasets.py) supports `Range` headers so `<audio>` seek works without downloading whole files. Preserve this when adding new file-serving endpoints.
 - **Filename typo:** `pertubation_service.py` (missing `r`). Import sites match. Rename would require touching many files — leave unless doing a dedicated cleanup pass.
-- **Legacy title:** [main.py](Backend/app/main.py) still says `"LIT for Voice – API"`. Rename to ECHO if a user-visible change is wanted; otherwise no functional impact.
+- **Legacy title:** [main.py](Backend/app/main.py) still says `"LIT for Voice – API"`. Rename to AudioLens if a user-visible change is wanted; otherwise no functional impact.
 
 ---
 
