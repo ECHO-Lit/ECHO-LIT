@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start the complete ECHO development stack and wait for the UI and API.
+# Start the complete AudioLens development stack and wait for the UI and API.
 set -euo pipefail
 
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -32,5 +32,5 @@ wait_for_http "http://localhost:8000/health" "API"
 wait_for_http "http://localhost:8080" "Frontend"
 
 echo
-echo "Open ECHO at: http://localhost:8080"
+echo "Open AudioLens at: http://localhost:8080"
 docker compose ps

@@ -1,6 +1,8 @@
-# Contributing to LIT for Voice
+# Contributing to AudioLens
 
-Thank you for your interest in contributing to LIT for Voice! This document provides guidelines and instructions to help you get started with contributing to this project.
+Thank you for your interest in contributing to AudioLens! This document provides guidelines and instructions to help you get started with contributing to this project.
+
+AudioLens extends [ECHO](https://github.com/AnasSAV/ECHO) under its MIT license — see [CONTRIBUTORS.md](CONTRIBUTORS.md).
 
 ## Table of Contents
 
@@ -26,59 +28,77 @@ This project follows our [Code of Conduct](CODE_OF_CONDUCT.md). By participating
 
 ### Prerequisites
 
-- **Frontend Development**: 
-  - Node.js (v18 or higher)
-  - npm or bun package manager
-  
-- **Backend Development**:
-  - Python 3.11
-  - Docker (for Redis)
+- **Docker Desktop** (Windows/Mac) or Docker Engine + Compose plugin (Linux), Compose 2.24 or later — this runs everything
+- **Node.js v18+** and **Python 3.11** — only needed to run the test suites outside Docker
+
+See the [README](README.md#prerequisites) for GPU-specific requirements (NVIDIA/AMD/Mac).
 
 ### Setting Up the Development Environment
 
+Everything — API, Celery workers, scheduler, Redis, and frontend — runs from the
+root `docker-compose.yml`. You do not need a local Python or Node setup to develop:
+the API container runs `uvicorn --reload` and the frontend container runs Vite with
+polling-based HMR, so edits on your host reload inside the containers.
+
 1. **Fork and clone the repository**:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/LIT-for-Voice.git
-   cd LIT-for-Voice
+   git clone https://github.com/YOUR_USERNAME/AudioLens.git
+   cd AudioLens
    ```
 
-2. **Set up the Frontend**:
+2. **Optional — copy the env files.** A fresh clone boots without them (Compose marks
+   `Backend/.env` as `required: false` and the code defaults apply). Copy them only
+   when you want to tune something:
    ```bash
-   cd Frontend
-   npm install
+   cp Backend/.env.example Backend/.env
+   cp Frontend/.env.example Frontend/.env
    ```
 
-3. **Set up the Backend**:
+3. **Boot the stack**:
    ```bash
-   cd Backend
-   python -m venv .venv
-   .venv\Scripts\activate  # On Windows
-   source .venv/bin/activate  # On Unix or MacOS
-   python -m pip install --upgrade pip
-   pip install -r requirements.txt
+   docker compose up --build
    ```
 
-4. **Start Redis via Docker**:
+   This starts Redis, the API, the CPU worker, a local model worker, the scheduler,
+   and the frontend.
+
+   - **Frontend**: http://localhost:8080
+   - **API**: http://localhost:8000/health
+
+4. **GPU profiles** — the local model worker runs models on CPU. To use a GPU,
+   disable it and start the matching profile instead:
+
    ```bash
-   cd Backend
-   docker compose up -d
+   # NVIDIA (Linux or WSL 2 with NVIDIA Container Toolkit)
+   docker compose --profile gpu up --build --scale worker-model-local=0 \
+     redis api scheduler frontend worker-cpu worker-gpu
+
+   # AMD ROCm (Linux with a supported ROCm host driver)
+   docker compose --profile amd up --build --scale worker-model-local=0 \
+     redis api scheduler frontend worker-cpu worker-amd
    ```
 
-5. **Run the development servers**:
-   
-   In one terminal (Frontend):
+   macOS cannot pass the Metal GPU into a container — see the
+   [README](README.md#gpu-modes) for the native MPS worker setup.
+
+5. **Stopping**:
    ```bash
-   cd Frontend
-   npm run dev
+   docker compose down      # stop, keep volumes
+   docker compose down -v   # stop and wipe Redis, model cache, uploads
    ```
-   
-   In another terminal (Backend):
-   ```bash
-   cd Backend
-   .venv\Scripts\activate  # On Windows
-   source .venv/bin/activate  # On Unix or MacOS
-   uvicorn app.main:app --reload
-   ```
+
+### Optional helper scripts
+
+Convenience wrappers around the Compose commands above — use them or don't.
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/start.sh` | `docker compose up -d --build`, then waits until the API and UI actually answer |
+| `scripts/stop.sh` | `docker compose down`, preserving volumes and cached models |
+| `scripts/queue-status.sh` | Compact view of what the Celery workers are doing now; `-w` refreshes every 3s |
+
+`scripts/init-custom-datasets.sh` is not run by hand — the API container executes it
+on every start to import the LibriSpeech-1000 global dataset.
 
 ## Development Workflow
 
@@ -111,15 +131,18 @@ This project follows our [Code of Conduct](CODE_OF_CONDUCT.md). By participating
 
 ### Testing
 
-- **Frontend**: We use Jest for testing React components. Run tests with:
+- **Frontend**: We use Vitest with Testing Library for React components. Run tests with:
   ```bash
   cd Frontend
-  npm run test
+  npm run test           # single run
+  npm run test:watch     # watch mode
+  npm run test:coverage  # with coverage report
   ```
 
-- **Backend**: We use pytest for testing API endpoints and services. Run tests with:
+- **Backend**: We use pytest for testing API endpoints, services, and workers. Run tests with:
   ```bash
   cd Backend
+  python -m pip install -r requirements-dev.txt
   pytest
   ```
 
@@ -145,8 +168,9 @@ This project follows our [Code of Conduct](CODE_OF_CONDUCT.md). By participating
 ## Documentation
 
 - Update the README.md if you're changing functionality or adding features
+- [PROJECT.md](PROJECT.md) is the full code reference — update it when you add a service, route, or config knob
+- [ARCHITECTURE.md](ARCHITECTURE.md) covers the runtime split between the FastAPI control plane and the Celery execution plane — update it if you change queues, storage, or job flow
 - Add comments to your code, especially for complex logic
-- Consider creating or updating wiki pages for extensive documentation
 
 ## Issue Reporting
 
@@ -168,4 +192,4 @@ We welcome feature requests! Please provide:
 - Any potential implementation ideas you might have
 - Mockups or examples if applicable
 
-Thank you for contributing to LIT for Voice!
+Thank you for contributing to AudioLens!

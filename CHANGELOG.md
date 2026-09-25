@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+> **Naming history:** this project was released as *LIT for Voice* (v1.0.0), renamed
+> to *ECHO*, and is now developed as **AudioLens**, an extension of
+> [ECHO](https://github.com/AnasSAV/ECHO). Entries below v1.0.0 describe the
+> project under its earlier names and are kept as historical record.
+
+## [Unreleased] — AudioLens
+
+Extends ECHO with an asynchronous execution plane and a broader set of
+interpretability analyses.
+
+### Added
+- **Asynchronous job execution** - Celery workers as a separate model-execution
+  plane, with `gpu-fast`, `gpu-large`, and `cpu` queues; the FastAPI control plane
+  no longer imports the ML runtime
+- **Job lifecycle API** - job submission, status polling, and authorized result
+  retrieval, with session-scoped ownership checks
+- **Object storage abstraction** - shared filesystem locally, S3-compatible
+  storage in production, with a 24-hour lifecycle policy for transient objects
+- **Redis topology** - separate logical databases for sessions/cache, job
+  metadata, Celery broker, and results, configured persistent and non-evicting
+- **Scheduled cleanup** - Celery Beat task expiring transient local objects
+- **Dataset exploratory data analysis (EDA)** for built-in and custom datasets
+- **Embedding analytics** - clustering and nearest-neighbour semantic retrieval
+- **Saliency faithfulness evaluation** alongside saliency generation
+- **Linguistic versus acoustic influence analysis**
+- **Whisper hallucination detection**
+- **Layer-wise representation analysis (probing)**
+- **Jacobian Lens** - decoder-only, position-resolved lens over Whisper decoder
+  layers (see [JACOBIAN_LENS.md](JACOBIAN_LENS.md))
+- **Accent and language fairness analysis**
+- **Internal word activation explorer**
+- **Custom model ingestion** from Hugging Face, with compatibility constraints
+- **Model and dataset comparison**
+- **LibriSpeech-1000 and SAVEE dataset support** with import helper scripts
+- **Developer scripts** - `scripts/start.sh`, `scripts/stop.sh`, and
+  `scripts/queue-status.sh`
+- **GPU profiles in Compose** - optional CUDA and ROCm workers, plus native MPS
+  worker instructions for macOS
+
+### Changed
+- **Docker Compose now runs the full stack** (API, workers, scheduler, Redis,
+  frontend) from the repository root, replacing the Redis-only setup
+- **Documentation** - added [ARCHITECTURE.md](ARCHITECTURE.md),
+  [PROJECT.md](PROJECT.md), and [FEATURES.md](FEATURES.md)
+
 ## [1.0.0] - 2024-10-13
 
 ### Added

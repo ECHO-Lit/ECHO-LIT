@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-Currently, security updates are provided for the following versions of LIT for Voice:
+Currently, security updates are provided for the following versions of AudioLens:
 
 | Version | Supported          |
 | ------- | ------------------ |
@@ -11,11 +11,11 @@ Currently, security updates are provided for the following versions of LIT for V
 
 ## Reporting a Vulnerability
 
-We take the security of LIT for Voice seriously. If you believe you've found a security vulnerability, please follow these steps:
+We take the security of AudioLens seriously. If you believe you've found a security vulnerability, please follow these steps:
 
 1. **Do Not Disclose Publicly**: Please do not disclose the vulnerability publicly until it has been addressed.
 
-2. **Contact Information**: Email your findings to the project maintainers at [INSERT SECURITY EMAIL]. If you don't receive a response within 48 hours, please follow up.
+2. **Contact Information**: Email your findings to the project maintainers at janithmahanama47@gmail.com. If you don't receive a response within 48 hours, please follow up.
 
 3. **Provide Details**: In your report, please include:
    - A description of the vulnerability
@@ -32,7 +32,7 @@ We take the security of LIT for Voice seriously. If you believe you've found a s
 
 ## Security Best Practices
 
-When deploying LIT for Voice, consider the following security best practices:
+When deploying AudioLens, consider the following security best practices:
 
 1. **Environment Security**: Ensure your deployment environment follows security best practices, including:
    - Using HTTPS for all communications
@@ -45,4 +45,4 @@ When deploying LIT for Voice, consider the following security best practices:
 
 4. **API Access**: When exposing API endpoints, implement proper authentication and rate limiting.
 
-Thank you for helping to keep LIT for Voice secure!
+Thank you for helping to keep AudioLens secure!
