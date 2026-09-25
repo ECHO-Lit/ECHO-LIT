@@ -152,6 +152,27 @@ pytest
 - Dataset paths inside the Linux container are **case-sensitive**:
   `data/common_voice_valid_dev` and `data/ravdess_subset` must match exactly.
 
+### Built-in datasets
+
+No dataset audio ships with the repo (the licences forbid redistribution). Fetch
+the sample sets once with the scripts in `scripts/`; they write to `Backend/data/`,
+which is mounted read-only into the containers and **persists until you delete
+it**. Uploaded datasets and sessions, by contrast, expire after 24 hours.
+
+| Dataset | Script | What you need |
+|---------|--------|---------------|
+| RAVDESS (144 clips) | `python scripts/download_ravdess.py` | nothing (~208 MB download from Zenodo) |
+| Speech Accent Archive (150) | `python scripts/download_saa.py` | nothing |
+| LibriSpeech-1000 | `python scripts/download_librispeech_1000.py` | nothing |
+| L2-ARCTIC (150, with phone-error annotations) | `python scripts/prepare_l2arctic.py --source <folder>` | free registration at the [L2-ARCTIC page](https://psi.engr.tamu.edu/l2-arctic-corpus/); a download link is emailed to you |
+| Common Voice `cv-valid-dev` (100) | `python scripts/prepare_common_voice.py --kaggle` (or `--source <folder>`) | a free Kaggle account and API token |
+| SAVEE (up to 100) | `python scripts/prepare_savee_subset.py --source <folder>` | a copy you already own (not redistributable) |
+
+`python scripts/fetch_datasets.py` runs the three that need nothing. Every script
+accepts `--dry-run` and prints the dataset's licence and citation. RAVDESS, SAA
+and L2-ARCTIC are non-commercial only. Selection manifests live in
+`scripts/manifests/` (see its README).
+
 ### Access the Application
 Open your browser and navigate to [http://localhost:8080](http://localhost:8080)
 

@@ -97,6 +97,22 @@ Convenience wrappers around the Compose commands above — use them or don't.
 | `scripts/stop.sh` | `docker compose down`, preserving volumes and cached models |
 | `scripts/queue-status.sh` | Compact view of what the Celery workers are doing now; `-w` refreshes every 3s |
 
+Dataset scripts (all accept `--dry-run` and print each dataset's licence and citation;
+output goes to `Backend/data/`, which persists until you delete it):
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/download_ravdess.py` | RAVDESS subset from Zenodo (no account) |
+| `scripts/download_saa.py` | Speech Accent Archive subset from accent.gmu.edu (no account) |
+| `scripts/download_librispeech_1000.py` | LibriSpeech-1000 from the HF datasets-server (no account) |
+| `scripts/prepare_l2arctic.py` | L2-ARCTIC subset from a copy you downloaded after registering |
+| `scripts/prepare_common_voice.py` | Common Voice `cv-valid-dev` subset via Kaggle CLI or a local copy |
+| `scripts/prepare_savee_subset.py` | SAVEE subset from a copy you already own |
+| `scripts/fetch_datasets.py` | Runs the no-account ones together |
+
+Selection manifests are in `scripts/manifests/`; they carry the source datasets'
+licences (see the README there).
+
 `scripts/init-custom-datasets.sh` is not run by hand — the API container executes it
 on every start to import the LibriSpeech-1000 global dataset.
 

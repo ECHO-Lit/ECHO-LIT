@@ -16,6 +16,11 @@ Extends ECHO with an asynchronous execution plane and a broader set of
 interpretability analyses.
 
 ### Added
+- **Dataset fetch scripts** - `download_ravdess.py`, `download_saa.py`,
+  `prepare_l2arctic.py`, `prepare_common_voice.py` and a `fetch_datasets.py`
+  wrapper, driven by selection manifests in `scripts/manifests/`. Datasets are
+  fetched from their official sources into `Backend/data/` instead of being
+  described as bundled; no dataset audio is redistributed
 - **Asynchronous job execution** - Celery workers as a separate model-execution
   plane, with `gpu-fast`, `gpu-large`, and `cpu` queues; the FastAPI control plane
   no longer imports the ML runtime

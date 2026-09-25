@@ -202,15 +202,24 @@ Full lists: [Frontend/package.json](Frontend/package.json), [Backend/requirement
 
 - **common-voice** — Mozilla Common Voice validation subset. Metadata CSV: `common_voice_valid_data_metadata.csv`.
 - **ravdess** — RAVDESS emotion subset. Metadata CSV: `ravdess_subset_metadata.csv`.
-- **Custom** — session-scoped, user-uploaded. Stored under `uploads/sessions/{session_id}/{dataset_name}/`.
+- **l2-arctic** — L2-ARCTIC subset with phone-error annotations. Metadata CSVs: `l2_metadata.csv`, `l2_phone_error_annotations.csv`.
+- **saa** — Speech Accent Archive subset. Metadata CSV: `saa_metadata.csv`.
+- **librispeech-1000**, **SAVEE** — see the scripts table in the README.
+- **Custom** — session-scoped, user-uploaded. Stored under `uploads/sessions/{session_id}/{dataset_name}/` and expires with the session (24 h).
 
-Audio files are **not** committed. The `data/` layout expected by the dataset service:
+Audio files are **not** committed (licences forbid redistribution). Each dataset has a
+fetch/prepare script in `scripts/` that reads a selection manifest from
+`scripts/manifests/` and writes into `Backend/data/`, which persists on the host
+until deleted. The `data/` layout expected by the dataset service:
 
 ```
 Backend/
 ├── data/
-│   ├── common_voice_valid_dev/     # audio + metadata CSV
-│   └── ravdess_subset/             # audio + metadata CSV
+│   ├── common_voice_valid_dev/     # scripts/prepare_common_voice.py
+│   ├── ravdess_subset/            # scripts/download_ravdess.py
+│   ├── L2_ARCTIC_dataset/         # scripts/prepare_l2arctic.py (audio/ + 2 CSVs)
+│   ├── SAA_dataset/               # scripts/download_saa.py (audio/ + CSV)
+│   └── librispeech_1000/          # scripts/download_librispeech_1000.py
 └── uploads/
     ├── {one-off single-file uploads}
     └── sessions/{sid}/{dataset_name}/
