@@ -10,7 +10,7 @@ read a manifest, get the clips from the official source, and write both into
 | `ravdess_subset.csv` (144 rows) | `download_ravdess.py` | [RAVDESS](https://zenodo.org/records/1188976) | CC BY-NC-SA 4.0 |
 | `saa_metadata.csv` (150) | `download_saa.py` | [Speech Accent Archive](https://accent.gmu.edu) | CC BY-NC-SA 4.0 |
 | `l2_arctic_metadata.csv` (150), `l2_arctic_phone_error_annotations.csv` (891) | `prepare_l2arctic.py` | [L2-ARCTIC](https://psi.engr.tamu.edu/l2-arctic-corpus/) | CC BY-NC 4.0 |
-| `cv_valid_dev.csv` (100) | `prepare_common_voice.py` | [Common Voice (Kaggle v1)](https://www.kaggle.com/datasets/mozillaorg/common-voice) | CC0 per Mozilla (confirm at source) |
+| `cv_valid_dev.csv` (100) | `prepare_common_voice.py` | [Common Voice (Kaggle v1)](https://www.kaggle.com/datasets/mozillaorg/common-voice) | CC0 (Kaggle LICENSE.txt) |
 
 The metadata and annotations are derived from those datasets, so they keep the
 source licence: attribution always, share-alike for RAVDESS and SAA,

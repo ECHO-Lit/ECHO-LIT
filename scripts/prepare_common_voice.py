@@ -37,15 +37,30 @@ METADATA_NAME = "common_voice_valid_data_metadata.csv"
 KAGGLE_DATASET = "mozillaorg/common-voice"
 
 
+class KaggleAuthError(RuntimeError):
+    pass
+
+
 def fetch_with_kaggle(name: str, dest: Path) -> bool:
-    """Download one clip via the kaggle CLI; returns True when `dest` exists afterwards."""
+    """Download one clip via the kaggle CLI; returns True when `dest` exists afterwards.
+
+    Raises KaggleAuthError on a credentials/terms problem so the caller stops at
+    the first clip instead of failing the same way 100 times.
+    """
     with tempfile.TemporaryDirectory(prefix="cv_") as tmp:
-        result = subprocess.run(
-            ["kaggle", "datasets", "download", "-d", KAGGLE_DATASET, "-f", f"cv-valid-dev/{name}", "-p", tmp],
-            capture_output=True, text=True,
-        )
+        try:
+            result = subprocess.run(
+                ["kaggle", "datasets", "download", "-d", KAGGLE_DATASET, "-f", f"cv-valid-dev/cv-valid-dev/{name}", "-p", tmp],
+                capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL,
+            )
+        except subprocess.TimeoutExpired:
+            print(f"    kaggle: timed out fetching {name}", file=sys.stderr)
+            return False
         if result.returncode != 0:
-            print(f"    kaggle: {result.stderr.strip() or result.stdout.strip()}", file=sys.stderr)
+            message = (result.stderr.strip() or result.stdout.strip())
+            if any(word in message.lower() for word in ("401", "403", "unauthorized", "forbidden", "credentials", "kaggle.json", "accept")):
+                raise KaggleAuthError(message)
+            print(f"    kaggle: {message}", file=sys.stderr)
             return False
         for zipped in Path(tmp).glob("*.zip"):
             with zipfile.ZipFile(zipped) as archive:
@@ -68,7 +83,7 @@ def main() -> int:
 
     print_notice(
         "Mozilla Common Voice (Kaggle v1, cv-valid-dev)",
-        "CC0 (public domain) per Mozilla; check the dataset page for current terms. Do not try to identify speakers.",
+        "CC0 (public domain), per the dataset's LICENSE.txt on Kaggle. Mozilla asks that you do not try to identify speakers.",
         "Ardila et al. (2020), 'Common Voice: A Massively-Multilingual Speech Corpus', LREC 2020",
         "Kaggle account needed: https://www.kaggle.com/datasets/mozillaorg/common-voice",
     )
@@ -102,7 +117,14 @@ def main() -> int:
         if shutil.which("kaggle") is None:
             return die("kaggle CLI not found; run `pip install kaggle` and add your API token (see top of script)")
         for index, name in enumerate(todo, start=1):
-            if fetch_with_kaggle(name, out / name):
+            try:
+                fetched = fetch_with_kaggle(name, out / name)
+            except KaggleAuthError as exc:
+                return die(
+                    f"Kaggle refused the request ({exc}). Check ~/.kaggle/kaggle.json and that you accepted the "
+                    f"dataset's terms at https://www.kaggle.com/datasets/{KAGGLE_DATASET}"
+                )
+            if fetched:
                 written += 1
                 print(f"  [{index}/{len(todo)}] ok {name}", flush=True)
             else:

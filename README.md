@@ -170,7 +170,7 @@ it**. Uploaded datasets and sessions, by contrast, expire after 24 hours.
 
 `python scripts/fetch_datasets.py` runs the three that need nothing. Every script
 accepts `--dry-run` and prints the dataset's licence and citation. RAVDESS, SAA
-and L2-ARCTIC are non-commercial only. Selection manifests live in
+and L2-ARCTIC are non-commercial only; Common Voice is CC0; LibriSpeech is CC BY 4.0. Selection manifests live in
 `scripts/manifests/` (see its README).
 
 ### Access the Application

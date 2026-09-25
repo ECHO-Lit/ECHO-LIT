@@ -7,6 +7,9 @@ delay between them. The selection is `scripts/manifests/saa_metadata.csv`; the
 script writes the mp3 files to `Backend/data/SAA_dataset/audio/` and the
 metadata CSV to `Backend/data/SAA_dataset/saa_metadata.csv`.
 
+Two clips (russian4, spanish159) have been re-uploaded on the archive since the
+original subset was made, so they differ byte-for-byte from older local copies.
+
 The full archive is also on OSF (see https://accent.gmu.edu/download); use that
 instead if you want more than this subset.
 
